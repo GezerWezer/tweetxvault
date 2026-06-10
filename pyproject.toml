@@ -42,7 +42,10 @@ embed = [
   "onnxruntime>=1.19,<2",
   "tokenizers>=0.21,<1",
 ]
-
+web = [
+  "fastapi>=0.110,<1",
+  "uvicorn>=0.29,<1",
+]
 [dependency-groups]
 dev = [
   "mypy>=1.10,<2",

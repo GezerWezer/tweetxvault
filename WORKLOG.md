@@ -1,5 +1,16 @@
 # WORKLOG
 
+## 2026-06-10
+
+- Implemented the Interactive Web UI feature (`tweetxvault[web]` extra):
+  - added `tweetxvault/web/` package containing the FastAPI/Vue.js frontend and search APIs
+  - added daemonization support with `tweetxvault web start/stop/status/set-password` in `tweetxvault/cli_web.py`
+  - added `tweetxvault/__main__.py` to support `python -m tweetxvault serve-daemon` for proper background detachment
+  - added `WebConfig` to `config.py` with `auto_start`, `fetch_avatars`, `host`, `port`, and `password_hash` settings
+  - wired automatic web server restarts into sync and import routines when `auto_start=True`
+  - documented the Web UI feature, daemon usage, and configuration options in `README.md`
+  - cleaned up test suite to handle macOS-specific sandboxing paths when looking up browser profiles (`test_auth.py`)
+
 ## 2026-04-23
 
 - Backfilled GitHub Releases for every published tag so the project Releases

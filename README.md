@@ -16,6 +16,7 @@ A Python CLI tool for archiving your Twitter/X bookmarks, likes, and authored tw
 - **Browser cookie extraction** — reads session cookies from Firefox plus Chromium-family browsers like Chrome, Chromium, Brave, Edge, Opera, Opera GX, Vivaldi, and Arc
 - **Rate limit handling** — exponential backoff, cooldown periods, and configurable retry limits
 - **Export** — export your archive to JSON or a self-contained HTML viewer
+- **Interactive Web UI** — browse your archive through a local web server with full-text search, thread navigation, and theme support
 
 ## Requirements
 
@@ -50,11 +51,17 @@ To enable semantic search (vector embeddings):
 pip install "tweetxvault[embed]"
 ```
 
-Or install the embedding extra as a global tool:
+To enable the interactive web UI:
 
 ```bash
-uv tool install "tweetxvault[embed]"
-pipx install "tweetxvault[embed]"
+pip install "tweetxvault[web]"
+```
+
+Or install the extras as global tools:
+
+```bash
+uv tool install "tweetxvault[embed,web]"
+pipx install "tweetxvault[embed,web]"
 ```
 
 Install from source:
@@ -78,10 +85,10 @@ Use `tweetxvault --version` to confirm which local build you are running. In a
 git checkout, the CLI includes the short commit hash and appends `dirty` when
 tracked files differ from `HEAD`.
 
-To enable semantic search from source:
+To enable semantic search and the web UI from source:
 
 ```bash
-uv sync --extra embed
+uv sync --extra embed --extra web
 ```
 
 Run once without installing:
@@ -349,6 +356,42 @@ uv run tweetxvault view all --limit 50
 ```
 
 Terminal views render tweet timestamps in your local timezone. Sort order uses tweet `created_at`, not collection position. For likes, that means `uv run tweetxvault view likes --sort oldest` shows the oldest liked tweet by tweet timestamp when one is known; X does not expose a reliable `liked_at` timestamp for reconstructing the exact order in which you liked posts.
+
+### Web UI
+
+If you installed the `web` extra, you can browse your archive through an interactive web interface. The web UI is designed as a fast, local clone of the Twitter interface, allowing you to seamlessly navigate threads, read articles, and browse your bookmarks and likes in a familiar layout with full-text search and light/dark theme support.
+
+The web server runs as a background daemon so you don't need to keep a terminal open:
+
+```bash
+# Start the background web server
+uv run tweetxvault web start
+
+# Check if the server is running and see its URL
+uv run tweetxvault web status
+
+# Stop the background server
+uv run tweetxvault web stop
+
+# Set a secure password for the web UI
+uv run tweetxvault web set-password
+```
+
+By default, the server runs on `http://127.0.0.1:8000` with the default password `password`. You will be warned to change this using `tweetxvault web set-password`.
+
+When browsing the web UI, tweetxvault will automatically fetch user avatars directly from Twitter as needed, saving them to `media/avatars`. If you prefer to browse fully offline or want to save space, you can disable this behavior. 
+
+If you want the web server to automatically restart and load new data whenever you finish a sync, you can enable `auto_start`.
+
+To configure auto-start, custom ports, or avatar fetching, add a `[web]` section to your `config.toml`:
+
+```toml
+[web]
+auto_start = true
+host = "127.0.0.1"
+port = 8000
+fetch_avatars = true
+```
 
 ### Searching
 

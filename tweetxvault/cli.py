@@ -87,6 +87,13 @@ app.add_typer(
 app.add_typer(thread_app, name="threads", help="Expand archived tweet threads.")
 app.add_typer(view_app, name="view", help="Render archived tweets in the terminal.")
 
+# Web UI management (optional dependency)
+try:
+    from tweetxvault.cli_web import web_app
+    app.add_typer(web_app, name="web", help="Manage the background web UI server.")
+except ImportError:
+    pass
+
 
 BROWSER_HELP = (
     "Browser to use for cookie extraction: firefox, chrome, chromium, brave, edge, "
@@ -150,6 +157,8 @@ DEBUG_AUTH_OPTION = Annotated[
     bool,
     typer.Option("--debug-auth", help=DEBUG_AUTH_HELP),
 ]
+
+
 SEARCH_TYPE_HELP = "Comma-delimited search result types: post, article."
 SEARCH_COLLECTION_HELP = "Comma-delimited collections: bookmark, like, tweet."
 SEARCH_SORT_HELP = "Search result sort: relevance, newest, oldest."
@@ -545,6 +554,7 @@ def _run_sync_all_command(
         )
     for collection, error in outcome.errors.items():
         console.print(f"{collection}: failed ({error})")
+    _maybe_restart_web(console)
     raise typer.Exit(outcome.exit_code)
 
 
@@ -1345,6 +1355,7 @@ def import_x_archive_command(
         f"{result.counts.get('media_files_copied', 0)} media files copied"
     )
     _print_archive_followup(console, result)
+    _maybe_restart_web(console)
 
 
 @import_app.command(
@@ -1812,6 +1823,68 @@ def search_archive(
     finally:
         store.close()
 
+@app.command("serve-daemon", hidden=True)
+def serve_daemon_internal() -> None:
+    """Internal command used by 'web start' to run the server process."""
+    try:
+        from tweetxvault.web.server import run_server
+    except ImportError as exc:
+        raise typer.Exit(1) from exc
+
+    config, paths = load_config()
+    
+    store = open_archive_store(paths, create=False)
+    if store is None:
+        raise typer.Exit(1)
+    store.close()
+
+    web = config.web
+    run_server(config, paths, web.host, web.port, web.password_hash)
+
+
+def _maybe_restart_web(console: Console) -> None:
+    """Restart the web server after sync if auto_start is enabled."""
+    try:
+        config, paths = load_config()
+    except Exception:
+        return
+    if not config.web.auto_start:
+        return
+    try:
+        from tweetxvault.cli_web import _get_pid_file, _is_running
+    except ImportError:
+        return
+
+    import os
+    import signal
+
+    pid_file = _get_pid_file(paths.data_dir)
+    # Stop existing server if running
+    if pid_file.exists():
+        try:
+            pid = int(pid_file.read_text().strip())
+            if _is_running(pid):
+                os.kill(pid, signal.SIGTERM)
+                console.print("[dim]Stopped web server for restart...[/dim]")
+        except (ValueError, ProcessLookupError):
+            pass
+        finally:
+            if pid_file.exists():
+                pid_file.unlink()
+
+    # Start fresh
+    cmd = [sys.executable, "-m", "tweetxvault", "serve-daemon"]
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    pid_file.write_text(str(process.pid))
+    web = config.web
+    console.print(
+        f"[green]Web server restarted on http://{web.host}:{web.port} (PID: {process.pid})[/green]"
+    )
 
 def _raise_nofile_limit() -> None:
     """Raise the soft file-descriptor limit to the hard limit.

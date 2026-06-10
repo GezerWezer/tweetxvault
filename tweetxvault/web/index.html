@@ -1,0 +1,1019 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>tweetxvault</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/intersect@3.x.x/dist/cdn.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <style>
+        :root {
+            --bg-primary: #000000;
+            --bg-secondary: #202327;
+            --bg-tertiary: rgba(239, 243, 244, 0.1);
+            --bg-header: rgba(0, 0, 0, 0.8);
+            --text-primary: #e7e9ea;
+            --text-secondary: #71767b;
+            --border-color: #2f3336;
+            --hover-bg: rgba(255, 255, 255, 0.03);
+            --scrollbar-bg: #000000;
+            --scrollbar-thumb: #3e4144;
+            --scrollbar-thumb-hover: #55585b;
+            --thread-line: #333639;
+            --input-border: #2f3336;
+            --white-icon: #ffffff;
+            --dropdown-bg: #000000;
+            --gray-700: #374151;
+        }
+
+        html.light {
+            --bg-primary: #ffffff;
+            --bg-secondary: #eff3f4;
+            --bg-tertiary: rgba(15, 20, 25, 0.1);
+            --bg-header: rgba(255, 255, 255, 0.85);
+            --text-primary: #0f1419;
+            --text-secondary: #536471;
+            --border-color: #eff3f4;
+            --hover-bg: rgba(0, 0, 0, 0.03);
+            --scrollbar-bg: #ffffff;
+            --scrollbar-thumb: #c1c8cd;
+            --scrollbar-thumb-hover: #aab8c2;
+            --thread-line: #cfd9de;
+            --input-border: #cfd9de;
+            --white-icon: #0f1419;
+            --dropdown-bg: #ffffff;
+            --gray-700: #536471;
+        }
+
+        body { background-color: var(--bg-primary); color: var(--text-primary); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; transition: background-color 0.2s, color 0.2s; }
+        .tweet-border { border-bottom: 1px solid var(--border-color); }
+        .hover-bg:hover { background-color: var(--hover-bg); }
+        .blue-hover:hover { color: #1d9bf0; }
+        [x-cloak] { display: none !important; }
+        
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: var(--scrollbar-bg); }
+        ::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
+
+        .roll-wrapper {
+            position: relative;
+            display: inline-block;
+            height: 1.25em;
+            overflow: hidden;
+            vertical-align: bottom;
+            cursor: pointer;
+        }
+        .roll-inner {
+            display: flex;
+            flex-direction: column;
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .roll-wrapper:hover .roll-inner {
+            transform: translateY(-50%);
+        }
+        .roll-item {
+            height: 1.25em;
+            display: flex;
+            align-items: center;
+            white-space: nowrap;
+        }
+    </style>
+</head>
+<body class="antialiased min-h-screen flex justify-center">
+
+    <div x-data="tweetApp()" x-init="initApp()" class="w-full max-w-[600px] border-x border-[var(--border-color)] min-h-screen relative bg-[var(--bg-primary)]">
+        
+        <!-- HEADER -->
+        <div class="sticky top-0 z-20 bg-[var(--bg-header)] backdrop-blur-md p-4 border-b border-[var(--border-color)] flex items-center justify-between">
+            <div class="flex items-center space-x-4">
+                <button x-show="viewMode === 'thread'" @click="goBack()" class="p-2 -ml-2 rounded-full hover-bg transition">
+                    <svg viewBox="0 0 24 24" aria-hidden="true" class="w-5 h-5 fill-[var(--white-icon)]"><path d="M7.414 13l5.043 5.04-1.414 1.42L3.586 12l7.457-7.46 1.414 1.42L7.414 11H21v2H7.414z"></path></svg>
+                </button>
+                <div class="flex flex-col">
+                    <h1 class="text-xl font-bold text-[var(--text-primary)]" x-text="viewMode === 'list' ? 'Your Archive' : 'Post'"></h1>
+                    <span x-show="viewMode === 'list' && lastSyncFormatted" class="text-[13px] text-[var(--text-secondary)]" x-text="lastSyncFormatted"></span>
+                </div>
+            </div>
+            
+            <div x-show="viewMode === 'list'" class="flex items-center space-x-2">
+                <button @click="toggleTheme()" class="p-2 rounded-full hover-bg transition text-[var(--text-primary)]" aria-label="Toggle theme">
+                    <svg x-show="darkMode" viewBox="0 0 24 24" class="w-5 h-5 fill-current"><path fill-rule="evenodd" d="M12 2.25a.75.75 0 01.75.75v2.25a.75.75 0 01-1.5 0V3a.75.75 0 01.75-.75zM7.5 12a4.5 4.5 0 119 0 4.5 4.5 0 01-9 0zM18.894 6.166a.75.75 0 00-1.06-1.06l-1.591 1.59a.75.75 0 101.06 1.061l1.591-1.59zM21.75 12a.75.75 0 01-.75.75h-2.25a.75.75 0 010-1.5H21a.75.75 0 01.75.75zM17.834 18.894a.75.75 0 001.06-1.06l-1.59-1.591a.75.75 0 10-1.061 1.06l1.59 1.591zM12 18a.75.75 0 01.75.75V21a.75.75 0 01-1.5 0v-2.25A.75.75 0 0112 18zM7.758 17.303a.75.75 0 00-1.061-1.06l-1.591 1.59a.75.75 0 001.06 1.061l1.591-1.59zM6 12a.75.75 0 01-.75.75H3a.75.75 0 010-1.5h2.25A.75.75 0 016 12zM6.697 7.757a.75.75 0 001.06-1.06l-1.59-1.591a.75.75 0 00-1.061 1.06l1.59 1.591z" clip-rule="evenodd" /></svg>
+                    <svg x-show="!darkMode" viewBox="0 0 24 24" class="w-5 h-5 fill-current" x-cloak><path fill-rule="evenodd" d="M9.528 1.718a.75.75 0 01.162.819A8.97 8.97 0 009 6a9 9 0 009 9 8.97 8.97 0 003.463-.69.75.75 0 01.981.98 10.503 10.503 0 01-9.694 6.46c-5.799 0-10.5-4.701-10.5-10.5 0-4.368 2.667-8.112 6.46-9.694a.75.75 0 01.818.162z" clip-rule="evenodd" /></svg>
+                </button>
+                <select x-model="collectionFilter" @change="search()" class="bg-transparent text-[var(--text-primary)] font-bold text-sm outline-none cursor-pointer border border-[var(--border-color)] rounded-full px-3 py-1 hover-bg transition appearance-none">
+                    <option value="all" class="text-black">All Posts</option>
+                    <option value="likes" class="text-black">Likes</option>
+                    <option value="bookmarks" class="text-black">Bookmarks</option>
+                    <option value="tweets" class="text-black">Your Tweets</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- LIST VIEW -->
+        <div x-show="viewMode === 'list'" class="pb-4">
+            <div class="p-4 border-b border-[var(--border-color)] relative" x-data="searchAutocomplete()" @click.away="showDropdown = false">
+                <input type="text" x-model="searchQuery" @input="handleInput" @focus="showDropdown = true; handleInput()" @keydown.enter="search(); showDropdown = false" @keydown.up.prevent="moveUp" @keydown.down.prevent="moveDown" @keydown.tab.prevent="selectOption" x-ref="searchInput" placeholder="Search..." class="w-full bg-[var(--bg-secondary)] text-[var(--text-primary)] rounded-full py-2 px-4 focus:outline-none focus:ring-1 focus:ring-[#1d9bf0] placeholder-gray-500 border border-[var(--input-border)]">
+                
+                <!-- Autocomplete Dropdown -->
+                <div x-show="showDropdown && options.length > 0" x-transition.opacity.duration.100ms class="absolute top-full left-4 right-4 mt-1 bg-[var(--dropdown-bg)] border border-[var(--border-color)] rounded-xl shadow-[0_0_15px_rgba(255,255,255,0.1)] overflow-hidden z-50 py-2">
+                    <template x-for="(opt, index) in options" :key="index">
+                        <div @click="selectOptionIndex(index)" @mouseenter="selectedIndex = index" :class="{'bg-[var(--bg-tertiary)]': selectedIndex === index}" class="px-4 py-3 cursor-pointer flex flex-col justify-center transition">
+                            <div class="flex items-center space-x-2">
+                                <span class="text-[var(--text-primary)] font-bold" x-text="opt.prefix"></span>
+                                <span class="text-[var(--text-secondary)]" x-text="opt.value || opt.desc"></span>
+                            </div>
+                            <div class="text-[var(--text-secondary)] text-sm" x-show="opt.value" x-text="opt.desc"></div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+
+            <template x-if="loading && tweets.length === 0"><div class="p-8 text-center text-gray-500">Loading...</div></template>
+            <template x-if="!loading && tweets.length === 0"><div class="p-8 text-center text-gray-500">No posts found in this collection.</div></template>
+
+            <!-- TWEET LOOP -->
+            <template x-for="tweet in tweets" :key="tweet.tweet_id">
+                <div class="px-4 pt-3 pb-2 tweet-border hover-bg transition duration-200 cursor-pointer" @click="openThread(tweet.tweet_id)">
+                    <div class="flex space-x-3">
+                        <div class="w-10 h-10 rounded-full flex-shrink-0 relative bg-[var(--gray-700)] flex items-center justify-center font-bold text-[var(--white-icon)] uppercase overflow-hidden" @click.stop="searchFrom(tweet.author.username)">
+                            <span x-text="getInitial(tweet)"></span>
+                            <img :src="'/api/avatar/' + (tweet.author.id || 'unknown')" @error="$el.style.display='none'" class="absolute inset-0 w-full h-full object-cover z-10" loading="lazy">
+                        </div>
+
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center space-x-1 text-[15px]">
+                                <span class="font-bold text-[var(--text-primary)] truncate hover:underline" x-text="tweet.author.display_name || 'Unknown'" @click.stop="searchFrom(tweet.author.username)"></span>
+                                <span class="text-[var(--text-secondary)] truncate" x-text="'@' + (tweet.author.username || 'unknown')"></span>
+                                <span class="text-[var(--text-secondary)]">·</span>
+                                <div class="roll-wrapper text-[var(--text-secondary)]" @click.stop>
+                                    <div class="roll-inner">
+                                        <span class="roll-item hover:underline" x-text="formatDate(tweet.created_at)"></span>
+                                        <span class="roll-item text-[#1d9bf0] text-[13px] font-medium" x-text="formatSyncDate(tweet)"></span>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <template x-if="getReplyTo(tweet)">
+                                <div class="text-[15px] text-[var(--text-secondary)] mb-1">
+                                    Replying to <span class="text-[#1d9bf0] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo(tweet))" x-text="'@' + getReplyTo(tweet)"></span>
+                                </div>
+                            </template>
+
+                            <div class="text-[15px] mt-1 whitespace-pre-wrap leading-normal break-words" x-html="formatText(tweet)" @click="handleTextClick($event)"></div>
+                            
+                            <!-- Media -->
+                            <div x-html="renderMediaGrid(tweet.media)" class="mt-3"></div>
+
+                            <!-- Quote Tweet -->
+                            <template x-if="getQuoteTweet(tweet)">
+                                <div class="mt-3 border border-[var(--border-color)] rounded-xl p-3 hover-bg transition cursor-pointer" @click.stop="openThread(getQuoteTweet(tweet).rest_id || getQuoteTweet(tweet).id_str)">
+                                    <div class="flex items-center space-x-1 text-[15px] mb-1">
+                                        <div class="w-5 h-5 rounded-full flex-shrink-0 relative bg-[var(--gray-700)] flex items-center justify-center font-bold text-[var(--white-icon)] uppercase text-xs overflow-hidden">
+                                            <span x-text="getQuoteAuthor(getQuoteTweet(tweet)).initial"></span>
+                                            <img :src="'/api/avatar/' + getQuoteAuthor(getQuoteTweet(tweet)).id" @error="$el.style.display='none'" class="absolute inset-0 w-full h-full object-cover z-10" loading="lazy">
+                                        </div>
+                                        <span class="font-bold text-[var(--text-primary)] truncate" x-text="getQuoteAuthor(getQuoteTweet(tweet)).name"></span>
+                                        <span class="text-[var(--text-secondary)] truncate" x-text="'@' + getQuoteAuthor(getQuoteTweet(tweet)).screen_name"></span>
+                                        <span class="text-[var(--text-secondary)]">·</span>
+                                        <span class="text-[var(--text-secondary)]" x-text="formatDate(getQuoteTweet(tweet).legacy?.created_at || getQuoteTweet(tweet).created_at)"></span>
+                                    </div>
+                                    
+                                    <template x-if="getReplyTo({raw_json: getQuoteTweet(tweet)})">
+                                        <div class="text-[15px] text-[var(--text-secondary)] mb-1">
+                                            Replying to <span class="text-[#1d9bf0] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo({raw_json: getQuoteTweet(tweet)}))" x-text="'@' + getReplyTo({raw_json: getQuoteTweet(tweet)})"></span>
+                                        </div>
+                                    </template>
+
+                                    <div class="text-[15px] whitespace-pre-wrap leading-normal break-words" x-html="formatText({text: getQuoteText(getQuoteTweet(tweet)), raw_json: getQuoteTweet(tweet)})" @click="handleTextClick($event)"></div>
+                                    <div x-html="renderMediaGrid(tweet.qt_media)" class="mt-2" @click.stop></div>
+                                </div>
+                            </template>
+
+                            <div x-html="renderActionBar(tweet)" class="mt-1"></div>
+                        </div>
+                    </div>
+                </div>
+            </template>
+
+            <!-- Infinite Scroll Sentinel -->
+            <div x-show="!loading && page < totalPages" x-intersect="loadMore()" class="p-6 text-center text-[#1d9bf0] flex justify-center">
+                <svg class="animate-spin h-6 w-6" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+            </div>
+        </div>
+
+        <!-- THREAD VIEW -->
+        <div x-show="viewMode === 'thread'" x-cloak class="pb-20">
+            <template x-if="loadingThread"><div class="p-8 text-center text-gray-500">Loading thread...</div></template>
+            
+            <template x-if="!loadingThread && threadData">
+                <div>
+                    <!-- PARENTS -->
+                    <template x-for="(parent, index) in threadData.parents" :key="parent.tweet_id">
+                        <div class="px-4 pt-3 flex relative cursor-pointer hover-bg" @click="openThread(parent.tweet_id)">
+                            
+                            <template x-if="index > 0">
+                                <div class="w-0.5 bg-[var(--thread-line)] absolute top-0 h-[12px] left-[36px] -translate-x-1/2 z-0"></div>
+                            </template>
+                            
+                            <div class="w-0.5 bg-[var(--thread-line)] absolute top-[52px] bottom-0 left-[36px] -translate-x-1/2 z-0"></div>
+                            
+                            <div class="w-10 h-10 rounded-full flex-shrink-0 relative bg-[var(--gray-700)] flex items-center justify-center font-bold text-[var(--white-icon)] uppercase overflow-hidden z-10 mr-3" @click.stop="searchFrom(parent.author.username)">
+                                <span x-text="getInitial(parent)"></span>
+                                <img :src="'/api/avatar/' + (parent.author.id || 'unknown')" @error="$el.style.display='none'" class="absolute inset-0 w-full h-full object-cover z-10" loading="lazy">
+                            </div>
+
+                            <div class="flex-1 min-w-0 pb-2 z-10">
+                                <div class="flex items-center space-x-1 text-[15px]">
+                                    <span class="font-bold text-[var(--text-primary)] truncate hover:underline" @click.stop="searchFrom(parent.author.username)" x-text="parent.author.display_name || 'Unknown'"></span>
+                                    <span class="text-[var(--text-secondary)] truncate" x-text="'@' + (parent.author.username || 'unknown')"></span>
+                                    <span class="text-[var(--text-secondary)]">·</span>
+                                    <div class="roll-wrapper text-[var(--text-secondary)]" @click.stop>
+                                        <div class="roll-inner">
+                                            <span class="roll-item hover:underline" x-text="formatDate(parent.created_at)"></span>
+                                            <span class="roll-item text-[#1d9bf0] text-[13px] font-medium" x-text="formatSyncDate(parent)"></span>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <template x-if="getReplyTo(parent)">
+                                    <div class="text-[15px] text-[var(--text-secondary)] mb-1">
+                                        Replying to <span class="text-[#1d9bf0] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo(parent))" x-text="'@' + getReplyTo(parent)"></span>
+                                    </div>
+                                </template>
+
+                                <div class="text-[15px] mt-1 whitespace-pre-wrap leading-normal break-words" x-html="formatText(parent)" @click="handleTextClick($event)"></div>
+                                <div x-html="renderMediaGrid(parent.media)" class="mt-3" @click.stop></div>
+                                <div x-html="renderActionBar(parent)" class="mt-2"></div>
+                            </div>
+                        </div>
+                    </template>
+
+                    <!-- MAIN TWEET -->
+                    <div class="px-4 pt-3 pb-2 tweet-border relative">
+                        <template x-if="threadData.parents.length > 0">
+                            <div class="absolute w-0.5 bg-[var(--thread-line)] top-0 h-[12px] left-[36px] -translate-x-1/2 z-0"></div>
+                        </template>
+
+                        <div class="flex space-x-3 mb-3 relative z-10">
+                            <div class="w-10 h-10 rounded-full flex-shrink-0 relative bg-[var(--gray-700)] flex items-center justify-center font-bold text-[var(--white-icon)] uppercase overflow-hidden cursor-pointer" @click.stop="searchFrom(threadData.main.author.username)">
+                                <span x-text="getInitial(threadData.main)"></span>
+                                <img :src="'/api/avatar/' + (threadData.main.author.id || 'unknown')" @error="$el.style.display='none'" class="absolute inset-0 w-full h-full object-cover z-10" loading="lazy">
+                            </div>
+
+                            <div class="cursor-pointer flex-1" @click.stop="searchFrom(threadData.main.author.username)">
+                                <div class="font-bold text-[var(--text-primary)] hover:underline" x-text="threadData.main.author.display_name || 'Unknown'"></div>
+                                <div class="text-[var(--text-secondary)]" x-text="'@' + (threadData.main.author.username || 'unknown')"></div>
+                            </div>
+                        </div>
+                        
+                        <template x-if="getReplyTo(threadData.main) && threadData.parents.length === 0">
+                            <div class="text-[15px] text-[var(--text-secondary)] mb-2">
+                                Replying to <span class="text-[#1d9bf0] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo(threadData.main))" x-text="'@' + getReplyTo(threadData.main)"></span>
+                            </div>
+                        </template>
+
+                        <div class="text-[17px] whitespace-pre-wrap leading-normal break-words" x-html="formatText(threadData.main)" @click="handleTextClick($event)"></div>
+                        <div x-html="renderMediaGrid(threadData.main.media)" class="mt-3" @click.stop></div>
+
+                        <!-- Quote Tweet -->
+                        <template x-if="getQuoteTweet(threadData.main)">
+                            <div class="mt-3 border border-[var(--border-color)] rounded-xl p-3 hover-bg transition cursor-pointer" @click.stop="openThread(getQuoteTweet(threadData.main).rest_id || getQuoteTweet(threadData.main).id_str)">
+                                <div class="flex items-center space-x-1 text-[15px] mb-1">
+                                    <div class="w-5 h-5 rounded-full flex-shrink-0 relative bg-[var(--gray-700)] flex items-center justify-center font-bold text-[var(--white-icon)] uppercase text-xs overflow-hidden">
+                                        <span x-text="getQuoteAuthor(getQuoteTweet(threadData.main)).initial"></span>
+                                        <img :src="'/api/avatar/' + getQuoteAuthor(getQuoteTweet(threadData.main)).id" @error="$el.style.display='none'" class="absolute inset-0 w-full h-full object-cover z-10" loading="lazy">
+                                    </div>
+                                    <span class="font-bold text-[var(--text-primary)] truncate" x-text="getQuoteAuthor(getQuoteTweet(threadData.main)).name"></span>
+                                    <span class="text-[var(--text-secondary)] truncate" x-text="'@' + getQuoteAuthor(getQuoteTweet(threadData.main)).screen_name"></span>
+                                    <span class="text-[var(--text-secondary)]">·</span>
+                                    <span class="text-[var(--text-secondary)]" x-text="formatDate(getQuoteTweet(threadData.main).legacy?.created_at || getQuoteTweet(threadData.main).created_at)"></span>
+                                </div>
+                                
+                                <template x-if="getReplyTo({raw_json: getQuoteTweet(threadData.main)})">
+                                    <div class="text-[15px] text-[var(--text-secondary)] mb-1">
+                                        Replying to <span class="text-[#1d9bf0] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo({raw_json: getQuoteTweet(threadData.main)}))" x-text="'@' + getReplyTo({raw_json: getQuoteTweet(threadData.main)})"></span>
+                                    </div>
+                                </template>
+
+                                <div class="text-[15px] whitespace-pre-wrap leading-normal break-words" x-html="formatText({text: getQuoteText(getQuoteTweet(threadData.main)), raw_json: getQuoteTweet(threadData.main)})" @click="handleTextClick($event)"></div>
+                                <div x-html="renderMediaGrid(threadData.main.qt_media)" class="mt-2" @click.stop></div>
+                            </div>
+                        </template>
+
+                        <div class="mt-4 text-[var(--text-secondary)] border-b border-[var(--border-color)] pb-4 roll-wrapper cursor-default">
+                            <div class="roll-inner">
+                                <span class="roll-item" x-text="formatDate(threadData.main.created_at, true)"></span>
+                                <span class="roll-item text-[#1d9bf0] font-medium" x-text="formatSyncDate(threadData.main)"></span>
+                            </div>
+                        </div>
+                        
+                        <div x-html="renderActionBar(threadData.main, true)" class="mt-1 pb-3"></div>
+                    </div>
+
+                    <!-- CHILDREN / REPLIES -->
+                    <template x-for="child in threadData.children" :key="child.tweet_id">
+                        <div class="tweet-border">
+                            <!-- Direct Reply Card -->
+                            <div class="p-4 flex space-x-3 relative cursor-pointer hover-bg" @click="openThread(child.tweet_id)">
+                                <!-- Connecting Line down to OP Reply (only if op_replies exists) -->
+                                <template x-if="child.op_replies && child.op_replies.length > 0">
+                                    <div class="w-0.5 bg-[var(--thread-line)] absolute top-[56px] bottom-0 left-[36px] -translate-x-1/2 z-0"></div>
+                                </template>
+                                
+                                <div class="w-10 h-10 rounded-full flex-shrink-0 relative bg-[var(--gray-700)] flex items-center justify-center font-bold text-[var(--white-icon)] uppercase overflow-hidden z-10" @click.stop="searchFrom(child.author.username)">
+                                    <span x-text="getInitial(child)"></span>
+                                    <img :src="'/api/avatar/' + (child.author.id || 'unknown')" @error="$el.style.display='none'" class="absolute inset-0 w-full h-full object-cover z-10" loading="lazy">
+                                </div>
+
+                                <div class="flex-1 min-w-0 z-10">
+                                    <div class="flex items-center space-x-1 text-[15px]">
+                                        <span class="font-bold text-[var(--text-primary)] truncate hover:underline" @click.stop="searchFrom(child.author.username)" x-text="child.author.display_name || 'Unknown'"></span>
+                                        <span class="text-[var(--text-secondary)] truncate" x-text="'@' + (child.author.username || 'unknown')"></span>
+                                        <span class="text-[var(--text-secondary)]">·</span>
+                                        <div class="roll-wrapper text-[#71767b]" @click.stop>
+                                            <div class="roll-inner">
+                                                <span class="roll-item hover:underline" x-text="formatDate(child.created_at)"></span>
+                                                <span class="roll-item text-[#1d9bf0] text-[13px] font-medium" x-text="formatSyncDate(child)"></span>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <template x-if="getReplyTo(child) && getReplyTo(child) !== (threadData.main.author.username)">
+                                        <div class="text-[15px] text-[#71767b] mb-1">
+                                            Replying to <span class="text-[#1d9bf0] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo(child))" x-text="'@' + getReplyTo(child)"></span>
+                                        </div>
+                                    </template>
+
+                                    <div class="text-[15px] mt-1 whitespace-pre-wrap leading-normal break-words" x-html="formatText(child)" @click="handleTextClick($event)"></div>
+                                    <div x-html="renderMediaGrid(child.media)" class="mt-3" @click.stop></div>
+                                    <div x-html="renderActionBar(child)" class="mt-2"></div>
+                                </div>
+                            </div>
+
+                            <!-- OP Replies (Threaded directly underneath) -->
+                            <template x-if="child.op_replies && child.op_replies.length > 0">
+                                <div>
+                                    <template x-for="(reply, rIdx) in child.op_replies" :key="reply.tweet_id">
+                                        <div class="p-4 pt-0 flex space-x-3 relative cursor-pointer hover-bg" @click="openThread(reply.tweet_id)">
+                                            
+                                            <!-- Top Line Bridge from Child -->
+                                            <div class="w-0.5 bg-[#333639] absolute top-0 h-[16px] left-[36px] -translate-x-1/2 z-0"></div>
+                                            
+                                            <!-- Bottom Line (Only if there are more OP replies after this) -->
+                                            <template x-if="rIdx < child.op_replies.length - 1">
+                                                <div class="w-0.5 bg-[#333639] absolute top-[40px] bottom-0 left-[36px] -translate-x-1/2 z-0"></div>
+                                            </template>
+                                            
+                                            <!-- Avatar -->
+                                            <div class="w-10 h-10 rounded-full flex-shrink-0 relative bg-gray-700 flex items-center justify-center font-bold text-white uppercase overflow-hidden z-10" @click.stop="searchFrom(reply.author.username)">
+                                                <span x-text="getInitial(reply)"></span>
+                                                <img :src="'/api/avatar/' + (reply.author.id || 'unknown')" @error="$el.style.display='none'" class="absolute inset-0 w-full h-full object-cover z-10" loading="lazy">
+                                            </div>
+
+                                            <div class="flex-1 min-w-0 pb-2 z-10">
+                                                <div class="flex items-center space-x-1 text-[15px]">
+                                                    <span class="font-bold text-[#e7e9ea] truncate hover:underline" @click.stop="searchFrom(reply.author.username)" x-text="reply.author.display_name || 'Unknown'"></span>
+                                                    <span class="text-[#71767b] truncate" x-text="'@' + (reply.author.username || 'unknown')"></span>
+                                                    <span class="text-[#71767b]">·</span>
+                                                    <div class="roll-wrapper text-[#71767b]" @click.stop>
+                                                        <div class="roll-inner">
+                                                            <span class="roll-item hover:underline" x-text="formatDate(reply.created_at)"></span>
+                                                            <span class="roll-item text-[#1d9bf0] text-[13px] font-medium" x-text="formatSyncDate(reply)"></span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                
+                                                <template x-if="getReplyTo(reply)">
+                                                    <div class="text-[15px] text-[#71767b] mb-1">
+                                                        Replying to <span class="text-[#1d9bf0] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo(reply))" x-text="'@' + getReplyTo(reply)"></span>
+                                                    </div>
+                                                </template>
+
+                                                <div class="text-[15px] mt-1 whitespace-pre-wrap leading-normal break-words" x-html="formatText(reply)" @click="handleTextClick($event)"></div>
+                                                <div x-html="renderMediaGrid(reply.media)" class="mt-3" @click.stop></div>
+                                                <div x-html="renderActionBar(reply)" class="mt-2"></div>
+                                            </div>
+                                        </div>
+                                    </template>
+                                </div>
+                            </template>
+                        </div>
+                    </template>
+                </div>
+            </template>
+        </div>
+        
+        <!-- Lightbox Modal -->
+        <div x-show="lightboxOpen" 
+             @keydown.window.escape="lightboxOpen = false" 
+             @keydown.window.right="if(lightboxOpen) nextLightbox()" 
+             @keydown.window.left="if(lightboxOpen) prevLightbox()"
+             class="fixed inset-0 z-[100] bg-black/95 flex items-center justify-center" 
+             x-cloak 
+             @click="lightboxOpen = false">
+             
+            <button x-show="lightboxMedia.length > 1 && lightboxIndex > 0" @click.stop="prevLightbox()" class="absolute left-4 p-3 text-white hover:bg-gray-800 rounded-full transition z-50">
+                <svg viewBox="0 0 24 24" class="w-8 h-8 fill-current"><path d="M15.41 16.59L10.83 12l4.58-4.59L14 6l-6 6 6 6 1.41-1.41z"></path></svg>
+            </button>
+            <button x-show="lightboxMedia.length > 1 && lightboxIndex < lightboxMedia.length - 1" @click.stop="nextLightbox()" class="absolute right-4 p-3 text-white hover:bg-gray-800 rounded-full transition z-50">
+                <svg viewBox="0 0 24 24" class="w-8 h-8 fill-current"><path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41z"></path></svg>
+            </button>
+
+            <button class="absolute top-4 left-4 p-2 text-white hover:bg-gray-800 rounded-full transition z-50">
+                <svg viewBox="0 0 24 24" class="w-6 h-6 fill-current"><path d="M13.414 12l5.793-5.793c.39-.39.39-1.023 0-1.414s-1.024-.39-1.414 0L12 10.586 6.207 4.793c-.39-.39-1.023-.39-1.414 0s-.39 1.024 0 1.414L10.586 12l-5.793 5.793c-.39.39-.39 1.023 0 1.414.195.195.45.293.707.293s.512-.098.707-.293L12 13.414l5.793 5.793c.195.195.45.293.707.293s.512-.098.707-.293c.39-.39.39-1.023 0-1.414L13.414 12z"></path></svg>
+            </button>
+            
+            <template x-if="lightboxMedia[lightboxIndex]">
+                <div class="w-full h-full flex justify-center items-center">
+                    <template x-if="lightboxMedia[lightboxIndex].type === 'photo'">
+                        <img :src="lightboxMedia[lightboxIndex].src" class="max-w-full max-h-full object-contain" @click.stop>
+                    </template>
+                    <template x-if="lightboxMedia[lightboxIndex].type === 'video'">
+                        <template x-if="lightboxMedia[lightboxIndex].isGif">
+                            <video :src="lightboxMedia[lightboxIndex].src" autoplay loop muted playsinline class="max-w-[90%] max-h-[90%] outline-none" @click.stop></video>
+                        </template>
+                        <template x-if="!lightboxMedia[lightboxIndex].isGif">
+                            <video :src="lightboxMedia[lightboxIndex].src" controls autoplay class="max-w-[90%] max-h-[90%] outline-none" @click.stop></video>
+                        </template>
+                    </template>
+                </div>
+            </template>
+        </div>
+        
+        <!-- Scroll to top button -->
+        <button 
+            x-show="showScrollTop" 
+            x-transition.opacity.duration.300ms
+            @click="scrollToTop()"
+            class="fixed bottom-6 right-6 bg-[#1d9bf0] text-white p-3 rounded-full shadow-lg hover:bg-[#1a8cd8] transition z-40"
+            aria-label="Scroll to top"
+        >
+            <svg viewBox="0 0 24 24" class="w-6 h-6 fill-current"><path d="M12 4l-8 8h6v8h4v-8h6l-8-8z"></path></svg>
+        </button>
+
+    </div>
+
+    <script>
+        function tweetApp() {
+            return {
+                viewMode: 'list',
+                tweets: [],
+                loading: true,
+                loadingMore: false,
+                page: 1,
+                totalPages: 1,
+                searchQuery: '',
+                collectionFilter: 'all',
+                
+                threadData: null,
+                loadingThread: false,
+                
+                lightboxOpen: false,
+                lightboxMedia: [],
+                lightboxIndex: 0,
+                videoObserver: null,
+                
+                showScrollTop: false,
+                lastSyncAt: null,
+                lastSyncFormatted: '',
+                darkMode: true,
+
+                initApp() {
+                    if ('scrollRestoration' in history) {
+                        history.scrollRestoration = 'manual';
+                    }
+                    
+                    const savedTheme = localStorage.getItem('theme');
+                    if (savedTheme === 'light') {
+                        this.darkMode = false;
+                        document.documentElement.classList.add('light');
+                    }
+                    
+                    window.addEventListener('scroll', () => {
+                        this.showScrollTop = window.scrollY > 300;
+                    });
+                    
+                    this.fetchStats();
+                    
+                    window.addEventListener('open-lightbox', (e) => {
+                        this.lightboxMedia = e.detail.media;
+                        this.lightboxIndex = e.detail.index;
+                        this.lightboxOpen = true;
+                    });
+                    
+                    this.videoObserver = new IntersectionObserver((entries) => {
+                        entries.forEach(e => {
+                            if (e.target.tagName === 'VIDEO') {
+                                if (!e.isIntersecting) {
+                                    e.target.pause();
+                                } else if (e.target.hasAttribute('autoplay')) {
+                                    e.target.play().catch(() => {});
+                                }
+                            }
+                        });
+                    }, { threshold: 0.1 });
+
+                    const domObserver = new MutationObserver((mutations) => {
+                        mutations.forEach(m => {
+                            m.addedNodes.forEach(node => {
+                                if (node.nodeType === 1) {
+                                    if (node.tagName === 'VIDEO') this.videoObserver.observe(node);
+                                    node.querySelectorAll('video').forEach(v => this.videoObserver.observe(v));
+                                }
+                            });
+                        });
+                    });
+                    domObserver.observe(document.body, { childList: true, subtree: true });
+                    
+                    history.replaceState({ viewMode: 'list', scrollY: window.scrollY }, '');
+                    
+                    window.addEventListener('popstate', (e) => {
+                        this.pauseAllVideos();
+                        if (e.state && e.state.viewMode === 'thread') {
+                            this.openThread(e.state.tweetId, true);
+                        } else {
+                            this.viewMode = 'list';
+                            if (e.state && e.state.scrollY !== undefined) {
+                                window.scrollTo(0, e.state.scrollY);
+                                this.$nextTick(() => {
+                                    window.scrollTo(0, e.state.scrollY);
+                                    setTimeout(() => window.scrollTo(0, e.state.scrollY), 20);
+                                });
+                            }
+                        }
+                    });
+
+                    this.fetchTweets();
+                },
+
+                pauseAllVideos() {
+                    document.querySelectorAll('video').forEach(v => {
+                        v.pause();
+                        v.currentTime = 0;
+                    });
+                },
+
+                async fetchTweets(append = false) {
+                    if (!append) {
+                        this.loading = true;
+                        this.tweets = [];
+                        window.scrollTo(0, 0);
+                    } else {
+                        this.loadingMore = true;
+                    }
+                    
+                    let url = `/api/tweets?collection=${this.collectionFilter}&page=${this.page}`;
+                    if (this.searchQuery.trim()) {
+                        url += `&q=${encodeURIComponent(this.searchQuery)}`;
+                    }
+
+                    try {
+                        const res = await fetch(url);
+                        const data = await res.json();
+                        if (append) {
+                            this.tweets = [...this.tweets, ...data.tweets];
+                        } else {
+                            this.tweets = data.tweets;
+                        }
+                        this.page = data.page;
+                        this.totalPages = data.pages;
+                    } catch (e) {
+                        console.error(e);
+                    } finally {
+                        this.loading = false;
+                        this.loadingMore = false;
+                    }
+                },
+                
+                toggleTheme() {
+                    this.darkMode = !this.darkMode;
+                    if (this.darkMode) {
+                        document.documentElement.classList.remove('light');
+                        localStorage.setItem('theme', 'dark');
+                    } else {
+                        document.documentElement.classList.add('light');
+                        localStorage.setItem('theme', 'light');
+                    }
+                },
+                
+                loadMore() {
+                    if (this.loadingMore || this.loading || this.page >= this.totalPages) return;
+                    this.page++;
+                    this.fetchTweets(true);
+                },
+
+                async openThread(tweetId, isPopState = false) {
+                    this.pauseAllVideos();
+                    if (!isPopState) {
+                        history.replaceState({ ...history.state, scrollY: window.scrollY }, '');
+                        history.pushState({ viewMode: 'thread', tweetId: tweetId, scrollY: 0 }, '');
+                    }
+                    this.viewMode = 'thread';
+                    this.loadingThread = true;
+                    this.threadData = null;
+                    window.scrollTo(0, 0);
+
+                    try {
+                        const res = await fetch(`/api/tweets/${tweetId}`);
+                        if (!res.ok) throw new Error();
+                        this.threadData = await res.json();
+                        if (isPopState && history.state && history.state.scrollY) {
+                            this.$nextTick(() => window.scrollTo(0, history.state.scrollY));
+                        }
+                    } catch (e) {
+                        alert("Thread not found.");
+                        if (!isPopState) this.goBack();
+                    } finally {
+                        this.loadingThread = false;
+                    }
+                },
+                
+                goBack() {
+                    history.back();
+                },
+
+                async fetchStats() {
+                    try {
+                        const res = await fetch('/api/stats');
+                        const data = await res.json();
+                        if (data.latest_sync_at) {
+                            this.lastSyncAt = new Date(data.latest_sync_at);
+                            this.updateSyncTime();
+                            // Update every minute
+                            setInterval(() => this.updateSyncTime(), 60000);
+                        }
+                    } catch (e) {
+                        console.error('Failed to fetch stats', e);
+                    }
+                },
+
+                updateSyncTime() {
+                    if (!this.lastSyncAt) return;
+                    
+                    const now = new Date();
+                    const diffMs = now - this.lastSyncAt;
+                    const diffMins = Math.floor(diffMs / 60000);
+                    const diffHours = Math.floor(diffMins / 60);
+                    const diffDays = Math.floor(diffHours / 24);
+                    
+                    let relativeStr = '';
+                    if (diffMins < 1) relativeStr = 'Just now';
+                    else if (diffMins < 60) relativeStr = `${diffMins}m ago`;
+                    else if (diffHours < 24) relativeStr = `${diffHours}h ago`;
+                    else relativeStr = `${diffDays}d ago`;
+                    
+                    const options = { year: 'numeric', month: 'short', day: 'numeric' };
+                    const dateStr = this.lastSyncAt.toLocaleDateString(undefined, options);
+                    
+                    this.lastSyncFormatted = `Last sync: ${dateStr} · ${relativeStr}`;
+                },
+
+                search() { this.page = 1; this.viewMode = 'list'; this.fetchTweets(); },
+                searchFrom(username) {
+                    if(!username) return;
+                    this.searchQuery = `from:${username}`;
+                    this.search();
+                },
+                
+                getInitial(tweet) {
+                    if (tweet.author && tweet.author.display_name) return tweet.author.display_name.charAt(0);
+                    if (tweet.author && tweet.author.username) return tweet.author.username.charAt(0);
+                    return '?';
+                },
+
+                getReplyTo(tweet) {
+                    if (!tweet.raw_json) return null;
+                    if (tweet.raw_json.legacy && tweet.raw_json.legacy.in_reply_to_screen_name) return tweet.raw_json.legacy.in_reply_to_screen_name;
+                    if (tweet.raw_json.in_reply_to_screen_name) return tweet.raw_json.in_reply_to_screen_name;
+                    return null;
+                },
+
+                formatDate(dateStr, includeTime = false) {
+                    if (!dateStr) return '';
+                    const d = new Date(dateStr);
+                    if (includeTime) {
+                        return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) + ' · ' + 
+                               d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+                    }
+                    const now = new Date();
+                    const diff = (now - d) / 1000;
+                    if (diff < 60) return 'Just now';
+                    if (diff < 3600) return Math.floor(diff/60) + 'm';
+                    if (diff < 86400) return Math.floor(diff/3600) + 'h';
+                    const options = { month: 'short', day: 'numeric' };
+                    if (d.getFullYear() !== now.getFullYear()) options.year = 'numeric';
+                    return d.toLocaleDateString('en-US', options);
+                },
+
+                formatSyncDate(tweet) {
+                    let synced = tweet.synced_at || (tweet.collection ? tweet.collection.synced_at : null);
+                    if (!synced) return 'Archived';
+                    let dS = new Date(synced);
+                    return `Synced ${dS.toLocaleDateString('en-US', {month:'short', day:'numeric'})}`;
+                },
+
+                getQuoteTweet(tweet) {
+                    if (!tweet.raw_json) return null;
+                    const quote = tweet.raw_json.quoted_status_result?.result;
+                    if (quote?.__typename === 'TweetWithVisibilityResults') return quote.tweet;
+                    if (quote?.__typename === 'Tweet') return quote;
+                    if (tweet.raw_json.quoted_status) return tweet.raw_json.quoted_status;
+                    return null;
+                },
+
+                getQuoteAuthor(qt) {
+                    if (!qt) return { name: 'Unknown', screen_name: 'unknown', id: 'x', initial: '?' };
+                    const userResult = qt.core?.user_results?.result;
+                    let name = userResult?.legacy?.name || userResult?.core?.name || qt.user?.name || 'Unknown';
+                    let screen_name = userResult?.legacy?.screen_name || userResult?.core?.screen_name || qt.user?.screen_name || 'unknown';
+                    let id = userResult?.rest_id || qt.user?.id_str || 'x';
+                    return { name, screen_name, id, initial: name.charAt(0) };
+                },
+
+                getQuoteText(qt) {
+                    if (!qt) return '';
+                    return qt.legacy?.full_text || qt.full_text || qt.text || '';
+                },
+
+                formatText(tweet) {
+                    let text = tweet.text || '';
+                    const raw = tweet.raw_json;
+                    
+                    if (raw && raw.legacy && raw.legacy.in_reply_to_status_id_str) {
+                        text = text.replace(/^(@\w+\s+)+/, '');
+                    }
+                    
+                    if (raw && raw.legacy) {
+                        const urlsToRemove = [];
+                        if (raw.legacy.entities?.media) urlsToRemove.push(...raw.legacy.entities.media.map(m => m.url));
+                        if (raw.legacy.extended_entities?.media) urlsToRemove.push(...raw.legacy.extended_entities.media.map(m => m.url));
+                        if (raw.legacy.quoted_status_permalink?.url) urlsToRemove.push(raw.legacy.quoted_status_permalink.url);
+                        
+                        urlsToRemove.filter(Boolean).forEach(u => {
+                            text = text.split(u).join('');
+                        });
+                    }
+                    
+                    text = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                    text = text.replace(/@(\w+)/g, '<span class="mention text-[#1d9bf0] hover:underline cursor-pointer" data-user="$1">@$1</span>');
+                    return text.trim();
+                },
+
+                scrollToTop() {
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                },
+
+                handleTextClick(e) {
+                    if (e.target.tagName === 'SPAN' && e.target.classList.contains('mention')) {
+                        e.stopPropagation();
+                        this.searchFrom(e.target.dataset.user);
+                    }
+                },
+
+                renderMediaGrid(mediaList) {
+                    if (!mediaList || mediaList.length === 0) return '';
+                    
+                    const getSrc = (m) => {
+                        return m.download?.local_path ? `/${m.download.local_path}` : null;
+                    };
+
+                    const getPoster = (m) => {
+                        return m.download?.thumbnail_local_path ? `/${m.download.thumbnail_local_path}` : null;
+                    };
+
+                    const validMedia = mediaList.map(m => {
+                        const type = (m.type === 'video' || m.type === 'animated_gif') ? 'video' : 'photo';
+                        const isGif = m.type === 'animated_gif'; 
+                        const duration = m.duration_millis;
+                        const isShort = duration && duration <= 60000;
+                        return { m, src: getSrc(m), poster: getPoster(m), type, isGif, isShort };
+                    }).filter(x => x.src);
+                    
+                    if (validMedia.length === 0) return '';
+                    
+                    const jsonStr = JSON.stringify(validMedia).replace(/'/g, "&#39;").replace(/"/g, "&quot;");
+
+                    if (validMedia.length === 1) {
+                        const { src, poster, type, isGif, isShort } = validMedia[0];
+                        if (type === 'photo') {
+                            return `<div class="mt-3 rounded-2xl overflow-hidden border border-[var(--border-color)]" @click.stop>
+                                        <img src="${src}" onclick="window.dispatchEvent(new CustomEvent('open-lightbox', { detail: { media: JSON.parse('${jsonStr}'), index: 0 } }))" class="w-full h-auto max-h-[600px] object-cover cursor-pointer hover:opacity-90 transition">
+                                    </div>`;
+                        } else {
+                            const loopAttr = (isGif || isShort) ? 'loop' : '';
+                            const autoplayAttr = isGif ? 'autoplay muted playsinline' : '';
+                            const controlsAttr = isGif ? '' : 'controls';
+                            
+                            return `<div class="mt-3 rounded-2xl overflow-hidden border border-[var(--border-color)] bg-black" @click.stop>
+                                        <video src="${src}" poster="${poster || ''}" ${autoplayAttr} ${loopAttr} ${controlsAttr} class="w-full h-auto max-h-[600px] object-contain outline-none"></video>
+                                    </div>`;
+                        }
+                    }
+                    
+                    let gridClass = validMedia.length === 2 ? 'grid-cols-2' : 'grid-cols-2 grid-rows-2';
+                    let html = `<div class="mt-3 grid gap-[2px] rounded-2xl overflow-hidden border border-[var(--border-color)] aspect-[16/9] ${gridClass}" @click.stop>`;
+                    
+                    validMedia.forEach((item, idx) => {
+                        const { src, poster, type, isGif, isShort } = item;
+                        let itemClass = (validMedia.length === 3 && idx === 0) ? 'row-span-2 col-span-1' : (validMedia.length === 3 ? 'col-span-1' : '');
+                        
+                        if (type === 'photo') {
+                            html += `<div class="relative w-full h-full bg-[var(--border-color)] ${itemClass}">
+                                        <img src="${src}" onclick="window.dispatchEvent(new CustomEvent('open-lightbox', { detail: { media: JSON.parse('${jsonStr}'), index: ${idx} } }))" class="absolute inset-0 w-full h-full object-cover cursor-pointer hover:opacity-90 transition">
+                                    </div>`;
+                        } else {
+                            const loopAttr = (isGif || isShort) ? 'loop' : '';
+                            const autoplayAttr = isGif ? 'autoplay muted playsinline' : '';
+                            const controlsAttr = isGif ? '' : 'controls';
+                            
+                            html += `<div class="relative w-full h-full bg-black ${itemClass}">
+                                        <video src="${src}" poster="${poster || ''}" ${autoplayAttr} ${loopAttr} ${controlsAttr} class="absolute inset-0 w-full h-full object-cover"></video>
+                                    </div>`;
+                        }
+                    });
+                    html += `</div>`;
+                    return html;
+                },
+
+                renderRawMediaGrid(rawMediaList) {
+                    return this.renderMediaGrid(rawMediaList, true);
+                },
+
+                renderActionBar(tweet, isMain = false) {
+                    const legacy = tweet.raw_json?.legacy || {};
+                    const replyCount = legacy.reply_count || 0;
+                    const retweetCount = (legacy.retweet_count || 0) + (legacy.quote_count || 0);
+                    const likeCount = legacy.favorite_count || 0;
+                    const viewCount = tweet.raw_json?.views?.count || 0;
+                    const bmkCount = legacy.bookmark_count || 0;
+                    
+                    const formatNum = (num) => num > 0 ? (num > 999 ? (num/1000).toFixed(1) + 'K' : num) : '';
+                    
+                    const collections = tweet.collections || [];
+                    if (tweet.collection?.type) collections.push(tweet.collection.type);
+                    const isLiked = collections.includes('like');
+                    const isBookmarked = collections.includes('bookmark');
+                    
+                    const likeIcon = isLiked ? 
+                        `<svg viewBox="0 0 24 24" class="w-[18.5px] h-[18.5px] fill-[#f91880]"><path d="M20.884 13.19c-1.351 2.48-4.001 5.12-8.379 7.67l-.503.3-.504-.3C7.121 18.31 4.471 15.67 3.119 13.19 1.928 10.99 1.898 8.48 2.921 6.45 3.864 4.56 5.8 3.32 8.016 3.42c1.474.07 2.812.8 3.486 2.08l.498.94.498-.94c.674-1.28 2.012-2.01 3.486-2.08 2.216-.1 4.152 1.14 5.095 3.03 1.023 2.03.993 4.54-.195 6.74z"></path></svg>` : 
+                        `<svg viewBox="0 0 24 24" class="w-[18.5px] h-[18.5px] fill-current"><path d="M16.697 5.5c-1.222-.06-2.679.51-3.89 2.16l-.805 1.09-.806-1.09C9.984 6.01 8.526 5.44 7.304 5.5c-1.243.07-2.349.78-2.91 1.91-.552 1.12-.633 2.78.479 4.82 1.074 1.97 3.257 4.27 7.129 6.61 3.87-2.34 6.052-4.64 7.126-6.61 1.111-2.04 1.03-3.7.477-4.82-.561-1.13-1.666-1.84-2.908-1.91zm4.187 7.69c-1.351 2.48-4.001 5.12-8.379 7.67l-.503.3-.504-.3c-4.379-2.55-7.029-5.19-8.382-7.67-1.36-2.5-1.41-4.86-.514-6.67.887-1.79 2.647-2.91 4.601-3.01 1.651-.09 3.368.56 4.798 2.01 1.429-1.45 3.146-2.1 4.796-2.01 1.954.1 3.714 1.22 4.601 3.01.896 1.81.846 4.17-.514 6.67z"></path></svg>`;
+
+                    const bmkIcon = isBookmarked ? 
+                        `<svg viewBox="0 0 24 24" class="w-[18.5px] h-[18.5px] fill-[#1d9bf0]"><path d="M4 4.5C4 3.12 5.119 2 6.5 2h11C18.881 2 20 3.12 20 4.5v18.44l-8-5.71-8 5.71V4.5z"></path></svg>` : 
+                        `<svg viewBox="0 0 24 24" class="w-[18.5px] h-[18.5px] fill-current"><path d="M4 4.5C4 3.12 5.119 2 6.5 2h11C18.881 2 20 3.12 20 4.5v18.44l-8-5.71-8 5.71V4.5zM6.5 4c-.276 0-.5.22-.5.5v14.56l6-4.29 6 4.29V4.5c0-.28-.224-.5-.5-.5H6.5z"></path></svg>`;
+
+                    const margin = isMain ? 'py-3 mt-4 border-y border-[var(--border-color)] w-full' : 'mt-3 mb-1 w-full';
+                    
+                    return `
+                    <div class="flex items-center justify-between text-[var(--text-secondary)] w-full ${margin}">
+                        <div class="flex items-center">
+                            <svg viewBox="0 0 24 24" class="w-[18.5px] h-[18.5px] fill-current"><path d="M1.751 10c0-4.42 3.584-8 8.005-8h4.366c4.49 0 8.129 3.64 8.129 8.13 0 2.96-1.607 5.68-4.196 7.11l-8.054 4.46v-3.69h-.067c-4.49.1-8.183-3.51-8.183-8.01zm8.005-6c-3.317 0-6.005 2.69-6.005 6 0 3.37 2.77 6.08 6.138 6.01l.351-.01h1.761v2.3l5.087-2.81c1.951-1.08 3.163-3.13 3.163-5.36 0-3.39-2.744-6.13-6.129-6.13H9.756z"></path></svg>
+                            <span class="text-[13px] ml-2 font-medium">${formatNum(replyCount)}</span>
+                        </div>
+                        <div class="flex items-center">
+                            <svg viewBox="0 0 24 24" class="w-[18.5px] h-[18.5px] fill-current"><path d="M4.5 3.88l4.432 4.14-1.364 1.46L5.5 7.55V16c0 1.1.896 2 2 2H13v2H7.5c-2.209 0-4-1.79-4-4V7.55L1.432 9.48.068 8.02 4.5 3.88zM16.5 6H11V4h5.5c2.209 0 4 1.79 4 4v8.45l2.068-1.93 1.364 1.46-4.432 4.14-4.432-4.14 1.364-1.46 2.068 1.93V8c0-1.1-.896-2-2-2z"></path></svg>
+                            <span class="text-[13px] ml-2 font-medium">${formatNum(retweetCount)}</span>
+                        </div>
+                        <div class="flex items-center ${isLiked ? 'text-[#f91880]' : ''}">
+                            ${likeIcon}
+                            <span class="text-[13px] ml-2 font-medium">${formatNum(likeCount)}</span>
+                        </div>
+                        <div class="flex items-center ${isBookmarked ? 'text-[#1d9bf0]' : ''}">
+                            ${bmkIcon}
+                            <span class="text-[13px] ml-2 font-medium">${formatNum(bmkCount)}</span>
+                        </div>
+                        <div class="flex items-center">
+                            <svg viewBox="0 0 24 24" class="w-[18.5px] h-[18.5px] fill-current"><path d="M8.75 21V3h2v18h-2zM18 21V8.5h2V21h-2zM4 21l.004-10h2L6 21H4zm9.248 0v-7h2v7h-2z"></path></svg>
+                            <span class="text-[13px] ml-2 font-medium">${formatNum(viewCount)}</span>
+                        </div>
+                        <a href="https://x.com/${tweet.author?.username || 'i'}/status/${tweet.tweet_id}" target="_blank" @click.stop class="flex items-center" title="Open on Twitter">
+                            <svg viewBox="0 0 24 24" class="w-[18.5px] h-[18.5px] fill-current hover:text-[#e7e9ea] transition"><path d="M18 19H6c-.55 0-1-.45-1-1V6c0-.55.45-1 1-1h5c.55 0 1-.45 1-1s-.45-1-1-1H6c-1.65 0-3 1.35-3 3v12c0 1.65 1.35 3 3 3h12c1.65 0 3-1.35 3-3v-5c0-.55-.45-1-1-1s-1 .45-1 1v5c0 .55-.45 1-1 1zM14 4c0 .55.45 1 1 1h2.59l-9.13 9.13c-.39.39-.39 1.02 0 1.41.19.19.45.29.71.29s.51-.1.71-.29L19 6.41V9c0 .55.45 1 1 1s1-.45 1-1V4c0-.55-.45-1-1-1h-5c-.55 0-1 .45-1 1z"></path></svg>
+                        </a>
+                    </div>`;
+                }
+            }
+        }
+
+        function searchAutocomplete() {
+            return {
+                showDropdown: false,
+                selectedIndex: 0,
+                options: [],
+                cursorPos: 0,
+                
+                allFilters: [
+                    { prefix: 'from:', desc: 'Sent from a specific user' },
+                    { prefix: 'to:', desc: 'Replying to a specific user' },
+                    { prefix: 'has:', desc: 'Includes specific type of media' },
+                    { prefix: 'filter:', desc: 'Filter by tweet type' },
+                    { prefix: 'min_faves:', desc: 'Minimum likes' },
+                    { prefix: 'min_retweets:', desc: 'Minimum retweets' },
+                    { prefix: 'since:', desc: 'After a specific date (YYYY-MM-DD)' },
+                    { prefix: 'until:', desc: 'Before a specific date (YYYY-MM-DD)' },
+                    { prefix: 'url:', desc: 'Contains a specific URL' }
+                ],
+                
+                hasOptions: [
+                    { prefix: 'has:', value: 'media', desc: 'Images, videos, or GIFs' },
+                    { prefix: 'has:', value: 'image', desc: 'Only images' },
+                    { prefix: 'has:', value: 'video', desc: 'Videos or GIFs' },
+                    { prefix: 'has:', value: 'links', desc: 'External links' }
+                ],
+                
+                filterOptions: [
+                    { prefix: 'filter:', value: 'media', desc: 'Any media' },
+                    { prefix: 'filter:', value: 'images', desc: 'Only images' },
+                    { prefix: 'filter:', value: 'videos', desc: 'Videos or GIFs' },
+                    { prefix: 'filter:', value: 'links', desc: 'External links' },
+                    { prefix: 'filter:', value: 'replies', desc: 'Replies to other tweets' },
+                    { prefix: 'filter:', value: 'quote', desc: 'Quote tweets' },
+                    { prefix: 'filter:', value: 'nativeretweets', desc: 'Retweets' },
+                    { prefix: 'filter:', value: 'self_threads', desc: 'Self-reply threads' },
+                    { prefix: 'filter:', value: 'verified', desc: 'From verified users' }
+                ],
+                
+                handleInput() {
+                    const input = this.$refs.searchInput;
+                    this.cursorPos = input.selectionStart;
+                    
+                    const textToCursor = this.searchQuery.substring(0, this.cursorPos);
+                    const words = textToCursor.split(/\s+/);
+                    const currentWord = words[words.length - 1] || '';
+                    
+                    this.showDropdown = true;
+                    this.selectedIndex = 0;
+                    
+                    if (currentWord.includes(':')) {
+                        const parts = currentWord.split(':');
+                        const prefix = parts[0] + ':';
+                        const val = parts.slice(1).join(':').toLowerCase();
+                        
+                        if (prefix === 'has:') {
+                            this.options = this.hasOptions.filter(o => o.value.startsWith(val));
+                        } else if (prefix === 'filter:') {
+                            this.options = this.filterOptions.filter(o => o.value.startsWith(val));
+                        } else {
+                            this.options = [];
+                            this.showDropdown = false;
+                        }
+                    } else {
+                        if (currentWord.startsWith('-')) {
+                            const cleanWord = currentWord.substring(1).toLowerCase();
+                            this.options = this.allFilters.filter(o => o.prefix.startsWith(cleanWord)).map(o => ({...o, prefix: '-' + o.prefix}));
+                        } else {
+                            const lowerWord = currentWord.toLowerCase();
+                            this.options = this.allFilters.filter(o => o.prefix.startsWith(lowerWord));
+                        }
+                    }
+                },
+                
+                moveDown() {
+                    if (!this.showDropdown || this.options.length === 0) return;
+                    this.selectedIndex = (this.selectedIndex + 1) % this.options.length;
+                },
+                
+                moveUp() {
+                    if (!this.showDropdown || this.options.length === 0) return;
+                    this.selectedIndex = (this.selectedIndex - 1 + this.options.length) % this.options.length;
+                },
+                
+                selectOptionIndex(idx) {
+                    this.selectedIndex = idx;
+                    this.selectOption();
+                },
+                
+                selectOption() {
+                    if (!this.showDropdown || this.options.length === 0) return;
+                    
+                    const opt = this.options[this.selectedIndex];
+                    const textToCursor = this.searchQuery.substring(0, this.cursorPos);
+                    const textAfterCursor = this.searchQuery.substring(this.cursorPos);
+                    
+                    const words = textToCursor.split(/\s+/);
+                    words.pop(); // remove current word
+                    
+                    let insertion = opt.prefix + (opt.value ? opt.value + ' ' : '');
+                    
+                    const newTextToCursor = (words.length > 0 ? words.join(' ') + ' ' : '') + insertion;
+                    this.searchQuery = newTextToCursor + textAfterCursor;
+                    
+                    this.showDropdown = false;
+                    
+                    this.$nextTick(() => {
+                        this.$refs.searchInput.focus();
+                        this.$refs.searchInput.setSelectionRange(newTextToCursor.length, newTextToCursor.length);
+                        if (opt.value || opt.prefix.endsWith(':')) {
+                            this.handleInput(); // Re-trigger for next token or typing value
+                        }
+                    });
+                }
+            }
+        }
+    </script>
+</body>
+</html>

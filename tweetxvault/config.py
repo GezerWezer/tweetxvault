@@ -55,11 +55,22 @@ class SyncConfig(BaseModel):
     timeout: float = Field(default=30.0, ge=1.0)
 
 
+class WebConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    password_hash: str | None = None
+    auto_start: bool = False
+    host: str = "127.0.0.1"
+    port: int = 8000
+    fetch_avatars: bool = True
+
+
 class AppConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     auth: AuthConfig = Field(default_factory=AuthConfig)
     sync: SyncConfig = Field(default_factory=SyncConfig)
+    web: WebConfig = Field(default_factory=WebConfig)
 
 
 class XDGPaths(BaseModel):
@@ -183,3 +194,32 @@ def load_config(env: Mapping[str, str] | None = None) -> tuple[AppConfig, XDGPat
     if sync_updates:
         config.sync = config.sync.model_copy(update=sync_updates)
     return config, paths
+
+
+def update_web_config(paths: XDGPaths, web_config: WebConfig) -> None:
+    """Update the [web] section in config.toml directly."""
+    config_path = paths.config_file
+    content = ""
+    if config_path.exists():
+        content = config_path.read_text(encoding="utf-8")
+    
+    # Very simple replacement strategy: strip out any existing [web] section
+    # and append the new one at the end. This assumes [web] is the last section
+    # or we just remove lines starting from [web] until the next [ section.
+    import re
+    # Remove existing [web] section if present
+    content = re.sub(r'\[web\].*?(?=\n\[|$)', '', content, flags=re.DOTALL)
+    
+    content = content.rstrip() + "\n\n[web]\n"
+    if web_config.password_hash:
+        content += f'password_hash = "{web_config.password_hash}"\n'
+    if web_config.auto_start:
+        content += 'auto_start = true\n'
+    else:
+        content += 'auto_start = false\n'
+    if web_config.host:
+        content += f'host = "{web_config.host}"\n'
+    if web_config.port:
+        content += f'port = {web_config.port}\n'
+        
+    config_path.write_text(content.lstrip(), encoding="utf-8")
