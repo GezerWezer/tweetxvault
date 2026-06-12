@@ -3,6 +3,13 @@
 ## 2026-06-12
 
 - Optimized Web UI performance for large databases (e.g. 10GB archives):
+  - Added `ensure_scalar_indexes()` to `ArchiveStore` building `Bitmap` indexes for fields `record_type`, `collection_type`, `download_state`, `enrichment_state`, `unfurl_state` and `BTree` indexes for `tweet_id`, `author_username`, `row_key` to eliminate full table scans.
+  - Implemented a sorted ID cache (`_sort_cache`) inside `ArchiveStore` with `get_sorted_tweet_ids()`, avoiding full loads to paginate.
+  - Pushed common advanced filters (e.g., `from:user`, `conversation_id`) directly to LanceDB `WHERE` clauses instead of loading and filtering in Python, completely resolving OOM-related 500 errors.
+  - Added `columns` parameter to `_rows_for_values` in `backend.py` to selectively fetch specific columns (e.g., `title`, `url`) rather than the full schema, speeding up hydration significantly.
+  - Batched Quote Tweet media query resolution in `server.py` to eliminate N+1 database queries on each API response.
+  - Reduced `search_fts()` query limit from 5000 to a more performant 1000 in `server.py` text search fallback paths.
+  - Graceful error handling in `server.py` `try/except` and a red error banner via Alpine.js on the frontend (`index.html`) when `res.ok` evaluates to false.
   - Fixed database connection overhead by implementing a persistent connection in FastAPI lifespan in `server.py`.
   - Fixed pagination performance by avoiding loading all database rows' `raw_json` into memory. Modified `backend.py` `export_rows` to support `offset` and defer `raw_json` hydration until after slicing.
   - Implemented fast-path pagination in `server.py` `api_tweets` to directly paginate and count without loading all rows.

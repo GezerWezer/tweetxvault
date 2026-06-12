@@ -182,113 +182,147 @@ def api_tweets(
 ):
     """Fetch tweets with pagination, collection filtering, and advanced search."""
     try:
-        internal_col = normalize_collection_name(collection)
-    except ValueError:
-        internal_col = "all"
+        try:
+            internal_col = normalize_collection_name(collection)
+        except ValueError:
+            internal_col = "all"
+            
+        filters, text_query = _extract_advanced_filters(q)
         
-    filters, text_query = _extract_advanced_filters(q)
-    
-    start = (page - 1) * limit
-    end = start + limit
+        start = (page - 1) * limit
+        end = start + limit
 
-    if not filters and not text_query:
-        # Fast path: No search, just pagination
-        total = store.count_export_rows(internal_col)
-        paginated_tweets = store.export_rows(internal_col, sort="newest", offset=start, limit=limit, include_raw_json=True)
-    elif not filters and text_query:
-        # Semi-fast path: Text search without advanced filters
-        coll_set = {internal_col} if internal_col != "all" else None
-        search_results = store.search_fts(text_query, limit=1000, collections=coll_set)
-        total = len(search_results)
-        
-        # Paginate first
-        paginated_results = search_results[start:end]
-        
-        # Hydrate media and URLs for the paginated slice
-        tweet_ids = [r["tweet_id"] for r in paginated_results if r.get("tweet_id")]
-        if tweet_ids:
-            media_rows = store._rows_for_values("media", "tweet_id", tweet_ids)
-            article_rows = store._rows_for_values("article", "tweet_id", tweet_ids)
-            url_ref_rows = store._rows_for_values("url_ref", "tweet_id", tweet_ids)
-            url_hashes = [r["url_hash"] for r in url_ref_rows if r.get("url_hash")]
-            url_rows = store._rows_for_values("url", "url_hash", url_hashes)
-    
-            media_by_tweet = {}
-            for row in sorted(media_rows, key=lambda item: (item.get("tweet_id") or "", item.get("position") if item.get("position") is not None else 1_000_000)):
-                media_by_tweet.setdefault(row["tweet_id"], []).append(store._serialize_media_row(row))
-    
-            articles_by_tweet = {row["tweet_id"]: store._serialize_article_row(row) for row in article_rows if row.get("tweet_id")}
-            urls_by_hash = {row["url_hash"]: store._serialize_url_row(row) for row in url_rows if row.get("url_hash")}
-            url_refs_by_tweet = {}
-            for row in sorted(url_ref_rows, key=lambda item: (item.get("tweet_id") or "", item.get("position") if item.get("position") is not None else 1_000_000)):
-                resolved = urls_by_hash.get(row.get("url_hash"))
-                url_refs_by_tweet.setdefault(row["tweet_id"], []).append({
-                    "position": row.get("position"),
-                    "url_hash": row.get("url_hash"),
-                    "short_url": row.get("url"),
-                    "expanded_url": row.get("expanded_url"),
-                    "display_url": row.get("display_url"),
-                    "canonical_url": row.get("canonical_url"),
-                    "resolved": resolved,
-                })
-    
-            for r in paginated_results:
-                tid = r["tweet_id"]
-                if tid in media_by_tweet:
-                    r["media"] = media_by_tweet[tid]
-                article = articles_by_tweet.get(tid)
-                if article is not None:
-                    article["media"] = [m for m in media_by_tweet.get(tid, []) if m.get("type") == "article_cover"]
-                    r["article"] = article
-                if tid in url_refs_by_tweet:
-                    r["urls"] = url_refs_by_tweet[tid]
-        
-        paginated_tweets = paginated_results
-    else:
-        # Slow path: Search and/or advanced filters
-        all_rows = store.export_rows(internal_col, sort="newest", include_raw_json=True)
-        
-        if text_query:
+        pushable_exprs = []
+        post_filters = {}
+        for k, v in filters.items():
+            base_k = k[1:] if k.startswith('-') else k
+            if not k.startswith('-') and base_k in {"from", "since", "until", "since_time", "until_time", "conversation_id", "since_id", "max_id"}:
+                if base_k == "from":
+                    vals = [val.replace("@", "") for val in v]
+                    joined = " OR ".join(f"LOWER(author_username) = '{val}'" for val in vals)
+                    pushable_exprs.append(f"({joined})")
+                elif base_k == "conversation_id":
+                    joined = " OR ".join(f"conversation_id = '{val}'" for val in v)
+                    pushable_exprs.append(f"({joined})")
+                elif base_k == "since_id":
+                    pushable_exprs.append(f"tweet_id > '{v[0]}'")
+                elif base_k == "max_id":
+                    pushable_exprs.append(f"tweet_id <= '{v[0]}'")
+                # since, until, etc could also be pushed but since they require parsing dates in lancedb vs python it's tricky, we'll let them fall through to post_filters for now
+                else:
+                    post_filters[k] = v
+            else:
+                post_filters[k] = v
+
+        paginated_tweets = []
+        total = 0
+
+        if not post_filters and not text_query and not pushable_exprs:
+            # Fast path
+            sorted_ids = store.get_sorted_tweet_ids(internal_col, sort="newest")
+            total = len(sorted_ids)
+            paginated_tweets = store.fetch_tweets_by_ids(sorted_ids[start:end])
+            
+        elif not post_filters and not text_query and pushable_exprs:
+            # Medium path: Pushable filters only
+            filter_expr = "record_type = 'tweet'"
+            if internal_col != "all":
+                filter_expr += f" AND collection_type = '{internal_col}'"
+            for expr in pushable_exprs:
+                filter_expr += f" AND {expr}"
+                
+            tweet_rows = store.table.search().where(filter_expr).select(["tweet_id", "created_at", "sort_index"]).to_list()
+            
+            def sort_index_val(row):
+                try: return int(row.get("sort_index") or 0)
+                except: return 0
+                
+            def newest_key(row):
+                try:
+                    dt = datetime.strptime(row.get("created_at") or "", "%a %b %d %H:%M:%S %z %Y")
+                    return (0, -dt.timestamp(), -sort_index_val(row), row.get("tweet_id") or "")
+                except: return (1, 0.0, -sort_index_val(row), row.get("tweet_id") or "")
+                    
+            tweet_rows.sort(key=newest_key)
+            total = len(tweet_rows)
+            page_ids = [r["tweet_id"] for r in tweet_rows[start:end] if r.get("tweet_id")]
+            paginated_tweets = store.fetch_tweets_by_ids(page_ids)
+            
+        elif not post_filters and text_query and not pushable_exprs:
+            # Semi-fast path
             coll_set = {internal_col} if internal_col != "all" else None
             search_results = store.search_fts(text_query, limit=1000, collections=coll_set)
-            matched_ids = {r["tweet_id"] for r in search_results}
-            all_rows = [r for r in all_rows if r["tweet_id"] in matched_ids]
-            order = {r["tweet_id"]: i for i, r in enumerate(search_results)}
-            all_rows.sort(key=lambda x: order.get(x["tweet_id"], 9999))
-    
-        filtered_rows = _apply_advanced_filters(all_rows, filters)
-        total = len(filtered_rows)
-        paginated_tweets = filtered_rows[start:end]
-    
-    # Attach local media paths to Quote Tweets for the paginated slice
-    for r in paginated_tweets:
-        raw = r.get("raw_json", {})
-        if isinstance(raw, dict):
-            quote = raw.get("quoted_status_result", {}).get("result")
-            if isinstance(quote, dict):
-                if quote.get("__typename") == "TweetWithVisibilityResults":
-                    quote = quote.get("tweet", {})
-                qt_id = quote.get("rest_id")
-                if qt_id:
-                    qt_media = store.table.search().where(f"record_type = 'media' AND tweet_id = '{qt_id}'").limit(10).to_list()
-                    if qt_media:
-                        r["qt_media"] = [
-                            {
-                                "type": m.get("media_type"),
-                                "duration_millis": m.get("duration_millis"),
-                                "download": {
-                                    "local_path": m.get("local_path"),
-                                    "thumbnail_local_path": m.get("thumbnail_local_path")
-                                }
-                            } for m in qt_media
-                        ]
-    
-    return {
-        "tweets": paginated_tweets,
-        "total": total,
-        "page": page,
-        "pages": math.ceil(total / limit) if total > 0 else 1
-    }
+            total = len(search_results)
+            page_results = search_results[start:end]
+            page_ids = [r["tweet_id"] for r in page_results if r.get("tweet_id")]
+            paginated_tweets = store.fetch_tweets_by_ids(page_ids)
+            
+        else:
+            # Slow path: post filters and/or combinations
+            all_rows = store.export_rows(internal_col, sort="newest", include_raw_json=True)
+            if text_query:
+                coll_set = {internal_col} if internal_col != "all" else None
+                search_results = store.search_fts(text_query, limit=1000, collections=coll_set)
+                matched_ids = {r["tweet_id"] for r in search_results}
+                all_rows = [r for r in all_rows if r["tweet_id"] in matched_ids]
+                order = {r["tweet_id"]: i for i, r in enumerate(search_results)}
+                all_rows.sort(key=lambda x: order.get(x["tweet_id"], 9999))
+                
+            filtered_rows = _apply_advanced_filters(all_rows, filters)
+            total = len(filtered_rows)
+            paginated_tweets = filtered_rows[start:end]
+
+        # Batch QT media query
+        qt_ids = set()
+        for r in paginated_tweets:
+            raw = r.get("raw_json", {})
+            if isinstance(raw, dict):
+                quote = raw.get("quoted_status_result", {}).get("result")
+                if isinstance(quote, dict):
+                    if quote.get("__typename") == "TweetWithVisibilityResults":
+                        quote = quote.get("tweet", {})
+                    qt_id = quote.get("rest_id")
+                    if qt_id:
+                        qt_ids.add(qt_id)
+                        
+        if qt_ids:
+            qt_media_rows = store._rows_for_values("media", "tweet_id", list(qt_ids))
+            qt_media_by_id = {}
+            for m in qt_media_rows:
+                tid = m.get("tweet_id")
+                if tid:
+                    qt_media_by_id.setdefault(tid, []).append(m)
+                    
+            for r in paginated_tweets:
+                raw = r.get("raw_json", {})
+                if isinstance(raw, dict):
+                    quote = raw.get("quoted_status_result", {}).get("result")
+                    if isinstance(quote, dict):
+                        if quote.get("__typename") == "TweetWithVisibilityResults":
+                            quote = quote.get("tweet", {})
+                        qt_id = quote.get("rest_id")
+                        if qt_id and qt_id in qt_media_by_id:
+                            r["qt_media"] = [
+                                {
+                                    "type": m.get("media_type"),
+                                    "duration_millis": m.get("duration_millis"),
+                                    "download": {
+                                        "local_path": m.get("local_path"),
+                                        "thumbnail_local_path": m.get("thumbnail_local_path")
+                                    }
+                                } for m in qt_media_by_id[qt_id][:10]
+                            ]
+
+        return {
+            "tweets": paginated_tweets,
+            "total": total,
+            "page": page,
+            "pages": math.ceil(total / limit) if total > 0 else 1
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/avatar/{user_id}")
 def get_avatar(user_id: str, store = Depends(get_store), _auth: bool = Depends(verify_credentials)):
@@ -333,158 +367,186 @@ def api_tweet_thread(
     store = Depends(get_store), 
     _auth: bool = Depends(verify_credentials)
 ):
-    # 1. Fetch direct relationships touching the focal tweet
-    relations = store.table.search().where(
-        f"record_type = 'tweet_relation' AND (tweet_id = '{tweet_id}' OR target_tweet_id = '{tweet_id}')"
-    ).limit(100).to_list()
-    
-    related_ids = {tweet_id}
-    for r in relations:
-        related_ids.add(r["tweet_id"])
-        related_ids.add(r["target_tweet_id"])
-        
-    # Extract child candidates from initial relations to find potential sub-threads
-    child_candidates = set()
-    for r in relations:
-        if r.get("relation_type") in ("reply_to", "thread_parent") and r.get("target_tweet_id") == tweet_id:
-            child_candidates.add(r.get("tweet_id"))
-        elif r.get("relation_type") == "thread_child" and r.get("tweet_id") == tweet_id:
-            child_candidates.add(r.get("target_tweet_id"))
-            
-    # 2. Fetch sub-relationships to capture replies to our children
-    sub_relations = []
-    if child_candidates:
-        child_id_list = ", ".join(f"'{cid}'" for cid in child_candidates if cid)
-        sub_relations = store.table.search().where(
-            f"record_type = 'tweet_relation' AND target_tweet_id IN ({child_id_list})"
+    try:
+        # 1. Fetch direct relationships touching the focal tweet
+        relations = store.table.search().where(
+            f"record_type = 'tweet_relation' AND (tweet_id = '{tweet_id}' OR target_tweet_id = '{tweet_id}')"
         ).limit(100).to_list()
-        for sr in sub_relations:
-            related_ids.add(sr["tweet_id"])
-            related_ids.add(sr["target_tweet_id"])
+        
+        related_ids = {tweet_id}
+        for r in relations:
+            related_ids.add(r["tweet_id"])
+            related_ids.add(r["target_tweet_id"])
             
-    all_relations = relations + sub_relations
-    
-    id_list = ", ".join(f"'{tid}'" for tid in related_ids)
-    objs = store.table.search().where(f"record_type = 'tweet_object' AND tweet_id IN ({id_list})").limit(100).to_list()
-    media = store.table.search().where(f"record_type = 'media' AND tweet_id IN ({id_list})").limit(100).to_list()
-    col_rows = store.table.search().where(f"record_type = 'tweet' AND tweet_id IN ({id_list})").limit(100).to_list()
-    
-    col_dict = {}
-    for c in col_rows:
-        col_dict.setdefault(c["tweet_id"], []).append(c["collection_type"])
-    
-    formatted = {}
-    for obj in objs:
-        tid = obj["tweet_id"]
-        t_media = [m for m in media if m.get("tweet_id") == tid]
-        raw_json = json.loads(obj["raw_json"]) if obj.get("raw_json") else None
+        # Extract child candidates from initial relations to find potential sub-threads
+        child_candidates = set()
+        for r in relations:
+            if r.get("relation_type") in ("reply_to", "thread_parent") and r.get("target_tweet_id") == tweet_id:
+                child_candidates.add(r.get("tweet_id"))
+            elif r.get("relation_type") == "thread_child" and r.get("tweet_id") == tweet_id:
+                child_candidates.add(r.get("target_tweet_id"))
+                
+        # 2. Fetch sub-relationships to capture replies to our children
+        sub_relations = []
+        if child_candidates:
+            child_id_list = ", ".join(f"'{cid}'" for cid in child_candidates if cid)
+            sub_relations = store.table.search().where(
+                f"record_type = 'tweet_relation' AND target_tweet_id IN ({child_id_list})"
+            ).limit(100).to_list()
+            for sr in sub_relations:
+                related_ids.add(sr["tweet_id"])
+                related_ids.add(sr["target_tweet_id"])
+                
+        all_relations = relations + sub_relations
         
-        qt_media_formatted = []
-        if raw_json and isinstance(raw_json, dict):
-            quote = raw_json.get("quoted_status_result", {}).get("result")
-            if isinstance(quote, dict):
-                if quote.get("__typename") == "TweetWithVisibilityResults":
-                    quote = quote.get("tweet", {})
-                qt_id = quote.get("rest_id")
-                if qt_id:
-                    qt_media = store.table.search().where(f"record_type = 'media' AND tweet_id = '{qt_id}'").limit(10).to_list()
-                    qt_media_formatted = [
-                        {
-                            "type": m.get("media_type"),
-                            "duration_millis": m.get("duration_millis"),
-                            "download": {
-                                "local_path": m.get("local_path"),
-                                "thumbnail_local_path": m.get("thumbnail_local_path")
-                            }
-                        } for m in qt_media
-                    ]
+        id_list = ", ".join(f"'{tid}'" for tid in related_ids)
+        objs = store.table.search().where(f"record_type = 'tweet_object' AND tweet_id IN ({id_list})").limit(100).to_list()
+        media = store.table.search().where(f"record_type = 'media' AND tweet_id IN ({id_list})").limit(100).to_list()
+        col_rows = store.table.search().where(f"record_type = 'tweet' AND tweet_id IN ({id_list})").limit(100).to_list()
+        
+        col_dict = {}
+        for c in col_rows:
+            col_dict.setdefault(c["tweet_id"], []).append(c["collection_type"])
 
-        formatted[tid] = {
-            "tweet_id": tid,
-            "text": obj.get("text", ""),
-            "collections": col_dict.get(tid, []),
-            "author": {
-                "id": obj.get("author_id"),
-                "username": obj.get("author_username"),
-                "display_name": obj.get("author_display_name")
-            },
-            "created_at": obj.get("created_at"),
-            "synced_at": obj.get("synced_at"),
-            "media": [
-                {
-                    "type": m.get("media_type"),
-                    "duration_millis": m.get("duration_millis"),
-                    "download": {
-                        "local_path": m.get("local_path"),
-                        "thumbnail_local_path": m.get("thumbnail_local_path")
-                    }
-                } for m in t_media
-            ],
-            "raw_json": raw_json,
-            "qt_media": qt_media_formatted
+        # Batch QT Media lookup
+        qt_ids = set()
+        for obj in objs:
+            if obj.get("raw_json"):
+                raw_json = json.loads(obj["raw_json"])
+                if isinstance(raw_json, dict):
+                    quote = raw_json.get("quoted_status_result", {}).get("result")
+                    if isinstance(quote, dict):
+                        if quote.get("__typename") == "TweetWithVisibilityResults":
+                            quote = quote.get("tweet", {})
+                        qt_id = quote.get("rest_id")
+                        if qt_id:
+                            qt_ids.add(qt_id)
+                            
+        qt_media_by_id = {}
+        if qt_ids:
+            qt_media_rows = store._rows_for_values("media", "tweet_id", list(qt_ids))
+            for m in qt_media_rows:
+                tid = m.get("tweet_id")
+                if tid:
+                    qt_media_by_id.setdefault(tid, []).append(m)
+        
+        formatted = {}
+        for obj in objs:
+            tid = obj["tweet_id"]
+            t_media = [m for m in media if m.get("tweet_id") == tid]
+            raw_json = json.loads(obj["raw_json"]) if obj.get("raw_json") else None
+            
+            qt_media_formatted = []
+            if raw_json and isinstance(raw_json, dict):
+                quote = raw_json.get("quoted_status_result", {}).get("result")
+                if isinstance(quote, dict):
+                    if quote.get("__typename") == "TweetWithVisibilityResults":
+                        quote = quote.get("tweet", {})
+                    qt_id = quote.get("rest_id")
+                    if qt_id and qt_id in qt_media_by_id:
+                        qt_media_formatted = [
+                            {
+                                "type": m.get("media_type"),
+                                "duration_millis": m.get("duration_millis"),
+                                "download": {
+                                    "local_path": m.get("local_path"),
+                                    "thumbnail_local_path": m.get("thumbnail_local_path")
+                                }
+                            } for m in qt_media_by_id[qt_id][:10]
+                        ]
+
+            formatted[tid] = {
+                "tweet_id": tid,
+                "text": obj.get("text", ""),
+                "collections": col_dict.get(tid, []),
+                "author": {
+                    "id": obj.get("author_id"),
+                    "username": obj.get("author_username"),
+                    "display_name": obj.get("author_display_name")
+                },
+                "created_at": obj.get("created_at"),
+                "synced_at": obj.get("synced_at"),
+                "media": [
+                    {
+                        "type": m.get("media_type"),
+                        "duration_millis": m.get("duration_millis"),
+                        "download": {
+                            "local_path": m.get("local_path"),
+                            "thumbnail_local_path": m.get("thumbnail_local_path")
+                        }
+                    } for m in t_media
+                ],
+                "raw_json": raw_json,
+                "qt_media": qt_media_formatted
+            }
+            
+        main_tweet = formatted.get(tweet_id)
+        if not main_tweet:
+            raise HTTPException(status_code=404, detail="Tweet not found")
+            
+        parents, children_map = [], {}
+        seen_parents = set()
+        
+        # Resolve Parents and Direct Children
+        for r in all_relations:
+            rel_type = r.get("relation_type")
+            src = r.get("tweet_id")
+            tgt = r.get("target_tweet_id")
+            
+            if src == tweet_id and rel_type in ("reply_to", "thread_parent"):
+                if tgt in formatted and tgt not in seen_parents:
+                    parents.append(formatted[tgt])
+                    seen_parents.add(tgt)
+            elif tgt == tweet_id and rel_type == "thread_child":
+                if src in formatted and src not in seen_parents:
+                    parents.append(formatted[src])
+                    seen_parents.add(src)
+                    
+            elif tgt == tweet_id and rel_type in ("reply_to", "thread_parent"):
+                if src in formatted and src not in children_map:
+                    children_map[src] = formatted[src]
+                    children_map[src]["op_replies"] = []
+            elif src == tweet_id and rel_type == "thread_child":
+                if tgt in formatted and tgt not in children_map:
+                    children_map[tgt] = formatted[tgt]
+                    children_map[tgt]["op_replies"] = []
+
+        # Map sub-replies authored by the original Thread OP (Main Author) to their parent reply
+        main_author_id = main_tweet["author"]["id"]
+        for r in all_relations:
+            rel_type = r.get("relation_type")
+            src = r.get("tweet_id")
+            tgt = r.get("target_tweet_id")
+            
+            if tgt in children_map and rel_type in ("reply_to", "thread_parent"):
+                grandchild = formatted.get(src)
+                if grandchild and grandchild["author"]["id"] == main_author_id:
+                    if grandchild not in children_map[tgt]["op_replies"]:
+                        children_map[tgt]["op_replies"].append(grandchild)
+                    
+        parents.sort(key=lambda x: x["created_at"] or "")
+        
+        # Convert children map to list
+        children = list(children_map.values())
+        
+        def get_likes(t):
+            raw = t.get("raw_json", {}) or {}
+            return int(raw.get("legacy", {}).get("favorite_count", 0))
+            
+        # Sort children: Threads containing OP replies first, then fallback to descending Likes
+        children.sort(key=lambda x: (len(x.get("op_replies", [])) > 0, get_likes(x)), reverse=True)
+        
+        return {
+            "main": main_tweet,
+            "parents": parents,
+            "children": children
         }
-        
-    main_tweet = formatted.get(tweet_id)
-    if not main_tweet:
-        raise HTTPException(status_code=404, detail="Tweet not found")
-        
-    parents, children_map = [], {}
-    seen_parents = set()
-    
-    # Resolve Parents and Direct Children
-    for r in all_relations:
-        rel_type = r.get("relation_type")
-        src = r.get("tweet_id")
-        tgt = r.get("target_tweet_id")
-        
-        if src == tweet_id and rel_type in ("reply_to", "thread_parent"):
-            if tgt in formatted and tgt not in seen_parents:
-                parents.append(formatted[tgt])
-                seen_parents.add(tgt)
-        elif tgt == tweet_id and rel_type == "thread_child":
-            if src in formatted and src not in seen_parents:
-                parents.append(formatted[src])
-                seen_parents.add(src)
-                
-        elif tgt == tweet_id and rel_type in ("reply_to", "thread_parent"):
-            if src in formatted and src not in children_map:
-                children_map[src] = formatted[src]
-                children_map[src]["op_replies"] = []
-        elif src == tweet_id and rel_type == "thread_child":
-            if tgt in formatted and tgt not in children_map:
-                children_map[tgt] = formatted[tgt]
-                children_map[tgt]["op_replies"] = []
-
-    # Map sub-replies authored by the original Thread OP (Main Author) to their parent reply
-    main_author_id = main_tweet["author"]["id"]
-    for r in all_relations:
-        rel_type = r.get("relation_type")
-        src = r.get("tweet_id")
-        tgt = r.get("target_tweet_id")
-        
-        if tgt in children_map and rel_type in ("reply_to", "thread_parent"):
-            grandchild = formatted.get(src)
-            if grandchild and grandchild["author"]["id"] == main_author_id:
-                if grandchild not in children_map[tgt]["op_replies"]:
-                    children_map[tgt]["op_replies"].append(grandchild)
-                
-    parents.sort(key=lambda x: x["created_at"] or "")
-    
-    # Convert children map to list
-    children = list(children_map.values())
-    
-    def get_likes(t):
-        raw = t.get("raw_json", {}) or {}
-        return int(raw.get("legacy", {}).get("favorite_count", 0))
-        
-    # Sort children: Threads containing OP replies first, then fallback to descending Likes
-    children.sort(key=lambda x: (len(x.get("op_replies", [])) > 0, get_likes(x)), reverse=True)
-    
-    return {
-        "main": main_tweet,
-        "parents": parents,
-        "children": children
-    }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/stats")
 def api_stats(

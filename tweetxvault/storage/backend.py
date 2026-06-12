@@ -261,6 +261,8 @@ class ArchiveStore:
         else:
             raise FileNotFoundError(f"LanceDB archive table not found at {db_path}")
 
+        self._sort_cache: dict[str, list[str]] = {}
+
     def _migrate_schema(self) -> None:
         if self.table.schema.equals(ARCHIVE_SCHEMA):
             return
@@ -304,6 +306,7 @@ class ArchiveStore:
     def _merge_records(self, records: list[dict[str, Any]]) -> None:
         if not records:
             return
+        self.invalidate_sort_cache()
         payload = pa.Table.from_pylist(records, schema=ARCHIVE_SCHEMA)
         (
             self.table.merge_insert("row_key")
@@ -358,6 +361,8 @@ class ArchiveStore:
         record_type: str,
         field_name: str,
         values: set[str] | list[str] | tuple[str, ...],
+        *,
+        columns: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         unique_values = [value for value in dict.fromkeys(values) if value]
         if not unique_values:
@@ -368,8 +373,12 @@ class ArchiveStore:
             chunk = unique_values[start : start + chunk_size]
             joined = " OR ".join(f"{field_name} = {_expr_quote(value)}" for value in chunk)
             expr = f"record_type = {_expr_quote(record_type)} AND ({joined})"
-            rows.extend(self.table.search().where(expr).to_list())
+            query = self.table.search().where(expr)
+            if columns is not None:
+                query = query.select(columns)
+            rows.extend(query.to_list())
         return rows
+
 
     def _lookup_row(
         self, row_key: str, *, cursor: _PageBuffer | None = None
@@ -749,6 +758,7 @@ class ArchiveStore:
         self._queue_record(record, cursor=cursor)
 
     def reset_sync_state(self, collection_type: str, folder_id: str | None = None) -> None:
+        self.invalidate_sort_cache()
         row_key = self._row_key_for_sync_state(collection_type, folder_id)
         self.table.delete(f"row_key = {_expr_quote(row_key)}")
 
@@ -1837,37 +1847,20 @@ class ArchiveStore:
             filter_expr += f" AND collection_type = {_expr_quote(collection)}"
         return self.table.count_rows(filter_expr)
 
-    def export_rows(
-        self,
-        collection: str,
-        *,
-        sort: str = "newest",
-        offset: int = 0,
-        limit: int | None = None,
-        include_raw_json: bool = True,
-    ) -> list[dict[str, Any]]:
+    def invalidate_sort_cache(self) -> None:
+        self._sort_cache.clear()
+
+    def get_sorted_tweet_ids(self, collection: str, sort: str = "newest") -> list[str]:
+        cache_key = f"{collection}:{sort}"
+        if cache_key in self._sort_cache:
+            return self._sort_cache[cache_key]
+
         filter_expr = "record_type = 'tweet'"
         if collection != "all":
             filter_expr += f" AND collection_type = {_expr_quote(collection)}"
-        tweet_columns = [
-            "tweet_id",
-            "text",
-            "author_id",
-            "author_username",
-            "author_display_name",
-            "created_at",
-            "collection_type",
-            "folder_id",
-            "sort_index",
-            "added_at",
-            "synced_at",
-        ]
-        
-        defer_raw_json = include_raw_json and limit is not None
-        if include_raw_json and not defer_raw_json:
-            tweet_columns.append("raw_json")
             
-        tweet_rows = self.table.search().where(filter_expr).select(tweet_columns).to_list()
+        columns = ["tweet_id", "created_at", "sort_index"]
+        tweet_rows = self.table.search().where(filter_expr).select(columns).to_list()
 
         def sort_index_value(row: dict[str, Any]) -> int:
             raw = row.get("sort_index")
@@ -1895,27 +1888,38 @@ class ArchiveStore:
                 )
             return (1, 0.0, -sort_index_value(row), row.get("tweet_id") or "")
 
-        sort_key = oldest_sort_key if sort == "oldest" else newest_sort_key
-        sorted_rows = sorted(tweet_rows, key=sort_key)
-        if offset > 0:
-            sorted_rows = sorted_rows[offset:]
-        if limit is not None:
-            sorted_rows = sorted_rows[:limit]
+        sort_key_fn = oldest_sort_key if sort == "oldest" else newest_sort_key
+        sorted_rows = sorted(tweet_rows, key=sort_key_fn)
+        
+        sorted_ids = [row["tweet_id"] for row in sorted_rows if row.get("tweet_id")]
+        self._sort_cache[cache_key] = sorted_ids
+        return sorted_ids
 
+    def _hydrate_exported_rows(
+        self,
+        sorted_rows: list[dict[str, Any]],
+        include_raw_json: bool,
+        defer_raw_json: bool,
+    ) -> list[dict[str, Any]]:
         tweet_ids = [row["tweet_id"] for row in sorted_rows if row.get("tweet_id")]
         
         if defer_raw_json and tweet_ids:
-            raw_rows = self._rows_for_values("tweet", "tweet_id", tweet_ids)
+            raw_rows = self._rows_for_values("tweet", "tweet_id", tweet_ids, columns=["tweet_id", "raw_json"])
             raw_map = {r.get("tweet_id"): r.get("raw_json") for r in raw_rows}
             for row in sorted_rows:
                 if row.get("tweet_id") in raw_map:
                     row["raw_json"] = raw_map[row["tweet_id"]]
 
-        media_rows = self._rows_for_values("media", "tweet_id", tweet_ids)
-        article_rows = self._rows_for_values("article", "tweet_id", tweet_ids)
-        url_ref_rows = self._rows_for_values("url_ref", "tweet_id", tweet_ids)
+        media_cols = ["tweet_id", "media_key", "media_type", "source", "article_id", "position", "media_url", "thumbnail_url", "width", "height", "duration_millis", "variants_json", "download_state", "local_path", "sha256", "byte_size", "content_type", "thumbnail_local_path", "thumbnail_sha256", "thumbnail_byte_size", "thumbnail_content_type", "downloaded_at", "download_error"]
+        article_cols = ["tweet_id", "article_id", "title", "summary_text", "content_text", "canonical_url", "published_at", "status"]
+        url_ref_cols = ["tweet_id", "url_hash", "url", "expanded_url", "display_url", "canonical_url", "position"]
+        url_cols = ["url_hash", "canonical_url", "expanded_url", "final_url", "url_host", "title", "description", "site_name", "content_type", "http_status", "unfurl_state", "last_fetched_at", "download_error"]
+
+        media_rows = self._rows_for_values("media", "tweet_id", tweet_ids, columns=media_cols)
+        article_rows = self._rows_for_values("article", "tweet_id", tweet_ids, columns=article_cols)
+        url_ref_rows = self._rows_for_values("url_ref", "tweet_id", tweet_ids, columns=url_ref_cols)
         url_hashes = [row["url_hash"] for row in url_ref_rows if row.get("url_hash")]
-        url_rows = self._rows_for_values("url", "url_hash", url_hashes)
+        url_rows = self._rows_for_values("url", "url_hash", url_hashes, columns=url_cols)
 
         media_by_tweet: dict[str, list[dict[str, Any]]] = {}
         for row in sorted(
@@ -1987,10 +1991,94 @@ class ArchiveStore:
                     "media": tweet_media,
                     "urls": url_refs_by_tweet.get(row["tweet_id"], []),
                     "article": article,
-                    "raw_json": json.loads(row["raw_json"]) if include_raw_json else None,
+                    "raw_json": json.loads(row["raw_json"]) if include_raw_json and row.get("raw_json") else None,
                 }
             )
         return exported
+
+    def fetch_tweets_by_ids(self, tweet_ids: list[str]) -> list[dict[str, Any]]:
+        if not tweet_ids:
+            return []
+            
+        tweet_columns = [
+            "tweet_id", "text", "author_id", "author_username", "author_display_name", 
+            "created_at", "collection_type", "folder_id", "sort_index", "added_at", "synced_at", "raw_json"
+        ]
+        
+        rows = self._rows_for_values("tweet", "tweet_id", tweet_ids, columns=tweet_columns)
+        
+        id_order = {tid: i for i, tid in enumerate(tweet_ids)}
+        rows.sort(key=lambda x: id_order.get(x.get("tweet_id"), 999999))
+        
+        return self._hydrate_exported_rows(rows, include_raw_json=True, defer_raw_json=False)
+
+    def export_rows(
+        self,
+
+        collection: str,
+        *,
+        sort: str = "newest",
+        offset: int = 0,
+        limit: int | None = None,
+        include_raw_json: bool = True,
+    ) -> list[dict[str, Any]]:
+        filter_expr = "record_type = 'tweet'"
+        if collection != "all":
+            filter_expr += f" AND collection_type = {_expr_quote(collection)}"
+        tweet_columns = [
+            "tweet_id",
+            "text",
+            "author_id",
+            "author_username",
+            "author_display_name",
+            "created_at",
+            "collection_type",
+            "folder_id",
+            "sort_index",
+            "added_at",
+            "synced_at",
+        ]
+        
+        defer_raw_json = include_raw_json and limit is not None
+        if include_raw_json and not defer_raw_json:
+            tweet_columns.append("raw_json")
+            
+        tweet_rows = self.table.search().where(filter_expr).select(tweet_columns).to_list()
+
+        def sort_index_value(row: dict[str, Any]) -> int:
+            raw = row.get("sort_index")
+            if not raw:
+                return 0
+            try:
+                return int(raw)
+            except (TypeError, ValueError):
+                return 0
+
+        def oldest_sort_key(row: dict[str, Any]) -> tuple[Any, ...]:
+            created_at = _parse_created_at(row.get("created_at"))
+            if created_at is not None:
+                return (0, created_at, sort_index_value(row), row.get("tweet_id") or "")
+            return (1, datetime.max, sort_index_value(row), row.get("tweet_id") or "")
+
+        def newest_sort_key(row: dict[str, Any]) -> tuple[Any, ...]:
+            created_at = _parse_created_at(row.get("created_at"))
+            if created_at is not None:
+                return (
+                    0,
+                    -created_at.timestamp(),
+                    -sort_index_value(row),
+                    row.get("tweet_id") or "",
+                )
+            return (1, 0.0, -sort_index_value(row), row.get("tweet_id") or "")
+
+        sort_key = oldest_sort_key if sort == "oldest" else newest_sort_key
+        sorted_rows = sorted(tweet_rows, key=sort_key)
+        if offset > 0:
+            sorted_rows = sorted_rows[offset:]
+        if limit is not None:
+            sorted_rows = sorted_rows[:limit]
+
+        return self._hydrate_exported_rows(sorted_rows, include_raw_json, defer_raw_json)
 
     def counts(self) -> dict[str, int]:
         tweet_rows = self.table.count_rows("record_type = 'tweet'")
@@ -2390,6 +2478,21 @@ class ArchiveStore:
         new_table = arrow_table.set_column(embedding_col_idx, "embedding", null_embeddings)
         self.table = self.db.create_table(self.TABLE_NAME, new_table, mode="overwrite")
 
+    def ensure_scalar_indexes(self) -> None:
+        """Create scalar indexes for common query patterns if missing."""
+        from lancedb.index import BTree, Bitmap
+        existing = {idx.columns[0] for idx in self.table.list_indices() if idx.columns}
+        
+        bitmap_cols = ["record_type", "collection_type", "download_state", "enrichment_state", "unfurl_state"]
+        btree_cols = ["tweet_id", "author_username", "row_key"]
+        
+        for col in bitmap_cols:
+            if col not in existing:
+                self.table.create_index(column=col, config=Bitmap())
+        for col in btree_cols:
+            if col not in existing:
+                self.table.create_index(column=col, config=BTree())
+
     def ensure_fts_index(self) -> None:
         """Create the tweet-text FTS index if it doesn't exist."""
         indices = self.table.list_indices()
@@ -2756,7 +2859,10 @@ class ArchiveStore:
         return len(self.table.list_versions())
 
     def optimize(self) -> None:
+        self.ensure_scalar_indexes()
+        self.ensure_fts_index()
         self.table.optimize(cleanup_older_than=timedelta(seconds=0))
+
 
 
 def open_archive_store(paths: XDGPaths, *, create: bool) -> ArchiveStore | None:

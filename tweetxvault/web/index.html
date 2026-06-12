@@ -130,8 +130,16 @@
                 </div>
             </div>
 
-            <template x-if="loading && tweets.length === 0"><div class="p-8 text-center text-gray-500">Loading...</div></template>
-            <template x-if="!loading && tweets.length === 0"><div class="p-8 text-center text-gray-500">No posts found in this collection.</div></template>
+            <template x-if="error">
+                <div class="p-4 mx-4 my-2 bg-red-900/50 border border-red-500 rounded-lg text-red-200">
+                    <div class="font-bold mb-1">Error Loading Tweets</div>
+                    <div x-text="error"></div>
+                    <button @click="error = null; fetchTweets()" class="mt-2 text-sm text-red-300 hover:text-red-100 underline">Try Again</button>
+                </div>
+            </template>
+
+            <template x-if="loading && tweets.length === 0 && !error"><div class="p-8 text-center text-gray-500">Loading...</div></template>
+            <template x-if="!loading && tweets.length === 0 && !error"><div class="p-8 text-center text-gray-500">No posts found in this collection.</div></template>
 
             <!-- TWEET LOOP -->
             <template x-for="tweet in tweets" :key="tweet.tweet_id">
@@ -469,6 +477,7 @@
                 totalPages: 1,
                 searchQuery: '',
                 collectionFilter: 'all',
+                error: null,
                 
                 threadData: null,
                 loadingThread: false,
@@ -573,8 +582,20 @@
                     }
 
                     try {
+                        this.error = null;
                         const res = await fetch(url);
-                        const data = await res.json();
+                        
+                        let data;
+                        try {
+                            data = await res.json();
+                        } catch (parseError) {
+                            throw new Error(`Invalid server response (${res.status}): Please check server logs.`);
+                        }
+                        
+                        if (!res.ok) {
+                            throw new Error(data.detail || `Server error: ${res.status}`);
+                        }
+                        
                         if (append) {
                             this.tweets = [...this.tweets, ...data.tweets];
                         } else {
@@ -584,6 +605,7 @@
                         this.totalPages = data.pages;
                     } catch (e) {
                         console.error(e);
+                        this.error = e.message;
                     } finally {
                         this.loading = false;
                         this.loadingMore = false;
