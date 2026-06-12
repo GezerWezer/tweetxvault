@@ -524,10 +524,10 @@ def test_export_rows_limit_only_fetches_secondary_rows_for_selected_tweets(
     seen: list[tuple[str, tuple[str, ...]]] = []
     original = store._rows_for_values
 
-    def wrapped(record_type: str, field_name: str, values):
+    def wrapped(record_type: str, field_name: str, values, *, columns=None):
         if field_name == "tweet_id":
             seen.append((record_type, tuple(values)))
-        return original(record_type, field_name, values)
+        return original(record_type, field_name, values, columns=columns)
 
     monkeypatch.setattr(store, "_rows_for_values", wrapped)
 
