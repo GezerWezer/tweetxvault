@@ -2873,11 +2873,14 @@ class ArchiveStore:
         try:
             for idx in self.table.list_indices():
                 try:
-                    itype = getattr(idx, "index_type", None)
-                    if itype is not None and str(itype).upper() == "BITMAP":
-                        name = getattr(idx, "name", None)
-                        if name:
-                            self.table.drop_index(name)
+                    cols = getattr(idx, "columns", [])
+                    # Never drop the FTS index, which is built on SEARCH_TEXT_FIELD
+                    if not cols or SEARCH_TEXT_FIELD in cols:
+                        continue
+                        
+                    name = getattr(idx, "name", None)
+                    if name:
+                        self.table.drop_index(name)
                 except Exception:
                     continue
         except Exception:
