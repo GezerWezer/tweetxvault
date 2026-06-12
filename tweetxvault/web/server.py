@@ -15,14 +15,24 @@ from fastapi.responses import HTMLResponse, FileResponse, Response
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 
+from contextlib import asynccontextmanager
+
 from tweetxvault.config import AppConfig, XDGPaths
 from tweetxvault.storage import open_archive_store
 from tweetxvault.export.common import normalize_collection_name
 
-security = HTTPBasic()
-app = FastAPI(title="tweetxvault Web UI")
-
 server_state: dict[str, Any] = {}
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    if "paths" in server_state:
+        server_state["store"] = open_archive_store(server_state["paths"], create=False)
+    yield
+    if "store" in server_state and server_state["store"]:
+        server_state["store"].close()
+
+security = HTTPBasic()
+app = FastAPI(title="tweetxvault Web UI", lifespan=lifespan)
 
 def verify_credentials(credentials: HTTPBasicCredentials = Depends(security)) -> bool:
     expected_hash = server_state.get("password_hash")
@@ -41,13 +51,7 @@ def verify_credentials(credentials: HTTPBasicCredentials = Depends(security)) ->
     return True
 
 def get_store():
-    paths: XDGPaths = server_state["paths"]
-    store = open_archive_store(paths, create=False)
-    try:
-        yield store
-    finally:
-        if store:
-            store.close()
+    return server_state["store"]
 
 def _strip_quotes(s: str) -> str:
     if s.startswith('"') and s.endswith('"'): return s[1:-1]
