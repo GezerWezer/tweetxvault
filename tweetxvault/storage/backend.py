@@ -2495,11 +2495,8 @@ class ArchiveStore:
         indexed_cols = ["record_type", "collection_type", "download_state", "enrichment_state", "unfurl_state", "tweet_id", "author_username", "row_key"]
         
         for col in indexed_cols:
-            idx_type = existing.get(col)
-            if idx_type is None:
+            if col not in existing:
                 self.table.create_scalar_index(col, index_type="BTREE")
-            elif idx_type == "Bitmap":
-                self.table.create_scalar_index(col, index_type="BTREE", replace=True)
 
     def ensure_fts_index(self) -> None:
         """Create the tweet-text FTS index if it doesn't exist."""
@@ -2867,9 +2864,20 @@ class ArchiveStore:
         return len(self.table.list_versions())
 
     def optimize(self) -> None:
-        self.ensure_scalar_indexes()
+        self._drop_broken_indices()
         self.ensure_fts_index()
         self.table.optimize(cleanup_older_than=timedelta(seconds=0))
+        self.ensure_scalar_indexes()
+
+    def _drop_broken_indices(self) -> None:
+        try:
+            indices = self.table.list_indices()
+            for idx in indices:
+                if getattr(idx, "index_type", "").upper() == "BITMAP":
+                    if hasattr(idx, "name") and idx.name:
+                        self.table.drop_index(idx.name)
+        except Exception:
+            pass
 
 
 
