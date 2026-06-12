@@ -1842,6 +1842,7 @@ class ArchiveStore:
         collection: str,
         *,
         sort: str = "newest",
+        offset: int = 0,
         limit: int | None = None,
         include_raw_json: bool = True,
     ) -> list[dict[str, Any]]:
@@ -1861,8 +1862,11 @@ class ArchiveStore:
             "added_at",
             "synced_at",
         ]
-        if include_raw_json:
+        
+        defer_raw_json = include_raw_json and limit is not None
+        if include_raw_json and not defer_raw_json:
             tweet_columns.append("raw_json")
+            
         tweet_rows = self.table.search().where(filter_expr).select(tweet_columns).to_list()
 
         def sort_index_value(row: dict[str, Any]) -> int:
@@ -1893,10 +1897,20 @@ class ArchiveStore:
 
         sort_key = oldest_sort_key if sort == "oldest" else newest_sort_key
         sorted_rows = sorted(tweet_rows, key=sort_key)
+        if offset > 0:
+            sorted_rows = sorted_rows[offset:]
         if limit is not None:
             sorted_rows = sorted_rows[:limit]
 
         tweet_ids = [row["tweet_id"] for row in sorted_rows if row.get("tweet_id")]
+        
+        if defer_raw_json and tweet_ids:
+            raw_rows = self._rows_for_values("tweet", "tweet_id", tweet_ids)
+            raw_map = {r.get("tweet_id"): r.get("raw_json") for r in raw_rows}
+            for row in sorted_rows:
+                if row.get("tweet_id") in raw_map:
+                    row["raw_json"] = raw_map[row["tweet_id"]]
+
         media_rows = self._rows_for_values("media", "tweet_id", tweet_ids)
         article_rows = self._rows_for_values("article", "tweet_id", tweet_ids)
         url_ref_rows = self._rows_for_values("url_ref", "tweet_id", tweet_ids)

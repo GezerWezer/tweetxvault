@@ -1,5 +1,12 @@
 # WORKLOG
 
+## 2026-06-12
+
+- Optimized Web UI performance for large databases (e.g. 10GB archives):
+  - Fixed database connection overhead by implementing a persistent connection in FastAPI lifespan in `server.py`.
+  - Fixed pagination performance by avoiding loading all database rows' `raw_json` into memory. Modified `backend.py` `export_rows` to support `offset` and defer `raw_json` hydration until after slicing.
+  - Implemented fast-path pagination in `server.py` `api_tweets` to directly paginate and count without loading all rows.
+
 ## 2026-06-10
 
 - Implemented the Interactive Web UI feature (`tweetxvault[web]` extra):

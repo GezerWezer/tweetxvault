@@ -300,8 +300,17 @@ Path=second.dev-edition-default
 def test_list_chromium_profiles_reads_local_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    import os
+    import sys
     monkeypatch.setenv("HOME", str(tmp_path))
-    root = tmp_path / ".config" / "google-chrome"
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    if os.name == "nt":
+        root = tmp_path / "Google" / "Chrome" / "User Data"
+    elif sys.platform == "darwin":
+        root = tmp_path / "Library" / "Application Support" / "Google" / "Chrome"
+    else:
+        root = tmp_path / ".config" / "google-chrome"
     _make_chromium_profile(root, "Default")
     _make_chromium_profile(root, "Profile 2")
     (root / "Local State").write_text(

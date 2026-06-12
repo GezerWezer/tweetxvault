@@ -186,26 +186,79 @@ def api_tweets(
     except ValueError:
         internal_col = "all"
         
-    all_rows = store.export_rows(internal_col, sort="newest", include_raw_json=True)
-    
     filters, text_query = _extract_advanced_filters(q)
     
-    if text_query:
-        coll_set = {internal_col} if internal_col != "all" else None
-        search_results = store.search_fts(text_query, limit=1000, collections=coll_set)
-        matched_ids = {r["tweet_id"] for r in search_results}
-        all_rows = [r for r in all_rows if r["tweet_id"] in matched_ids]
-        order = {r["tweet_id"]: i for i, r in enumerate(search_results)}
-        all_rows.sort(key=lambda x: order.get(x["tweet_id"], 9999))
-
-    filtered_rows = _apply_advanced_filters(all_rows, filters)
-
-    total = len(filtered_rows)
     start = (page - 1) * limit
     end = start + limit
 
+    if not filters and not text_query:
+        # Fast path: No search, just pagination
+        total = store.count_export_rows(internal_col)
+        paginated_tweets = store.export_rows(internal_col, sort="newest", offset=start, limit=limit, include_raw_json=True)
+    elif not filters and text_query:
+        # Semi-fast path: Text search without advanced filters
+        coll_set = {internal_col} if internal_col != "all" else None
+        search_results = store.search_fts(text_query, limit=1000, collections=coll_set)
+        total = len(search_results)
+        
+        # Paginate first
+        paginated_results = search_results[start:end]
+        
+        # Hydrate media and URLs for the paginated slice
+        tweet_ids = [r["tweet_id"] for r in paginated_results if r.get("tweet_id")]
+        if tweet_ids:
+            media_rows = store._rows_for_values("media", "tweet_id", tweet_ids)
+            article_rows = store._rows_for_values("article", "tweet_id", tweet_ids)
+            url_ref_rows = store._rows_for_values("url_ref", "tweet_id", tweet_ids)
+            url_hashes = [r["url_hash"] for r in url_ref_rows if r.get("url_hash")]
+            url_rows = store._rows_for_values("url", "url_hash", url_hashes)
     
-    paginated_tweets = filtered_rows[start:end]
+            media_by_tweet = {}
+            for row in sorted(media_rows, key=lambda item: (item.get("tweet_id") or "", item.get("position") if item.get("position") is not None else 1_000_000)):
+                media_by_tweet.setdefault(row["tweet_id"], []).append(store._serialize_media_row(row))
+    
+            articles_by_tweet = {row["tweet_id"]: store._serialize_article_row(row) for row in article_rows if row.get("tweet_id")}
+            urls_by_hash = {row["url_hash"]: store._serialize_url_row(row) for row in url_rows if row.get("url_hash")}
+            url_refs_by_tweet = {}
+            for row in sorted(url_ref_rows, key=lambda item: (item.get("tweet_id") or "", item.get("position") if item.get("position") is not None else 1_000_000)):
+                resolved = urls_by_hash.get(row.get("url_hash"))
+                url_refs_by_tweet.setdefault(row["tweet_id"], []).append({
+                    "position": row.get("position"),
+                    "url_hash": row.get("url_hash"),
+                    "short_url": row.get("url"),
+                    "expanded_url": row.get("expanded_url"),
+                    "display_url": row.get("display_url"),
+                    "canonical_url": row.get("canonical_url"),
+                    "resolved": resolved,
+                })
+    
+            for r in paginated_results:
+                tid = r["tweet_id"]
+                if tid in media_by_tweet:
+                    r["media"] = media_by_tweet[tid]
+                article = articles_by_tweet.get(tid)
+                if article is not None:
+                    article["media"] = [m for m in media_by_tweet.get(tid, []) if m.get("type") == "article_cover"]
+                    r["article"] = article
+                if tid in url_refs_by_tweet:
+                    r["urls"] = url_refs_by_tweet[tid]
+        
+        paginated_tweets = paginated_results
+    else:
+        # Slow path: Search and/or advanced filters
+        all_rows = store.export_rows(internal_col, sort="newest", include_raw_json=True)
+        
+        if text_query:
+            coll_set = {internal_col} if internal_col != "all" else None
+            search_results = store.search_fts(text_query, limit=1000, collections=coll_set)
+            matched_ids = {r["tweet_id"] for r in search_results}
+            all_rows = [r for r in all_rows if r["tweet_id"] in matched_ids]
+            order = {r["tweet_id"]: i for i, r in enumerate(search_results)}
+            all_rows.sort(key=lambda x: order.get(x["tweet_id"], 9999))
+    
+        filtered_rows = _apply_advanced_filters(all_rows, filters)
+        total = len(filtered_rows)
+        paginated_tweets = filtered_rows[start:end]
     
     # Attach local media paths to Quote Tweets for the paginated slice
     for r in paginated_tweets:
