@@ -2486,17 +2486,20 @@ class ArchiveStore:
 
     def ensure_scalar_indexes(self) -> None:
         """Create scalar indexes for common query patterns if missing."""
-        existing = {idx.columns[0] for idx in self.table.list_indices() if idx.columns}
+        existing_indices = self.table.list_indices()
+        existing = {}
+        for idx in existing_indices:
+            if getattr(idx, "columns", None):
+                existing[idx.columns[0]] = getattr(idx, "index_type", "UNKNOWN")
         
-        bitmap_cols = ["record_type", "collection_type", "download_state", "enrichment_state", "unfurl_state"]
-        btree_cols = ["tweet_id", "author_username", "row_key"]
+        indexed_cols = ["record_type", "collection_type", "download_state", "enrichment_state", "unfurl_state", "tweet_id", "author_username", "row_key"]
         
-        for col in bitmap_cols:
-            if col not in existing:
-                self.table.create_scalar_index(col, index_type="BITMAP")
-        for col in btree_cols:
-            if col not in existing:
+        for col in indexed_cols:
+            idx_type = existing.get(col)
+            if idx_type is None:
                 self.table.create_scalar_index(col, index_type="BTREE")
+            elif idx_type == "Bitmap":
+                self.table.create_scalar_index(col, index_type="BTREE", replace=True)
 
     def ensure_fts_index(self) -> None:
         """Create the tweet-text FTS index if it doesn't exist."""
