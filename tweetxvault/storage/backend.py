@@ -2871,11 +2871,15 @@ class ArchiveStore:
 
     def _drop_broken_indices(self) -> None:
         try:
-            indices = self.table.list_indices()
-            for idx in indices:
-                if getattr(idx, "index_type", "").upper() == "BITMAP":
-                    if hasattr(idx, "name") and idx.name:
-                        self.table.drop_index(idx.name)
+            for idx in self.table.list_indices():
+                try:
+                    itype = getattr(idx, "index_type", None)
+                    if itype is not None and str(itype).upper() == "BITMAP":
+                        name = getattr(idx, "name", None)
+                        if name:
+                            self.table.drop_index(name)
+                except Exception:
+                    continue
         except Exception:
             pass
 
