@@ -262,6 +262,7 @@ class ArchiveStore:
             raise FileNotFoundError(f"LanceDB archive table not found at {db_path}")
 
         self._sort_cache: dict[str, list[str]] = {}
+        self._sort_cache_version: int = getattr(self.table, "version", 0) if hasattr(self, "table") else 0
 
     def _migrate_schema(self) -> None:
         if self.table.schema.equals(ARCHIVE_SCHEMA):
@@ -1851,6 +1852,11 @@ class ArchiveStore:
         self._sort_cache.clear()
 
     def get_sorted_tweet_ids(self, collection: str, sort: str = "newest") -> list[str]:
+        current_version = getattr(self.table, "version", 0)
+        if current_version != self._sort_cache_version:
+            self.invalidate_sort_cache()
+            self._sort_cache_version = current_version
+            
         cache_key = f"{collection}:{sort}"
         if cache_key in self._sort_cache:
             return self._sort_cache[cache_key]

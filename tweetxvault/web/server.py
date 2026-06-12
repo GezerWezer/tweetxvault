@@ -196,7 +196,7 @@ def api_tweets(
         post_filters = {}
         for k, v in filters.items():
             base_k = k[1:] if k.startswith('-') else k
-            if not k.startswith('-') and base_k in {"from", "since", "until", "since_time", "until_time", "conversation_id", "since_id", "max_id"}:
+            if not k.startswith('-') and base_k in {"from", "conversation_id"}:
                 if base_k == "from":
                     vals = [val.replace("@", "") for val in v]
                     joined = " OR ".join(f"LOWER(author_username) = '{val}'" for val in vals)
@@ -204,13 +204,6 @@ def api_tweets(
                 elif base_k == "conversation_id":
                     joined = " OR ".join(f"conversation_id = '{val}'" for val in v)
                     pushable_exprs.append(f"({joined})")
-                elif base_k == "since_id":
-                    pushable_exprs.append(f"tweet_id > '{v[0]}'")
-                elif base_k == "max_id":
-                    pushable_exprs.append(f"tweet_id <= '{v[0]}'")
-                # since, until, etc could also be pushed but since they require parsing dates in lancedb vs python it's tricky, we'll let them fall through to post_filters for now
-                else:
-                    post_filters[k] = v
             else:
                 post_filters[k] = v
 
