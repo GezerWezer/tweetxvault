@@ -5,6 +5,7 @@ import math
 import secrets
 import re
 import hashlib
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -23,13 +24,26 @@ from tweetxvault.export.common import normalize_collection_name
 
 server_state: dict[str, Any] = {}
 
+def _build_fts_in_background(store) -> None:
+    """Build the FTS index in a daemon thread so the server can start immediately."""
+    try:
+        store.ensure_fts_index()
+    except Exception:
+        pass  # FTS is optional; search degrades gracefully without it
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if "paths" in server_state:
         server_state["store"] = open_archive_store(server_state["paths"], create=False)
-        # Ensure indices exist for fast UI performance
+        # Scalar indices are fast (sub-second) — build them synchronously
         server_state["store"].ensure_scalar_indexes()
-        server_state["store"].ensure_fts_index()
+        # FTS index can take minutes on large databases — build in background
+        t = threading.Thread(
+            target=_build_fts_in_background,
+            args=(server_state["store"],),
+            daemon=True,
+        )
+        t.start()
     yield
     if "store" in server_state and server_state["store"]:
         server_state["store"].close()
