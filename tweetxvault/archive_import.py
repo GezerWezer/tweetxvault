@@ -1283,11 +1283,7 @@ def _manifest_warnings(manifest_row: dict[str, Any] | None) -> list[str]:
 
 
 def _list_import_manifest_rows(store: ArchiveStore) -> list[dict[str, Any]]:
-    return (
-        store.table.search()
-        .where("record_type = 'import_manifest' AND status = 'completed'")
-        .to_list()
-    )
+    return store._query("record_type = 'import_manifest' AND status = 'completed'")
 
 
 def _aggregate_import_counts(manifest_rows: list[dict[str, Any]]) -> dict[str, int]:

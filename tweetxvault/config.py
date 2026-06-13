@@ -26,7 +26,7 @@ DEFAULT_USER_AGENT = (
 CONFIG_FILENAME = "config.toml"
 QUERY_ID_CACHE_FILENAME = "query-ids.json"
 LOCK_FILENAME = "sync.lock"
-DB_DIRNAME = "archive.lancedb"
+DB_FILENAME = "archive.db"
 
 
 class AuthConfig(BaseModel):
@@ -96,7 +96,7 @@ class XDGPaths(BaseModel):
 
     @property
     def database_path(self) -> Path:
-        return self.data_dir / DB_DIRNAME
+        return self.data_dir / DB_FILENAME
 
     @property
     def media_dir(self) -> Path:

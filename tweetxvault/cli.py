@@ -1648,7 +1648,7 @@ def rehydrate_archive() -> None:
             console.print("[red]No local archive found.[/red]")
             raise typer.Exit(1)
         try:
-            total = store.table.count_rows("record_type = 'tweet'")
+            total = store._count("record_type = 'tweet'")
             if total == 0:
                 console.print("archive has no tweet rows")
                 return
@@ -1896,6 +1896,12 @@ def _raise_nofile_limit() -> None:
     soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
     if soft < hard:
         resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
+
+@app.command()
+def migrate() -> None:
+    """Migrate data from older LanceDB storage to native SQLite storage."""
+    from tweetxvault.storage.migrate import run_migration
+    run_migration()
 
 
 @app.callback()

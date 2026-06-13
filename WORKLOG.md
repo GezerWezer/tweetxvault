@@ -1,3 +1,9 @@
+- 2026-06-13 (Native SQLite Migration Complete)
+  - Completely scrapped LanceDB and PyArrow dependencies, rewriting `ArchiveStore` to use Python's built-in `sqlite3` natively.
+  - Ported all data parsing and search logic (FTS5) to raw SQLite queries for highly performant concurrent web server reads.
+  - Refactored `server.py`, removing `_build_fts_in_background` daemon threading and `store_lock` mutexes.
+  - Added `tweetxvault migrate` CLI command to easily port data from the legacy LanceDB format into the native SQLite `archive.db`.
+
 - 2026-06-13: Fixed critical LanceDB Rust panics caused by mid-job optimization
   - Root cause: `cleanup_older_than=timedelta(seconds=0)` in mid-job `optimize()` physically deletes old data files while the web server (and the sync job itself) still hold references to them
   - Earlier panic (`lance-index builder.rs:856`) was a DIFFERENT bug caused by BITMAP indices; this panic (`lance-encoding primitive.rs:2636`) is caused by stale file references after aggressive cleanup

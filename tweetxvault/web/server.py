@@ -22,9 +22,7 @@ from tweetxvault.config import AppConfig, XDGPaths
 from tweetxvault.storage import open_archive_store
 from tweetxvault.export.common import normalize_collection_name
 
-server_state: dict[str, Any] = {
-    "store_lock": threading.Lock()
-}
+server_state: dict[str, Any] = {}
 
 def _build_fts_in_background(store) -> None:
     """Build the FTS index in a daemon thread so the server can start immediately."""
@@ -70,11 +68,7 @@ def verify_credentials(credentials: HTTPBasicCredentials = Depends(security)) ->
     return True
 
 def get_store():
-    store = server_state.get("store")
-    if store is not None:
-        with server_state["store_lock"]:
-            store.table.checkout_latest()
-    return store
+    return server_state.get("store")
 
 def _strip_quotes(s: str) -> str:
     if s.startswith('"') and s.endswith('"'): return s[1:-1]
@@ -262,7 +256,7 @@ def api_tweets(
             for expr in pushable_exprs:
                 filter_expr += f" AND {expr}"
                 
-            tweet_rows = store.table.search().where(filter_expr).select(["tweet_id", "created_at", "sort_index"]).to_list()
+            tweet_rows = store._query(expr=filter_expr, cols=["tweet_id", "created_at", "sort_index"])
             
             def sort_index_val(row):
                 try: return int(row.get("sort_index") or 0)
@@ -298,7 +292,7 @@ def api_tweets(
             search_results = store.search_fts(text_query, limit=1000, collections=coll_set)
             
             if effective_sort == "newest" or effective_sort == "oldest":
-                search_results = store._apply_sort(search_results, effective_sort)
+                search_results.sort(key=oldest_key if effective_sort == "oldest" else newest_key)
             elif effective_sort == "random":
                 import random
                 random.shuffle(search_results)
@@ -407,9 +401,9 @@ def get_avatar(user_id: str, store = Depends(get_store), _auth: bool = Depends(v
         avatar_path.write_bytes(TRANSPARENT_PNG)
         return FileResponse(avatar_path)
 
-    rows = store.table.search().where(f"author_id = '{user_id}' AND record_type = 'tweet'").limit(1).to_list()
+    rows = store._query(expr=f"author_id = '{user_id}' AND record_type = 'tweet'", limit=1)
     if not rows:
-        rows = store.table.search().where(f"author_id = '{user_id}' AND record_type = 'tweet_object'").limit(1).to_list()
+        rows = store._query(expr=f"author_id = '{user_id}' AND record_type = 'tweet_object'", limit=1)
         
     if rows and rows[0].get("raw_json"):
         config = server_state.get("config")
@@ -443,9 +437,10 @@ def api_tweet_thread(
 ):
     try:
         # 1. Fetch direct relationships touching the focal tweet
-        relations = store.table.search().where(
-            f"record_type = 'tweet_relation' AND (tweet_id = '{tweet_id}' OR target_tweet_id = '{tweet_id}')"
-        ).limit(100).to_list()
+        relations = store._query(expr=
+            f"record_type = 'tweet_relation' AND (tweet_id = '{tweet_id}' OR target_tweet_id = '{tweet_id}')",
+            limit=100
+        )
         
         related_ids = {tweet_id}
         for r in relations:
@@ -464,9 +459,10 @@ def api_tweet_thread(
         sub_relations = []
         if child_candidates:
             child_id_list = ", ".join(f"'{cid}'" for cid in child_candidates if cid)
-            sub_relations = store.table.search().where(
-                f"record_type = 'tweet_relation' AND target_tweet_id IN ({child_id_list})"
-            ).limit(100).to_list()
+            sub_relations = store._query(expr=
+                f"record_type = 'tweet_relation' AND target_tweet_id IN ({child_id_list})",
+                limit=100
+            )
             for sr in sub_relations:
                 related_ids.add(sr["tweet_id"])
                 related_ids.add(sr["target_tweet_id"])
@@ -474,9 +470,9 @@ def api_tweet_thread(
         all_relations = relations + sub_relations
         
         id_list = ", ".join(f"'{tid}'" for tid in related_ids)
-        objs = store.table.search().where(f"record_type = 'tweet_object' AND tweet_id IN ({id_list})").limit(100).to_list()
-        media = store.table.search().where(f"record_type = 'media' AND tweet_id IN ({id_list})").limit(100).to_list()
-        col_rows = store.table.search().where(f"record_type = 'tweet' AND tweet_id IN ({id_list})").limit(100).to_list()
+        objs = store._query(expr=f"record_type = 'tweet_object' AND tweet_id IN ({id_list})", limit=100)
+        media = store._query(expr=f"record_type = 'media' AND tweet_id IN ({id_list})", limit=100)
+        col_rows = store._query(expr=f"record_type = 'tweet' AND tweet_id IN ({id_list})", limit=100)
         
         col_dict = {}
         for c in col_rows:

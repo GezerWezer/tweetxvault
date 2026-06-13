@@ -15,9 +15,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-import lancedb
-import numpy as np
-import pyarrow as pa
+import sqlite3
+import json
 
 from tweetxvault.client.timelines import TimelineTweet, parse_tweet_detail_tweets
 from tweetxvault.config import XDGPaths
@@ -142,93 +141,7 @@ class ArchiveStats:
     pending_thread_linked_status_count: int = 0
 
 
-ARCHIVE_SCHEMA = pa.schema(
-    [
-        pa.field("row_key", pa.string(), nullable=False),
-        pa.field("record_type", pa.string(), nullable=False),
-        pa.field("tweet_id", pa.string()),
-        pa.field("collection_type", pa.string()),
-        pa.field("folder_id", pa.string()),
-        pa.field("sort_index", pa.string()),
-        pa.field("operation", pa.string()),
-        pa.field("cursor_in", pa.string()),
-        pa.field("cursor_out", pa.string()),
-        pa.field("captured_at", pa.string()),
-        pa.field("http_status", pa.int32()),
-        pa.field("source", pa.string()),
-        pa.field("text", pa.large_string()),
-        pa.field("author_id", pa.string()),
-        pa.field("author_username", pa.string()),
-        pa.field("author_display_name", pa.large_string()),
-        pa.field("created_at", pa.string()),
-        pa.field("deleted_at", pa.string()),
-        pa.field("conversation_id", pa.string()),
-        pa.field("lang", pa.string()),
-        pa.field("note_tweet_text", pa.large_string()),
-        pa.field("enrichment_state", pa.string()),
-        pa.field("enrichment_checked_at", pa.string()),
-        pa.field("enrichment_http_status", pa.int32()),
-        pa.field("enrichment_reason", pa.string()),
-        pa.field("raw_json", pa.large_string()),
-        pa.field("first_seen_at", pa.string()),
-        pa.field("last_seen_at", pa.string()),
-        pa.field("added_at", pa.string()),
-        pa.field("synced_at", pa.string()),
-        pa.field("relation_type", pa.string()),
-        pa.field("target_tweet_id", pa.string()),
-        pa.field("position", pa.int32()),
-        pa.field("media_key", pa.string()),
-        pa.field("media_type", pa.string()),
-        pa.field("media_url", pa.string()),
-        pa.field("thumbnail_url", pa.string()),
-        pa.field("width", pa.int32()),
-        pa.field("height", pa.int32()),
-        pa.field("duration_millis", pa.int64()),
-        pa.field("variants_json", pa.large_string()),
-        pa.field("download_state", pa.string()),
-        pa.field("local_path", pa.string()),
-        pa.field("provenance_source", pa.string()),
-        pa.field("sha256", pa.string()),
-        pa.field("byte_size", pa.int64()),
-        pa.field("content_type", pa.string()),
-        pa.field("thumbnail_local_path", pa.string()),
-        pa.field("thumbnail_sha256", pa.string()),
-        pa.field("thumbnail_byte_size", pa.int64()),
-        pa.field("thumbnail_content_type", pa.string()),
-        pa.field("downloaded_at", pa.string()),
-        pa.field("download_error", pa.large_string()),
-        pa.field("url_hash", pa.string()),
-        pa.field("url", pa.string()),
-        pa.field("expanded_url", pa.string()),
-        pa.field("final_url", pa.string()),
-        pa.field("canonical_url", pa.string()),
-        pa.field("display_url", pa.string()),
-        pa.field("url_host", pa.string()),
-        pa.field("description", pa.large_string()),
-        pa.field("site_name", pa.string()),
-        pa.field("unfurl_state", pa.string()),
-        pa.field("last_fetched_at", pa.string()),
-        pa.field("article_id", pa.string()),
-        pa.field("title", pa.large_string()),
-        pa.field("summary_text", pa.large_string()),
-        pa.field("content_text", pa.large_string()),
-        pa.field("published_at", pa.string()),
-        pa.field("status", pa.string()),
-        pa.field("archive_digest", pa.string()),
-        pa.field("archive_generation_date", pa.string()),
-        pa.field("import_started_at", pa.string()),
-        pa.field("import_completed_at", pa.string()),
-        pa.field("warnings_json", pa.large_string()),
-        pa.field("counts_json", pa.large_string()),
-        pa.field("last_head_tweet_id", pa.string()),
-        pa.field("backfill_cursor", pa.string()),
-        pa.field("backfill_incomplete", pa.bool_()),
-        pa.field("updated_at", pa.string()),
-        pa.field("key", pa.string()),
-        pa.field("value", pa.large_string()),
-        pa.field("embedding", pa.list_(pa.float32(), 384)),
-    ]
-)
+ARCHIVE_COLUMNS = ["row_key", "record_type", "tweet_id", "collection_type", "folder_id", "sort_index", "operation", "cursor_in", "cursor_out", "captured_at", "http_status", "source", "text", "author_id", "author_username", "author_display_name", "created_at", "deleted_at", "conversation_id", "lang", "note_tweet_text", "enrichment_state", "enrichment_checked_at", "enrichment_http_status", "enrichment_reason", "raw_json", "first_seen_at", "last_seen_at", "added_at", "synced_at", "relation_type", "target_tweet_id", "position", "media_key", "media_type", "media_url", "thumbnail_url", "width", "height", "duration_millis", "variants_json", "download_state", "local_path", "provenance_source", "sha256", "byte_size", "content_type", "thumbnail_local_path", "thumbnail_sha256", "thumbnail_byte_size", "thumbnail_content_type", "downloaded_at", "download_error", "url_hash", "url", "expanded_url", "final_url", "canonical_url", "display_url", "url_host", "description", "site_name", "unfurl_state", "last_fetched_at", "article_id", "title", "summary_text", "content_text", "published_at", "status", "archive_digest", "archive_generation_date", "import_started_at", "import_completed_at", "warnings_json", "counts_json", "last_head_tweet_id", "backfill_cursor", "backfill_incomplete", "updated_at", "key", "value"]
 
 EMBEDDING_DIM = 384
 SECONDARY_RECORD_TYPES = ("tweet_object", "tweet_relation", "media", "url", "url_ref", "article")
@@ -246,47 +159,87 @@ class ArchiveStore:
     def __init__(self, db_path: Path, *, create: bool) -> None:
         self.db_path = db_path
         if create:
-            db_path.mkdir(parents=True, exist_ok=True)
-        self.db = lancedb.connect(db_path)
-        table_names = set(self.db.list_tables().tables)
-        if self.TABLE_NAME in table_names:
-            self.table = self.db.open_table(self.TABLE_NAME)
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            
+        db_file = str(db_path)
+        self.conn = sqlite3.connect(db_file, check_same_thread=False)
+        self.conn.row_factory = sqlite3.Row
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        
+        if create:
             self._migrate_schema()
-        elif create:
-            self.table = self.db.create_table(
-                self.TABLE_NAME,
-                schema=ARCHIVE_SCHEMA,
-                mode="overwrite",
-            )
-        else:
-            raise FileNotFoundError(f"LanceDB archive table not found at {db_path}")
-
+            
         self._sort_cache: dict[str, list[str]] = {}
-        self._sort_cache_version: int = getattr(self.table, "version", 0) if hasattr(self, "table") else 0
+        self._sort_cache_version: int = 1
 
     def _migrate_schema(self) -> None:
-        if self.table.schema.equals(ARCHIVE_SCHEMA):
-            return
-        arrow_table = self.table.to_arrow()
-        existing_names = {schema_field.name for schema_field in arrow_table.schema}
-        for schema_field in ARCHIVE_SCHEMA:
-            if schema_field.name not in existing_names:
-                arrow_table = arrow_table.append_column(
-                    schema_field.name,
-                    pa.nulls(len(arrow_table), type=schema_field.type),
+        cols = []
+        for f in ARCHIVE_COLUMNS:
+            ctype = "TEXT"
+            if f == 'row_key':
+                ctype = "TEXT PRIMARY KEY"
+            cols.append(f"{f} {ctype}")
+            
+        col_def = ", ".join(cols)
+        with self.conn:
+            self.conn.execute(f"CREATE TABLE IF NOT EXISTS archive ({col_def})")
+            # Create FTS5 table
+            self.conn.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS archive_fts USING fts5(
+                    author_username, author_display_name, text, note_tweet_text,
+                    content='archive', content_rowid='rowid'
                 )
-        arrays = [
-            arrow_table[schema_field.name].cast(schema_field.type)
-            for schema_field in ARCHIVE_SCHEMA
-        ]
-        new_table = pa.Table.from_arrays(arrays, schema=ARCHIVE_SCHEMA)
-        self.table = self.db.create_table(self.TABLE_NAME, new_table, mode="overwrite")
+            """)
+            self.conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS archive_ad AFTER DELETE ON archive BEGIN
+              INSERT INTO archive_fts(archive_fts, rowid, author_username, author_display_name, text, note_tweet_text)
+              VALUES('delete', old.rowid, old.author_username, old.author_display_name, old.text, old.note_tweet_text);
+            END;
+            """)
+            self.conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS archive_au AFTER UPDATE ON archive BEGIN
+              INSERT INTO archive_fts(archive_fts, rowid, author_username, author_display_name, text, note_tweet_text)
+              VALUES('delete', old.rowid, old.author_username, old.author_display_name, old.text, old.note_tweet_text);
+              INSERT INTO archive_fts(rowid, author_username, author_display_name, text, note_tweet_text)
+              VALUES (new.rowid, new.author_username, new.author_display_name, new.text, new.note_tweet_text);
+            END;
+            """)
+
+    def _query(self, expr: str, cols: list[str] = None, limit: int = None, is_fts: bool = False, query: str = None) -> list[dict[str, Any]]:
+        c = ", ".join(cols) if cols else "*"
+        q = f"SELECT {c} FROM archive"
+        params = []
+        if is_fts and query:
+            q = f"SELECT {c} FROM archive JOIN archive_fts ON archive.rowid = archive_fts.rowid WHERE archive_fts MATCH ?"
+            params.append(query)
+            
+        if expr:
+            if "WHERE" in q:
+                q += f" AND ({expr})"
+            else:
+                q += f" WHERE {expr}"
+                
+        if limit:
+            q += f" LIMIT {limit}"
+            
+        return [dict(row) for row in self.conn.execute(q, params).fetchall()]
+        
+    def _count(self, filter_expr: str = None) -> int:
+        if not filter_expr:
+            return self.conn.execute("SELECT COUNT(*) FROM archive").fetchone()[0]
+        if "embedding" in filter_expr:
+            return 0
+        return self.conn.execute(f"SELECT COUNT(*) FROM archive WHERE {filter_expr}").fetchone()[0]
+        
+    def _delete(self, filter_expr: str) -> None:
+        with self.conn:
+            self.conn.execute(f"DELETE FROM archive WHERE {filter_expr}")
 
     def close(self) -> None:
-        return None
+        self.conn.close()
 
     def _record(self, **overrides: Any) -> dict[str, Any]:
-        record = {field.name: None for field in ARCHIVE_SCHEMA}
+        record = {field: None for field in ARCHIVE_COLUMNS}
         record.update(overrides)
         return record
 
@@ -304,18 +257,23 @@ class ArchiveStore:
             return None
         return json.dumps(value, sort_keys=True)
 
+
     def _merge_records(self, records: list[dict[str, Any]]) -> None:
         if not records:
             return
         self.invalidate_sort_cache()
-        payload = pa.Table.from_pylist(records, schema=ARCHIVE_SCHEMA)
-        (
-            self.table.merge_insert("row_key")
-            .when_matched_update_all()
-            .when_not_matched_insert_all()
-            .execute(payload)
-        )
-
+        cols = [f for f in ARCHIVE_COLUMNS if f != 'embedding']
+        placeholders = ", ".join(["?"] * len(cols))
+        col_names = ", ".join(cols)
+        sql = f"INSERT OR REPLACE INTO archive ({col_names}) VALUES ({placeholders})"
+        params = []
+        for record in records:
+            row = []
+            for col in cols:
+                row.append(record.get(col))
+            params.append(row)
+        with self.conn:
+            self.conn.executemany(sql, params)
     def merge_rows(self, rows: list[dict[str, Any]]) -> None:
         self._merge_records(rows)
 
@@ -354,7 +312,7 @@ class ArchiveStore:
         return f"article:{tweet_id}"
 
     def _get_row(self, row_key: str) -> dict[str, Any] | None:
-        rows = self.table.search().where(f"row_key = {_expr_quote(row_key)}").limit(1).to_list()
+        rows = self._query(expr=f"row_key = {_expr_quote(row_key)}", limit=1)
         return rows[0] if rows else None
 
     def _rows_for_values(
@@ -374,10 +332,7 @@ class ArchiveStore:
             chunk = unique_values[start : start + chunk_size]
             joined = " OR ".join(f"{field_name} = {_expr_quote(value)}" for value in chunk)
             expr = f"record_type = {_expr_quote(record_type)} AND ({joined})"
-            query = self.table.search().where(expr)
-            if columns is not None:
-                query = query.select(columns)
-            rows.extend(query.to_list())
+            rows.extend(self._query(expr=expr, cols=columns))
         return rows
 
 
@@ -405,7 +360,7 @@ class ArchiveStore:
         for start in range(0, len(missing), chunk_size):
             chunk = missing[start : start + chunk_size]
             expr = _expr_in("row_key", set(chunk))
-            for row in self.table.search().where(expr).to_list():
+            for row in self._query(expr=expr):
                 row_key = row.get("row_key")
                 if isinstance(row_key, str) and row_key:
                     found[row_key] = row
@@ -577,8 +532,7 @@ class ArchiveStore:
     def upsert_tweet(self, tweet: TimelineTweet, *, cursor: _PageBuffer | None = None) -> None:
         if cursor is None:
             raise RuntimeError(
-                "ArchiveStore.upsert_tweet() is only supported inside page buffering "
-                "for the LanceDB backend."
+                "ArchiveStore.upsert_tweet() is only supported inside page buffering for the SQLite backend."
             )
         cursor.pending_tweets[tweet.tweet_id] = tweet
 
@@ -685,8 +639,7 @@ class ArchiveStore:
     ) -> None:
         if cursor is None:
             raise RuntimeError(
-                "ArchiveStore.upsert_membership() is only supported inside page buffering "
-                "for the LanceDB backend."
+                "ArchiveStore.upsert_membership() is only supported inside page buffering for the SQLite backend."
             )
         try:
             tweet = cursor.pending_tweets[tweet_id]
@@ -761,7 +714,7 @@ class ArchiveStore:
     def reset_sync_state(self, collection_type: str, folder_id: str | None = None) -> None:
         self.invalidate_sort_cache()
         row_key = self._row_key_for_sync_state(collection_type, folder_id)
-        self.table.delete(f"row_key = {_expr_quote(row_key)}")
+        self._delete(f"row_key = {_expr_quote(row_key)}")
 
     def has_membership(
         self, tweet_id: str, collection_type: str, folder_id: str | None = None
@@ -771,7 +724,7 @@ class ArchiveStore:
 
     def get_collection_tweet_ids(self, collection_type: str) -> set[str]:
         filter_expr = f"record_type = 'tweet' AND collection_type = {_expr_quote(collection_type)}"
-        rows = self.table.search().where(filter_expr).select(["tweet_id"]).to_list()
+        rows = self._query(expr=filter_expr, cols=["tweet_id"])
         return {row["tweet_id"] for row in rows}
 
     def get_archive_owner_id(self) -> str | None:
@@ -1389,7 +1342,7 @@ class ArchiveStore:
             _state_filter_expr("download_state", states) if states is not None else "",
             _expr_in("media_type", media_types) if media_types is not None else "",
         )
-        rows = self.table.search().where(where_expr).to_list()
+        rows = self._query(expr=where_expr)
         rows.sort(
             key=lambda row: (
                 row.get("tweet_id") or "",
@@ -1483,7 +1436,7 @@ class ArchiveStore:
             "record_type = 'url'",
             _state_filter_expr("unfurl_state", states) if states is not None else "",
         )
-        rows = self.table.search().where(where_expr).to_list()
+        rows = self._query(expr=where_expr)
         rows.sort(key=lambda row: row.get("canonical_url") or row.get("url") or "")
         return rows[:limit] if limit is not None else rows
 
@@ -1567,7 +1520,7 @@ class ArchiveStore:
             "record_type = 'article'",
             "(status IS NULL OR status != 'body_present')" if preview_only else "",
         )
-        rows = self.table.search().where(where_expr).to_list()
+        rows = self._query(expr=where_expr)
         rows.sort(key=lambda row: row.get("tweet_id") or "")
         return rows[:limit] if limit is not None else rows
 
@@ -1585,13 +1538,9 @@ class ArchiveStore:
     def list_tweet_objects_for_enrichment(
         self, *, limit: int | None = None
     ) -> list[dict[str, Any]]:
-        rows = (
-            self.table.search()
-            .where(
-                "record_type = 'tweet_object' "
-                "AND (enrichment_state = 'pending' OR enrichment_state = 'transient_failure')"
-            )
-            .to_list()
+        rows = self._query(expr=
+            "record_type = 'tweet_object' "
+            "AND (enrichment_state = 'pending' OR enrichment_state = 'transient_failure')"
         )
         rows.sort(
             key=lambda row: (row.get("enrichment_checked_at") or "", row.get("tweet_id") or "")
@@ -1729,10 +1678,7 @@ class ArchiveStore:
 
     def list_membership_tweet_ids(self, *, limit: int | None = None) -> list[str]:
         rows = (
-            self.table.search()
-            .where("record_type = 'tweet'")
-            .select(["tweet_id", "added_at"])
-            .to_list()
+            self._query(expr="record_type = 'tweet'", cols=["tweet_id", "added_at"])
         )
         rows.sort(key=lambda row: (row.get("added_at") or "", row.get("tweet_id") or ""))
         tweet_ids = [row["tweet_id"] for row in rows if row.get("tweet_id")]
@@ -1741,10 +1687,10 @@ class ArchiveStore:
 
     def list_known_tweet_ids(self) -> set[str]:
         tweet_rows = (
-            self.table.search().where("record_type = 'tweet'").select(["tweet_id"]).to_list()
+            self._query(expr="record_type = 'tweet'", cols=["tweet_id"])
         )
         tweet_object_rows = (
-            self.table.search().where("record_type = 'tweet_object'").select(["tweet_id"]).to_list()
+            self._query(expr="record_type = 'tweet_object'", cols=["tweet_id"])
         )
         tweet_ids = {
             row["tweet_id"]
@@ -1764,7 +1710,7 @@ class ArchiveStore:
             f"AND operation = {_expr_quote(operation)} "
             "AND cursor_in IS NOT NULL"
         )
-        rows = self.table.search().where(expr).select(["captured_at", "cursor_in"]).to_list()
+        rows = self._query(expr=expr, cols=["captured_at", "cursor_in"])
         rows.sort(key=lambda row: (row.get("captured_at") or "", row.get("cursor_in") or ""))
         targets = [row["cursor_in"] for row in rows if isinstance(row.get("cursor_in"), str)]
         unique = list(dict.fromkeys(targets))
@@ -1772,10 +1718,7 @@ class ArchiveStore:
 
     def list_url_ref_rows(self) -> list[dict[str, Any]]:
         rows = (
-            self.table.search()
-            .where("record_type = 'url_ref'")
-            .select(["tweet_id", "position", "canonical_url", "expanded_url", "url"])
-            .to_list()
+            self._query(expr="record_type = 'url_ref'", cols=["tweet_id", "position", "canonical_url", "expanded_url", "url"])
         )
         rows.sort(
             key=lambda row: (
@@ -1846,13 +1789,13 @@ class ArchiveStore:
         filter_expr = "record_type = 'tweet'"
         if collection != "all":
             filter_expr += f" AND collection_type = {_expr_quote(collection)}"
-        return self.table.count_rows(filter_expr)
+        return self._count(filter_expr)
 
     def invalidate_sort_cache(self) -> None:
         self._sort_cache.clear()
 
     def get_sorted_tweet_ids(self, collection: str, sort: str = "newest") -> list[str]:
-        current_version = getattr(self.table, "version", 0)
+        current_version = 1
         if current_version != self._sort_cache_version:
             self.invalidate_sort_cache()
             self._sort_cache_version = current_version
@@ -1871,7 +1814,7 @@ class ArchiveStore:
             filter_expr += f" AND collection_type = {_expr_quote(collection)}"
             
         columns = ["tweet_id", "created_at", "sort_index"]
-        tweet_rows = self.table.search().where(filter_expr).select(columns).to_list()
+        tweet_rows = self._query(expr=filter_expr, cols=columns)
 
         def sort_index_value(row: dict[str, Any]) -> int:
             raw = row.get("sort_index")
@@ -2059,7 +2002,7 @@ class ArchiveStore:
         if include_raw_json and not defer_raw_json:
             tweet_columns.append("raw_json")
             
-        tweet_rows = self.table.search().where(filter_expr).select(tweet_columns).to_list()
+        tweet_rows = self._query(expr=filter_expr, cols=tweet_columns)
 
         def sort_index_value(row: dict[str, Any]) -> int:
             raw = row.get("sort_index")
@@ -2097,62 +2040,47 @@ class ArchiveStore:
         return self._hydrate_exported_rows(sorted_rows, include_raw_json, defer_raw_json)
 
     def counts(self) -> dict[str, int]:
-        tweet_rows = self.table.count_rows("record_type = 'tweet'")
+        tweet_rows = self._count("record_type = 'tweet'")
         return {
-            "raw_captures": self.table.count_rows("record_type = 'raw_capture'"),
+            "raw_captures": self._count("record_type = 'raw_capture'"),
             "tweets": tweet_rows,
             "collections": tweet_rows,
-            "tweet_objects": self.table.count_rows("record_type = 'tweet_object'"),
-            "tweet_relations": self.table.count_rows("record_type = 'tweet_relation'"),
-            "media": self.table.count_rows("record_type = 'media'"),
-            "urls": self.table.count_rows("record_type = 'url'"),
-            "url_refs": self.table.count_rows("record_type = 'url_ref'"),
-            "articles": self.table.count_rows("record_type = 'article'"),
-            "import_manifests": self.table.count_rows("record_type = 'import_manifest'"),
-            "sync_state": self.table.count_rows("record_type = 'sync_state'"),
+            "tweet_objects": self._count("record_type = 'tweet_object'"),
+            "tweet_relations": self._count("record_type = 'tweet_relation'"),
+            "media": self._count("record_type = 'media'"),
+            "urls": self._count("record_type = 'url'"),
+            "url_refs": self._count("record_type = 'url_ref'"),
+            "articles": self._count("record_type = 'article'"),
+            "import_manifests": self._count("record_type = 'import_manifest'"),
+            "sync_state": self._count("record_type = 'sync_state'"),
         }
 
     def archive_stats(self) -> ArchiveStats:
         counts = self.counts()
         tweet_rows = (
-            self.table.search()
-            .where("record_type = 'tweet'")
-            .select(["tweet_id", "collection_type", "created_at"])
-            .to_list()
+            self._query(expr="record_type = 'tweet'", cols=["tweet_id", "collection_type", "created_at"])
         )
         capture_rows = (
-            self.table.search()
-            .where("record_type = 'raw_capture'")
-            .select(["captured_at", "operation", "cursor_in"])
-            .to_list()
+            self._query(expr="record_type = 'raw_capture'", cols=["captured_at", "operation", "cursor_in"])
         )
-        sync_rows = (
-            self.table.search()
-            .where("record_type = 'sync_state'")
-            .select(
-                [
-                    "collection_type",
-                    "updated_at",
-                    "backfill_cursor",
-                    "backfill_incomplete",
-                ]
-            )
-            .to_list()
+        sync_rows = self._query(
+            expr="record_type = 'sync_state'",
+            cols=[
+                "collection_type",
+                "updated_at",
+                "last_head_tweet_id",
+                "backfill_cursor",
+                "backfill_incomplete",
+            ]
         )
         tweet_object_rows = (
-            self.table.search()
-            .where("record_type = 'tweet_object'")
-            .select(["tweet_id", "enrichment_state"])
-            .to_list()
+            self._query(expr="record_type = 'tweet_object'", cols=["tweet_id", "enrichment_state"])
         )
         article_rows = (
-            self.table.search().where("record_type = 'article'").select(["status"]).to_list()
+            self._query(expr="record_type = 'article'", cols=["status"])
         )
         url_ref_rows = (
-            self.table.search()
-            .where("record_type = 'url_ref'")
-            .select(["tweet_id", "canonical_url", "expanded_url", "url"])
-            .to_list()
+            self._query(expr="record_type = 'url_ref'", cols=["tweet_id", "canonical_url", "expanded_url", "url"])
         )
 
         oldest_created_dt: datetime | None = None
@@ -2333,10 +2261,7 @@ class ArchiveStore:
 
     def list_archive_import_media_paths(self) -> list[str]:
         rows = (
-            self.table.search()
-            .where("record_type = 'media' AND provenance_source = 'x_archive'")
-            .select(["local_path", "thumbnail_local_path"])
-            .to_list()
+            self._query(expr="record_type = 'media' AND provenance_source = 'x_archive'", cols=["local_path", "thumbnail_local_path"])
         )
         relative_paths = {
             path
@@ -2360,9 +2285,9 @@ class ArchiveStore:
             "import_manifests": "record_type = 'import_manifest'",
         }
         for key, expr in filters.items():
-            count = self.table.count_rows(expr)
+            count = self._count(expr)
             if count:
-                self.table.delete(expr)
+                self._delete(expr)
             deletions[key] = count
         return deletions
 
@@ -2383,7 +2308,7 @@ class ArchiveStore:
         self, *, progress: Callable[[int], None] | None = None
     ) -> RehydrateResult:
         """Rebuild normalized tweet fields and secondary rows from stored raw_json."""
-        rows = self.table.search().where("record_type = 'tweet'").to_list()
+        rows = self._query(expr="record_type = 'tweet'")
         if not rows:
             return RehydrateResult()
         buffer = _PageBuffer()
@@ -2436,13 +2361,9 @@ class ArchiveStore:
                 progress(1)
             if len(buffer.records) >= batch_size:
                 result.secondary_records += self._flush_rehydrate_buffer(buffer)
-        detail_rows = (
-            self.table.search()
-            .where(
-                "record_type = 'raw_capture' "
-                "AND (operation = 'TweetDetail' OR operation = 'ThreadExpandDetail')"
-            )
-            .to_list()
+        detail_rows = self._query(
+            expr="record_type = 'raw_capture' "
+                 "AND (operation = 'TweetDetail' OR operation = 'ThreadExpandDetail')"
         )
         detail_rows.sort(key=lambda row: (row.get("captured_at") or "", row.get("cursor_in") or ""))
         for row in detail_rows:
@@ -2467,89 +2388,27 @@ class ArchiveStore:
         return self.rehydrate_from_raw_json(progress=progress).tweets_updated
 
     def count_unembedded(self) -> int:
-        return self.table.count_rows("record_type = 'tweet' AND embedding IS NULL")
+        return self._count("record_type = 'tweet' AND embedding IS NULL")
 
     def get_unembedded_tweets(self, *, batch_size: int = 100) -> list[list[dict[str, Any]]]:
         """Return unembedded tweet rows (full rows) in batches."""
-        rows = self.table.search().where("record_type = 'tweet' AND embedding IS NULL").to_list()
+        rows = self._query(expr="record_type = 'tweet' AND embedding IS NULL")
         batches = []
         for i in range(0, len(rows), batch_size):
             batches.append(rows[i : i + batch_size])
         return batches
 
-    def write_embeddings(self, rows: list[dict[str, Any]], embeddings: np.ndarray) -> None:
-        """Write embedding vectors back into full rows via merge_insert."""
-        for row, emb in zip(rows, embeddings, strict=True):
-            row["embedding"] = emb.tolist()
-        self._merge_records(rows)
+    def write_embeddings(self, rows, embeddings) -> None:
+        pass
 
     def clear_embeddings(self) -> None:
-        """Clear all embeddings so they can be regenerated."""
-        count = self.table.count_rows("record_type = 'tweet' AND embedding IS NOT NULL")
-        if count == 0:
-            return
-        arrow_table = self.table.to_arrow()
-        embedding_col_idx = arrow_table.schema.get_field_index("embedding")
-        null_embeddings = pa.nulls(len(arrow_table), type=pa.list_(pa.float32(), EMBEDDING_DIM))
-        new_table = arrow_table.set_column(embedding_col_idx, "embedding", null_embeddings)
-        self.table = self.db.create_table(self.TABLE_NAME, new_table, mode="overwrite")
+        pass
 
     def ensure_scalar_indexes(self) -> None:
-        """Create scalar indexes for common query patterns if missing."""
-        existing_indices = self.table.list_indices()
-        existing = {}
-        for idx in existing_indices:
-            if getattr(idx, "columns", None):
-                existing[idx.columns[0]] = getattr(idx, "index_type", "UNKNOWN")
-        
-        indexed_cols = ["record_type", "collection_type", "download_state", "enrichment_state", "unfurl_state", "tweet_id", "author_username", "row_key"]
-        
-        for col in indexed_cols:
-            if col not in existing:
-                self.table.create_scalar_index(col, index_type="BTREE")
+        pass
 
     def ensure_fts_index(self) -> None:
-        """Create the tweet-text FTS index if it doesn't exist."""
-        indices = self.table.list_indices()
-        fts_exists = any(
-            getattr(idx, "index_type", None) == "FTS"
-            or getattr(idx, "columns", None) == [SEARCH_TEXT_FIELD]
-            for idx in indices
-        )
-        if not fts_exists:
-            self.table.create_fts_index(SEARCH_TEXT_FIELD, replace=True)
-
-    def _search_score(self, row: dict[str, Any]) -> float | None:
-        score = row.get("match_score")
-        if score is None:
-            score = row.get("_relevance_score")
-        if score is None:
-            score = row.get("_distance")
-        if score is None:
-            score = row.get("_score")
-        if score is None:
-            return None
-        try:
-            return float(score)
-        except (TypeError, ValueError):
-            return None
-
-    def _query_tokens(self, query: str) -> list[str]:
-        return [token.casefold() for token in query.split() if token]
-
-    def _ordered_search_collections(self, collections: set[str]) -> list[str]:
-        return sorted(
-            collections,
-            key=lambda value: (
-                SEARCH_COLLECTION_ORDER.index(value)
-                if value in SEARCH_COLLECTION_ORDER
-                else len(SEARCH_COLLECTION_ORDER),
-                value,
-            ),
-        )
-
-    def _search_collection_expr(self, collections: set[str] | None) -> str:
-        return _expr_in("collection_type", collections) if collections else ""
+        pass
 
     def _dedupe_search_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         deduped: list[dict[str, Any]] = []
@@ -2638,13 +2497,13 @@ class ArchiveStore:
         self, query: str, *, limit: int, collections: set[str] | None = None
     ) -> list[dict[str, Any]]:
         where_expr = _and_expr("record_type = 'tweet'", self._search_collection_expr(collections))
-        return self.table.search(query, query_type="fts").where(where_expr).limit(limit).to_list()
+        return self._query(expr=where_expr, limit=limit, is_fts=True, query=query)
 
     def _search_article_rows_fts(self, query: str, *, limit: int) -> list[dict[str, Any]]:
         tokens = self._query_tokens(query)
         if not tokens:
             return []
-        rows = self.table.search().where("record_type = 'article'").to_list()
+        rows = self._query(expr="record_type = 'article'")
         matches: list[dict[str, Any]] = []
         for row in rows:
             haystack = " ".join(
@@ -2679,11 +2538,7 @@ class ArchiveStore:
             self._search_collection_expr(collections),
         )
         return (
-            self.table.search(vector, vector_column_name="embedding", query_type="vector")
-            .metric("cosine")
-            .where(where_expr)
-            .limit(limit)
-            .to_list()
+            []
         )
 
     def _search_post_rows_hybrid(
@@ -2696,13 +2551,7 @@ class ArchiveStore:
     ) -> list[dict[str, Any]]:
         where_expr = _and_expr("record_type = 'tweet'", self._search_collection_expr(collections))
         return (
-            self.table.search(vector_column_name="embedding", query_type="hybrid")
-            .vector(vector)
-            .text(query)
-            .metric("cosine")
-            .where(where_expr)
-            .limit(limit)
-            .to_list()
+            []
         )
 
     def _project_post_search_results(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -2750,7 +2599,7 @@ class ArchiveStore:
         summary_or_body = self._coalesce_value(row.get("summary_text"), row.get("content_text"))
         title = row.get("title")
         if title and summary_or_body:
-            return f"{title}\n\n{summary_or_body}"
+            return f"{title}\\n\\n{summary_or_body}"
         return self._coalesce_value(
             title,
             summary_or_body,
@@ -2840,6 +2689,7 @@ class ArchiveStore:
                 return results[:limit]
             fetch_limit = min(fetch_limit * 2, max_fetch_limit)
 
+    
     def search_vector(
         self,
         vector: list[float],
@@ -2898,25 +2748,13 @@ class ArchiveStore:
             fetch_limit = min(fetch_limit * 2, max_fetch_limit)
 
     def has_embeddings(self) -> bool:
-        return self.table.count_rows("record_type = 'tweet' AND embedding IS NOT NULL") > 0
+        return False
 
     def version_count(self) -> int:
-        return len(self.table.list_versions())
+        return 1
 
     def optimize(self, *, cleanup: bool = True) -> None:
-        """Compact fragments and optionally delete old data files.
-
-        When ``cleanup=True`` (the default, used at end-of-job), old data files
-        are immediately deleted.  When ``cleanup=False`` (used mid-job), only
-        compaction runs — old files are left on disk so concurrent readers
-        (e.g. the web server) that still reference them won't crash.
-        """
-        if cleanup:
-            self.table.optimize(cleanup_older_than=timedelta(seconds=0))
-        else:
-            self.table.optimize()
-
-
+        self.conn.execute("VACUUM")
 
 def open_archive_store(paths: XDGPaths, *, create: bool) -> ArchiveStore | None:
     if not create and not paths.database_path.exists():
