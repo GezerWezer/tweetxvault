@@ -1,3 +1,9 @@
+- 2026-06-13: Fixed critical LanceDB Rust panics caused by mid-job optimization
+  - Root cause: `cleanup_older_than=timedelta(seconds=0)` in mid-job `optimize()` physically deletes old data files while the web server (and the sync job itself) still hold references to them
+  - Earlier panic (`lance-index builder.rs:856`) was a DIFFERENT bug caused by BITMAP indices; this panic (`lance-encoding primitive.rs:2636`) is caused by stale file references after aggressive cleanup
+  - Fix: split `optimize()` into `cleanup=True` (end-of-job, deletes old files) vs `cleanup=False` (mid-job, compact only, keeps old files)
+  - Added try/except around mid-job compaction so a Rust panic cannot kill the entire sync job
+  - Mainline never hit this because it only calls optimize() at job exit, never mid-loop
 - Implemented periodic optimization for LanceDB during thread expansion to prevent exponential slowdowns.
 - `ArchiveWriteTracker` now supports mid-job threshold checks (`maybe_optimize_mid_job`) and correctly resets partial counters without dropping dirty status.
 - Added mid-job optimization calls to `expand_threads` in `threads.py` for explicit, membership, and linked-status passes.

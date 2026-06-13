@@ -110,16 +110,30 @@ class LockedArchiveJob:
         self.write_tracker.mark_dirty(rows=rows, batches=batches)
 
     def maybe_optimize_mid_job(self, console: Console | None = None) -> bool:
-        if self.write_tracker.should_optimize_on_interrupt():
+        """Compact fragments if the threshold is crossed.
+
+        Uses ``cleanup=False`` so old data files are NOT deleted — this
+        prevents Rust panics when the web server (or the sync job itself)
+        still holds references to those files.
+        """
+        if not self.write_tracker.should_optimize_on_interrupt():
+            return False
+        if console is not None:
+            console.print("compacting archive fragments mid-job...", highlight=False)
+        try:
+            self.store.optimize(cleanup=False)
+        except Exception as exc:
             if console is not None:
-                console.print("compacting archive fragments mid-job...", highlight=False)
-            self.store.optimize()
-            self.write_tracker.batch_writes = 0
-            self.write_tracker.row_writes = 0
-            self.write_tracker.start_version_count = _safe_version_count(self.store)
-            self.write_tracker.has_optimized_mid_job = True
-            return True
-        return False
+                console.print(
+                    f"[yellow]mid-job compaction failed ({exc}); continuing[/yellow]",
+                    highlight=False,
+                )
+            return False
+        self.write_tracker.batch_writes = 0
+        self.write_tracker.row_writes = 0
+        self.write_tracker.start_version_count = _safe_version_count(self.store)
+        self.write_tracker.has_optimized_mid_job = True
+        return True
 
 
 def resolve_job_context(

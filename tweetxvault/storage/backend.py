@@ -2903,8 +2903,18 @@ class ArchiveStore:
     def version_count(self) -> int:
         return len(self.table.list_versions())
 
-    def optimize(self) -> None:
-        self.table.optimize(cleanup_older_than=timedelta(seconds=0))
+    def optimize(self, *, cleanup: bool = True) -> None:
+        """Compact fragments and optionally delete old data files.
+
+        When ``cleanup=True`` (the default, used at end-of-job), old data files
+        are immediately deleted.  When ``cleanup=False`` (used mid-job), only
+        compaction runs — old files are left on disk so concurrent readers
+        (e.g. the web server) that still reference them won't crash.
+        """
+        if cleanup:
+            self.table.optimize(cleanup_older_than=timedelta(seconds=0))
+        else:
+            self.table.optimize()
 
 
 
