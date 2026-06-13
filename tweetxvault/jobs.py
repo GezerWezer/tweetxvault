@@ -39,6 +39,7 @@ class ArchiveWriteTracker:
     batch_writes: int = 0
     row_writes: int = 0
     start_version_count: int | None = None
+    has_optimized_mid_job: bool = False
 
     def __post_init__(self) -> None:
         if self.start_version_count is None:
@@ -60,7 +61,7 @@ class ArchiveWriteTracker:
     @property
     def has_writes(self) -> bool:
         delta = self.version_delta
-        return self.batch_writes > 0 or self.row_writes > 0 or (delta is not None and delta > 0)
+        return self.batch_writes > 0 or self.row_writes > 0 or (delta is not None and delta > 0) or self.has_optimized_mid_job
 
     def should_optimize_on_interrupt(self) -> bool:
         delta = self.version_delta
@@ -107,6 +108,18 @@ class LockedArchiveJob:
 
     def mark_dirty(self, rows: int = 1, batches: int = 1) -> None:
         self.write_tracker.mark_dirty(rows=rows, batches=batches)
+
+    def maybe_optimize_mid_job(self, console: Console | None = None) -> bool:
+        if self.write_tracker.should_optimize_on_interrupt():
+            if console is not None:
+                console.print("compacting archive fragments mid-job...", highlight=False)
+            self.store.optimize()
+            self.write_tracker.batch_writes = 0
+            self.write_tracker.row_writes = 0
+            self.write_tracker.start_version_count = _safe_version_count(self.store)
+            self.write_tracker.has_optimized_mid_job = True
+            return True
+        return False
 
 
 def resolve_job_context(

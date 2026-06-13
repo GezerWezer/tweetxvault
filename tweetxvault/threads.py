@@ -282,6 +282,7 @@ async def expand_threads(
                         total=len(target_ids),
                         result=result,
                     )
+                    job.maybe_optimize_mid_job(console=console)
             else:
                 _log_threads(console, "loading archived membership tweets...")
                 membership_ids = store.list_membership_tweet_ids()
@@ -327,6 +328,7 @@ async def expand_threads(
                         total=len(membership_ids),
                         result=result,
                     )
+                    job.maybe_optimize_mid_job(console=console)
 
                 if limit is None or result.processed < limit:
                     _log_threads(console, "loading known tweet ids for linked-status pass...")
@@ -399,6 +401,7 @@ async def expand_threads(
                             total=len(url_ref_rows),
                             result=result,
                         )
+                        job.maybe_optimize_mid_job(console=console)
         finally:
             await client.aclose()
 

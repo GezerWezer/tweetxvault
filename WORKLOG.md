@@ -1,3 +1,16 @@
+- Implemented periodic optimization for LanceDB during thread expansion to prevent exponential slowdowns.
+- `ArchiveWriteTracker` now supports mid-job threshold checks (`maybe_optimize_mid_job`) and correctly resets partial counters without dropping dirty status.
+- Added mid-job optimization calls to `expand_threads` in `threads.py` for explicit, membership, and linked-status passes.
+- Finalized Web UI improvements (Relevance sorting, search count, missing avatar fallback, native poll and article card formatting).
+
+- 2026-06-13 (Web UI Fixes & LanceDB Downgrade)
+  - Diagnosed a 0% CPU indefinite hang in LanceDB `0.33.0` native FTS index builder on large datasets (2M+ rows).
+  - Moved FTS index creation (`ensure_fts_index()`) into a background daemon thread in FastAPI lifespan to prevent Uvicorn from hanging during server startup.
+  - Downgraded `lancedb` requirement in `pyproject.toml` back to `>=0.29,<0.30`. LanceDB `0.33.0` deprecated the stable Tantivy FTS engine and replaced it with an experimental native FTS engine which deadlocks on large datasets. Downgrading to `<0.30` restores the Tantivy engine, which successfully builds the FTS index on 2M rows in exactly 7 seconds.
+  - Because the database was migrated and purged of `BITMAP` fragments, `0.29.2` now safely compacts the remaining `BTREE` indices without hitting its upstream panic.
+- 2026-06-12 (Follow-up)
+  - Reverted `optimize()` back to its exact `main` branch logic (`table.optimize(cleanup_older_than=0)`) because inline index manipulation during `sync` caused Tokio deadlocks and 0% CPU hangs on certain systems.
+  - Decoupled web performance optimizations from the core `sync` path. Shifted `ensure_scalar_indexes()` and `ensure_fts_index()` into the FastAPI web server `lifespan` hook. Indices are now guaranteed to be built exactly once when the web UI boots up, keeping `sync` rock solid and the web UI lightning fast.
 - 2026-06-12
   - Investigated recurring LanceDB `index out of bounds` panics occurring during `sync`.
   - Discovered LanceDB Rust core crashes when compacting older `BITMAP` scalar index fragments via `table.optimize()`.

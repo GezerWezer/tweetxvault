@@ -1857,9 +1857,14 @@ class ArchiveStore:
             self.invalidate_sort_cache()
             self._sort_cache_version = current_version
             
-        cache_key = f"{collection}:{sort}"
+        cache_sort = "newest" if sort == "random" else sort
+        cache_key = f"{collection}:{cache_sort}"
         if cache_key in self._sort_cache:
-            return self._sort_cache[cache_key]
+            res = list(self._sort_cache[cache_key])
+            if sort == "random":
+                import random
+                random.shuffle(res)
+            return res
 
         filter_expr = "record_type = 'tweet'"
         if collection != "all":
@@ -1894,12 +1899,17 @@ class ArchiveStore:
                 )
             return (1, 0.0, -sort_index_value(row), row.get("tweet_id") or "")
 
-        sort_key_fn = oldest_sort_key if sort == "oldest" else newest_sort_key
+        sort_key_fn = oldest_sort_key if cache_sort == "oldest" else newest_sort_key
         sorted_rows = sorted(tweet_rows, key=sort_key_fn)
         
         sorted_ids = [row["tweet_id"] for row in sorted_rows if row.get("tweet_id")]
         self._sort_cache[cache_key] = sorted_ids
-        return sorted_ids
+        
+        res = list(sorted_ids)
+        if sort == "random":
+            import random
+            random.shuffle(res)
+        return res
 
     def _hydrate_exported_rows(
         self,
@@ -2593,6 +2603,36 @@ class ArchiveStore:
             for tweet_id, values in collections_by_tweet_id.items()
         }
         return ordered_collections, metadata_by_tweet_id
+
+    def _apply_sort(self, search_results: list[dict[str, Any]], sort: str) -> list[dict[str, Any]]:
+        def sort_index_value(row: dict[str, Any]) -> int:
+            raw = row.get("sort_index")
+            if not raw:
+                return 0
+            try:
+                return int(raw)
+            except (TypeError, ValueError):
+                return 0
+
+        def oldest_sort_key(row: dict[str, Any]) -> tuple[Any, ...]:
+            created_at = _parse_created_at(row.get("created_at"))
+            if created_at is not None:
+                return (0, created_at.timestamp(), sort_index_value(row), row.get("tweet_id") or "")
+            return (1, datetime.max.timestamp(), sort_index_value(row), row.get("tweet_id") or "")
+
+        def newest_sort_key(row: dict[str, Any]) -> tuple[Any, ...]:
+            created_at = _parse_created_at(row.get("created_at"))
+            if created_at is not None:
+                return (
+                    0,
+                    -created_at.timestamp(),
+                    -sort_index_value(row),
+                    row.get("tweet_id") or "",
+                )
+            return (1, 0.0, -sort_index_value(row), row.get("tweet_id") or "")
+            
+        sort_key_fn = oldest_sort_key if sort == "oldest" else newest_sort_key
+        return sorted(search_results, key=sort_key_fn)
 
     def _search_post_rows_fts(
         self, query: str, *, limit: int, collections: set[str] | None = None

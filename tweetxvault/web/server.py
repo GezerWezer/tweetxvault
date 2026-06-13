@@ -192,6 +192,7 @@ def _apply_advanced_filters(rows: list[dict], filters: dict[str, list[str]]) -> 
 def api_tweets(
     q: str | None = None,
     collection: str = Query("all"),
+    sort: str = Query("default"),
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
     store = Depends(get_store),
@@ -227,11 +228,25 @@ def api_tweets(
         paginated_tweets = []
         total = 0
 
+        effective_sort = "newest"
+        if sort == "oldest":
+            effective_sort = "oldest"
+        elif sort == "random":
+            effective_sort = "random"
+        elif sort == "relevance" and text_query:
+            effective_sort = "relevance"
+        elif sort == "default":
+            effective_sort = "relevance" if text_query else "newest"
+
         if not post_filters and not text_query and not pushable_exprs:
             # Fast path
-            sorted_ids = store.get_sorted_tweet_ids(internal_col, sort="newest")
+            sorted_ids = store.get_sorted_tweet_ids(internal_col, sort=effective_sort)
             total = len(sorted_ids)
             paginated_tweets = store.fetch_tweets_by_ids(sorted_ids[start:end])
+            
+            if effective_sort == "random":
+                import random
+                random.shuffle(paginated_tweets)
             
         elif not post_filters and not text_query and pushable_exprs:
             # Medium path: Pushable filters only
@@ -253,7 +268,20 @@ def api_tweets(
                     return (0, -dt.timestamp(), -sort_index_val(row), row.get("tweet_id") or "")
                 except: return (1, 0.0, -sort_index_val(row), row.get("tweet_id") or "")
                     
-            tweet_rows.sort(key=newest_key)
+            def oldest_key(row):
+                try:
+                    dt = datetime.strptime(row.get("created_at") or "", "%a %b %d %H:%M:%S %z %Y")
+                    return (0, dt.timestamp(), sort_index_val(row), row.get("tweet_id") or "")
+                except: return (1, datetime.max.timestamp(), sort_index_val(row), row.get("tweet_id") or "")
+
+            if effective_sort == "oldest":
+                tweet_rows.sort(key=oldest_key)
+            elif effective_sort == "random":
+                import random
+                random.shuffle(tweet_rows)
+            else:
+                tweet_rows.sort(key=newest_key)
+                
             total = len(tweet_rows)
             page_ids = [r["tweet_id"] for r in tweet_rows[start:end] if r.get("tweet_id")]
             paginated_tweets = store.fetch_tweets_by_ids(page_ids)
@@ -262,6 +290,13 @@ def api_tweets(
             # Semi-fast path
             coll_set = {internal_col} if internal_col != "all" else None
             search_results = store.search_fts(text_query, limit=1000, collections=coll_set)
+            
+            if effective_sort == "newest" or effective_sort == "oldest":
+                search_results = store._apply_sort(search_results, effective_sort)
+            elif effective_sort == "random":
+                import random
+                random.shuffle(search_results)
+                
             total = len(search_results)
             page_results = search_results[start:end]
             page_ids = [r["tweet_id"] for r in page_results if r.get("tweet_id")]
@@ -276,11 +311,27 @@ def api_tweets(
                 matched_ids = {r["tweet_id"] for r in search_results}
                 all_rows = [r for r in all_rows if r["tweet_id"] in matched_ids]
                 order = {r["tweet_id"]: i for i, r in enumerate(search_results)}
-                all_rows.sort(key=lambda x: order.get(x["tweet_id"], 9999))
+                if effective_sort == "relevance":
+                    all_rows.sort(key=lambda x: order.get(x["tweet_id"], 9999))
+                elif effective_sort == "random":
+                    import random
+                    random.shuffle(all_rows)
+                # If newest/oldest, it's already sorted by newest, just reverse if oldest
+                elif effective_sort == "oldest":
+                    all_rows.reverse()
                 
             filtered_rows = _apply_advanced_filters(all_rows, filters)
+            
+            if effective_sort == "random":
+                import random
+                random.shuffle(filtered_rows)
+            elif effective_sort == "oldest" and not text_query:
+                filtered_rows.reverse()
+                
             total = len(filtered_rows)
             paginated_tweets = filtered_rows[start:end]
+
+        paginated_tweets = [t for t in paginated_tweets if t.get("text") != "This Post is from a suspended account. {learnmore}"]
 
         # Batch QT media query
         qt_ids = set()
@@ -344,6 +395,12 @@ def get_avatar(user_id: str, store = Depends(get_store), _auth: bool = Depends(v
     if avatar_path.exists():
         return FileResponse(avatar_path)
         
+    TRANSPARENT_PNG = b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82'
+
+    def save_and_return_transparent():
+        avatar_path.write_bytes(TRANSPARENT_PNG)
+        return FileResponse(avatar_path)
+
     rows = store.table.search().where(f"author_id = '{user_id}' AND record_type = 'tweet'").limit(1).to_list()
     if not rows:
         rows = store.table.search().where(f"author_id = '{user_id}' AND record_type = 'tweet_object'").limit(1).to_list()
@@ -351,7 +408,8 @@ def get_avatar(user_id: str, store = Depends(get_store), _auth: bool = Depends(v
     if rows and rows[0].get("raw_json"):
         config = server_state.get("config")
         if not config or not config.web.fetch_avatars:
-            raise HTTPException(status_code=404, detail="Avatar fetching disabled")
+            return save_and_return_transparent()
+            
         try:
             raw = json.loads(rows[0]["raw_json"])
             user_res = raw.get("core", {}).get("user_results", {}).get("result", {})
@@ -366,10 +424,10 @@ def get_avatar(user_id: str, store = Depends(get_store), _auth: bool = Depends(v
                 if resp.status_code == 200:
                     avatar_path.write_bytes(resp.content)
                     return FileResponse(avatar_path)
-        except Exception as e:
+        except Exception:
             pass
             
-    raise HTTPException(status_code=404, detail="Avatar not found")
+    return save_and_return_transparent()
 
 @app.get("/api/tweets/{tweet_id}")
 def api_tweet_thread(
