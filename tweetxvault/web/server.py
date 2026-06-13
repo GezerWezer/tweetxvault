@@ -68,7 +68,10 @@ def verify_credentials(credentials: HTTPBasicCredentials = Depends(security)) ->
     return True
 
 def get_store():
-    return server_state["store"]
+    store = server_state["store"]
+    if store is not None:
+        store.table.checkout_latest()
+    return store
 
 def _strip_quotes(s: str) -> str:
     if s.startswith('"') and s.endswith('"'): return s[1:-1]
