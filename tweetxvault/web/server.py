@@ -27,6 +27,9 @@ server_state: dict[str, Any] = {}
 async def lifespan(app: FastAPI):
     if "paths" in server_state:
         server_state["store"] = open_archive_store(server_state["paths"], create=False)
+        # Ensure indices exist for fast UI performance
+        server_state["store"].ensure_scalar_indexes()
+        server_state["store"].ensure_fts_index()
     yield
     if "store" in server_state and server_state["store"]:
         server_state["store"].close()

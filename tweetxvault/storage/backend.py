@@ -2864,27 +2864,7 @@ class ArchiveStore:
         return len(self.table.list_versions())
 
     def optimize(self) -> None:
-        self._drop_broken_indices()
-        self.ensure_fts_index()
         self.table.optimize(cleanup_older_than=timedelta(seconds=0))
-        self.ensure_scalar_indexes()
-
-    def _drop_broken_indices(self) -> None:
-        try:
-            for idx in self.table.list_indices():
-                try:
-                    cols = getattr(idx, "columns", [])
-                    # Never drop the FTS index, which is built on SEARCH_TEXT_FIELD
-                    if not cols or SEARCH_TEXT_FIELD in cols:
-                        continue
-                        
-                    name = getattr(idx, "name", None)
-                    if name:
-                        self.table.drop_index(name)
-                except Exception:
-                    continue
-        except Exception:
-            pass
 
 
 
