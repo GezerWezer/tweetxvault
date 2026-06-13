@@ -22,37 +22,33 @@ from tweetxvault.config import AppConfig, XDGPaths
 from tweetxvault.storage import open_archive_store
 from tweetxvault.export.common import normalize_collection_name
 
-server_state: dict[str, Any] = {}
+server_state: dict[str, Any] = {
+    "store_lock": threading.Lock()
+}
 
-def _build_fts_in_background(paths) -> None:
+def _build_fts_in_background(store) -> None:
     """Build the FTS index in a daemon thread so the server can start immediately."""
-    store = open_archive_store(paths, create=False)
-    if not store:
-        return
     try:
         store.ensure_fts_index()
     except Exception:
         pass  # FTS is optional; search degrades gracefully without it
-    finally:
-        store.close()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if "paths" in server_state:
+        server_state["store"] = open_archive_store(server_state["paths"], create=False)
         # Scalar indices are fast (sub-second) — build them synchronously
-        store = open_archive_store(server_state["paths"], create=False)
-        if store:
-            store.ensure_scalar_indexes()
-            store.close()
-            
+        server_state["store"].ensure_scalar_indexes()
         # FTS index can take minutes on large databases — build in background
         t = threading.Thread(
             target=_build_fts_in_background,
-            args=(server_state["paths"],),
+            args=(server_state["store"],),
             daemon=True,
         )
         t.start()
     yield
+    if "store" in server_state and server_state["store"]:
+        server_state["store"].close()
 
 security = HTTPBasic()
 app = FastAPI(title="tweetxvault Web UI", lifespan=lifespan)
@@ -74,16 +70,11 @@ def verify_credentials(credentials: HTTPBasicCredentials = Depends(security)) ->
     return True
 
 def get_store():
-    paths = server_state.get("paths")
-    if not paths:
-        yield None
-        return
-    store = open_archive_store(paths, create=False)
-    try:
-        yield store
-    finally:
-        if store:
-            store.close()
+    store = server_state.get("store")
+    if store is not None:
+        with server_state["store_lock"]:
+            store.table.checkout_latest()
+    return store
 
 def _strip_quotes(s: str) -> str:
     if s.startswith('"') and s.endswith('"'): return s[1:-1]
