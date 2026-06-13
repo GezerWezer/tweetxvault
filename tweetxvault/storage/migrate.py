@@ -27,9 +27,8 @@ def run_migration() -> None:
         print("LanceDB archive table not found.", e)
         return
         
-    print("Exporting rows from LanceDB (this may take a moment)...")
-    rows = table.search().to_list()
-    print(f"Loaded {len(rows)} rows from LanceDB.")
+    total_rows = table.count_rows()
+    print(f"Found {total_rows} rows to migrate.")
     
     # Initialize SQLite database (which will be at paths.database_path -> archive.db)
     new_db_path = paths.database_path
@@ -63,15 +62,39 @@ def run_migration() -> None:
     col_names = ", ".join(cols)
     sql = f"INSERT OR REPLACE INTO archive ({col_names}) VALUES ({placeholders})"
     
-    params = []
-    for record in rows:
-        row = []
-        for col in cols:
-            row.append(record.get(col))
-        params.append(row)
-        
-    with store.conn:
-        store.conn.executemany(sql, params)
+    # Attempt to import tqdm for progress bar
+    try:
+        from tqdm import tqdm
+        pbar = tqdm(total=total_rows, desc="Migrating to SQLite", unit="rows")
+    except ImportError:
+        pbar = None
+
+    # Process in batches using offset and limit to prevent OOM
+    batch_size = 1000
+    offset = 0
+    
+    while True:
+        rows = table.search().limit(batch_size).offset(offset).to_list()
+        if not rows:
+            break
+            
+        params = []
+        for record in rows:
+            row = []
+            for col in cols:
+                row.append(record.get(col))
+            params.append(row)
+            
+        with store.conn:
+            store.conn.executemany(sql, params)
+            
+        if pbar:
+            pbar.update(len(rows))
+            
+        offset += len(rows)
+            
+    if pbar:
+        pbar.close()
         
     store.close()
     print("Migration complete! You can now run `tweetxvault stats`.")
