@@ -1,3 +1,11 @@
+- 2026-06-12
+  - Investigated recurring LanceDB `index out of bounds` panics occurring during `sync`.
+  - Discovered LanceDB Rust core crashes when compacting older `BITMAP` scalar index fragments via `table.optimize()`.
+  - First mitigation (`create_scalar_index(replace=True)`) failed because old index fragments were still read by compaction pass.
+  - Second mitigation (`_drop_broken_indices`) failed silently because python `IndexInfo` occasionally returns `None` for `index_type`, causing an unhandled `AttributeError` during `.upper()`.
+  - Final fix: rewrote `_drop_broken_indices` to forcefully drop **all** indices on the table except the FTS `SEARCH_TEXT_FIELD` index, entirely bypassing Python `index_type` lookup logic. This successfully excises all corrupted `BITMAP` indices from the database schema prior to compaction.
+  - Wrote a full root cause analysis in `docs/implementation_plan.md` to assure the user no data was lost.
+
 # WORKLOG
 
 ## 2026-06-12
