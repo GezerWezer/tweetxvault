@@ -133,6 +133,7 @@ class ArchiveStats:
     pending_enrichment_count: int = 0
     transient_enrichment_failure_count: int = 0
     terminal_enrichment_count: int = 0
+    resurrected_enrichment_count: int = 0
     done_enrichment_count: int = 0
     preview_article_count: int = 0
     missing_tweet_object_count: int = 0
@@ -1547,6 +1548,15 @@ class ArchiveStore:
         )
         return rows[:limit] if limit is not None else rows
 
+    def list_dead_tweets_for_resurrection(
+        self, *, limit: int | None = None
+    ) -> list[dict[str, Any]]:
+        rows = self._query(expr="record_type = 'tweet_object' AND enrichment_state = 'terminal_unavailable'")
+        rows.sort(
+            key=lambda row: (row.get("enrichment_checked_at") or "", row.get("tweet_id") or "")
+        )
+        return rows[:limit] if limit is not None else rows
+
     def update_tweet_object_enrichment(
         self,
         tweet_id: str,
@@ -1608,6 +1618,10 @@ class ArchiveStore:
             updated["raw_json"] = self._json_value(tweet.raw_json)
             updated["last_seen_at"] = now
             updated["synced_at"] = now
+            
+            if row.get("enrichment_state") == "terminal_unavailable":
+                updated["enrichment_state"] = "resurrected"
+            
             cursor.records[updated["row_key"]] = updated
 
     def _refresh_tweet_records_for_details(
@@ -1639,6 +1653,20 @@ class ArchiveStore:
             cursor=buffer,
         )
         self._refresh_tweet_records_for_details([tweet], cursor=buffer)
+        
+        row = self._lookup_row(self._row_key_for_tweet_object(tweet.tweet_id), cursor=buffer)
+        state = "done"
+        if row and row.get("enrichment_state") == "terminal_unavailable":
+            state = "resurrected"
+        
+        self.update_tweet_object_enrichment(
+            tweet.tweet_id,
+            enrichment_state=state,
+            enrichment_checked_at=utc_now(),
+            enrichment_http_status=http_status,
+            enrichment_reason=None,
+            cursor=buffer,
+        )
         self._buffer_secondary_graph(
             extract_secondary_objects(tweet.raw_json),
             source=LIVE_SOURCE,
@@ -1675,6 +1703,30 @@ class ArchiveStore:
         )
         if owns_buffer:
             self._merge_records(list(buffer.records.values()))
+
+    def persist_terminal_unavailable_target(self, focal_tweet_id: str, operation: str) -> None:
+        buffer = _PageBuffer()
+        self.append_raw_capture(
+            operation,
+            focal_tweet_id,
+            None,
+            404,
+            {"__tombstone__": True},
+            source=LIVE_SOURCE,
+            cursor=buffer,
+        )
+        self._queue_record(
+            self._record(
+                record_type="tweet_object",
+                row_key=f"tweet_object:{focal_tweet_id}",
+                tweet_id=focal_tweet_id,
+                enrichment_state="terminal_unavailable",
+                raw_json=self._json_value({"__tombstone__": True}),
+                source=LIVE_SOURCE,
+            ),
+            cursor=buffer,
+        )
+        self._merge_records(list(buffer.records.values()))
 
     def list_membership_tweet_ids(self, *, limit: int | None = None) -> list[str]:
         rows = (
@@ -2138,6 +2190,7 @@ class ArchiveStore:
         pending_enrichment_count = 0
         transient_enrichment_failure_count = 0
         terminal_enrichment_count = 0
+        resurrected_enrichment_count = 0
         done_enrichment_count = 0
         for row in tweet_object_rows:
             tweet_id = row.get("tweet_id")
@@ -2150,6 +2203,8 @@ class ArchiveStore:
                 transient_enrichment_failure_count += 1
             elif enrichment_state == "terminal_unavailable":
                 terminal_enrichment_count += 1
+            elif enrichment_state == "resurrected":
+                resurrected_enrichment_count += 1
             elif enrichment_state == "done":
                 done_enrichment_count += 1
 
@@ -2251,6 +2306,7 @@ class ArchiveStore:
             pending_enrichment_count=pending_enrichment_count,
             transient_enrichment_failure_count=transient_enrichment_failure_count,
             terminal_enrichment_count=terminal_enrichment_count,
+            resurrected_enrichment_count=resurrected_enrichment_count,
             done_enrichment_count=done_enrichment_count,
             preview_article_count=preview_article_count,
             missing_tweet_object_count=missing_tweet_object_count,

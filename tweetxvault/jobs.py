@@ -78,25 +78,8 @@ def best_effort_interrupt_optimize(
     *,
     console: Console | None = None,
 ) -> bool:
-    if not tracker.should_optimize_on_interrupt():
-        return False
-    if console is not None:
-        console.print(_INTERRUPT_OPTIMIZE_MESSAGE, highlight=False)
-    try:
-        store.optimize()
-    except KeyboardInterrupt:
-        if console is not None:
-            console.print(f"[yellow]{_INTERRUPT_OPTIMIZE_ABORTED_MESSAGE}[/yellow]")
-        return False
-    except Exception as exc:
-        if console is not None:
-            console.print(
-                "[yellow]archive optimize failed during interrupt cleanup; "
-                f"run 'tweetxvault optimize' later ({exc})[/yellow]",
-                highlight=False,
-            )
-        return False
-    return True
+    """This is a no-op for SQLite as it does not require interrupt compaction."""
+    return False
 
 
 @dataclass(slots=True)
@@ -112,28 +95,9 @@ class LockedArchiveJob:
     def maybe_optimize_mid_job(self, console: Console | None = None) -> bool:
         """Compact fragments if the threshold is crossed.
 
-        Uses ``cleanup=False`` so old data files are NOT deleted — this
-        prevents Rust panics when the web server (or the sync job itself)
-        still holds references to those files.
+        This is a no-op for SQLite as it does not require mid-job compaction.
         """
-        if not self.write_tracker.should_optimize_on_interrupt():
-            return False
-        if console is not None:
-            console.print("compacting archive fragments mid-job...", highlight=False)
-        try:
-            self.store.optimize(cleanup=False)
-        except Exception as exc:
-            if console is not None:
-                console.print(
-                    f"[yellow]mid-job compaction failed ({exc}); continuing[/yellow]",
-                    highlight=False,
-                )
-            return False
-        self.write_tracker.batch_writes = 0
-        self.write_tracker.row_writes = 0
-        self.write_tracker.start_version_count = _safe_version_count(self.store)
-        self.write_tracker.has_optimized_mid_job = True
-        return True
+        return False
 
 
 def resolve_job_context(

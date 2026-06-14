@@ -680,12 +680,12 @@ def test_persist_page_extracts_secondary_objects_once_across_collections(paths) 
         sync_state=2,
     )
 
-    article_rows = store.table.search().where("record_type = 'article'").to_list()
+    article_rows = store._query(expr="record_type = 'article'")
     assert article_rows[0]["title"] == "Article title"
     assert article_rows[0]["content_text"] == "Article body"
-    media_rows = store.table.search().where("record_type = 'media'").to_list()
+    media_rows = store._query(expr="record_type = 'media'")
     assert any(row["source"] == "article_cover" for row in media_rows)
-    relation_rows = store.table.search().where("record_type = 'tweet_relation'").to_list()
+    relation_rows = store._query(expr="record_type = 'tweet_relation'")
     assert relation_rows[0]["relation_type"] == "quote_of"
     assert relation_rows[0]["target_tweet_id"] == "200"
     store.close()
@@ -761,7 +761,7 @@ def test_rehydrate_from_raw_json_rebuilds_secondary_rows(paths) -> None:
     store.table.delete(
         "record_type IN ('tweet_object', 'tweet_relation', 'media', 'url', 'url_ref', 'article')"
     )
-    tweet_row = store.table.search().where("record_type = 'tweet'").limit(1).to_list()[0]
+    tweet_row = store._query(expr="record_type = 'tweet'", limit=1)[0]
     tweet_row["text"] = "root short"
     tweet_row["author_username"] = None
     tweet_row["author_display_name"] = None
@@ -778,7 +778,7 @@ def test_rehydrate_from_raw_json_rebuilds_secondary_rows(paths) -> None:
     assert counts["urls"] == 2
     assert counts["url_refs"] == 2
     assert counts["articles"] == 1
-    rebuilt_row = store.table.search().where("record_type = 'tweet'").limit(1).to_list()[0]
+    rebuilt_row = store._query(expr="record_type = 'tweet'", limit=1)[0]
     assert rebuilt_row["text"] == "root longform text"
     assert rebuilt_row["author_username"] == "user1000"
     assert rebuilt_row["note_tweet_text"] == "root longform text"
@@ -853,12 +853,12 @@ def test_persist_page_preserves_richer_secondary_values_from_existing_rows(paths
         backfill_incomplete=False,
     )
 
-    article_row = store.table.search().where("record_type = 'article'").limit(1).to_list()[0]
+    article_row = store._query(expr="record_type = 'article'", limit=1)[0]
     assert article_row["content_text"] == "Article body"
     assert article_row["canonical_url"] == "https://x.com/i/article/123"
     assert article_row["status"] == "body_present"
 
-    media_rows = store.table.search().where("record_type = 'media'").to_list()
+    media_rows = store._query(expr="record_type = 'media'")
     media_by_key = {row["media_key"]: row for row in media_rows}
     assert media_by_key["3_root"]["media_url"] == "https://pbs.twimg.com/media/root.jpg"
     assert (
@@ -1106,12 +1106,12 @@ def test_persist_thread_detail_keeps_context_tweets_out_of_memberships(paths) ->
         raw_json=make_tweet_detail_response([root_raw, parent_raw]),
     )
 
-    membership_rows = store.table.search().where("record_type = 'tweet'").to_list()
+    membership_rows = store._query(expr="record_type = 'tweet'")
     assert [row["tweet_id"] for row in membership_rows] == ["100"]
 
-    tweet_object_rows = store.table.search().where("record_type = 'tweet_object'").to_list()
+    tweet_object_rows = store._query(expr="record_type = 'tweet_object'")
     assert {row["tweet_id"] for row in tweet_object_rows} == {"100", "200"}
-    relation_rows = store.table.search().where("record_type = 'tweet_relation'").to_list()
+    relation_rows = store._query(expr="record_type = 'tweet_relation'")
     relations = {
         (row["tweet_id"], row["relation_type"], row["target_tweet_id"]) for row in relation_rows
     }
@@ -1120,7 +1120,7 @@ def test_persist_thread_detail_keeps_context_tweets_out_of_memberships(paths) ->
     assert ("200", "thread_child", "100") in relations
     assert ("100", "links_to_status", "300") in relations
 
-    raw_capture_rows = store.table.search().where("record_type = 'raw_capture'").to_list()
+    raw_capture_rows = store._query(expr="record_type = 'raw_capture'")
     assert any(row["operation"] == "ThreadExpandDetail" for row in raw_capture_rows)
     store.close()
 
@@ -1189,9 +1189,9 @@ def test_rehydrate_from_raw_json_rebuilds_thread_capture_secondary_rows(paths) -
     result = store.rehydrate_from_raw_json()
 
     assert result.secondary_records > 0
-    tweet_object_rows = store.table.search().where("record_type = 'tweet_object'").to_list()
+    tweet_object_rows = store._query(expr="record_type = 'tweet_object'")
     assert {row["tweet_id"] for row in tweet_object_rows} == {"100", "200"}
-    relation_rows = store.table.search().where("record_type = 'tweet_relation'").to_list()
+    relation_rows = store._query(expr="record_type = 'tweet_relation'")
     relations = {
         (row["tweet_id"], row["relation_type"], row["target_tweet_id"]) for row in relation_rows
     }

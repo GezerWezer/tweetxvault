@@ -108,10 +108,11 @@ class SyncFollowupPlan:
     media: bool = True
     unfurl: bool = True
     threads: bool = True
+    retry_failed: bool = False
 
     @property
     def enabled(self) -> bool:
-        return any((self.enrich, self.articles, self.media, self.unfurl, self.threads))
+        return any((self.enrich, self.articles, self.media, self.unfurl, self.threads, self.retry_failed))
 
 
 class ProcessLock:
@@ -613,6 +614,33 @@ async def _run_auto_followups(
                 f"{result.pending_enrichment} pending",
             )
 
+    if plan.enrich: # only resurrect if enrich is enabled
+        _log_sync_followup(console, "running resurrect dead tweets")
+        try:
+            from tweetxvault.archive_import import resurrect_dead_tweets
+            result = await resurrect_dead_tweets(
+                limit=None if plan.retry_failed else 500,
+                config=config,
+                paths=paths,
+                auth_bundle=auth_bundle,
+                transport=transport,
+                console=console,
+            )
+        except Exception as exc:
+            _log_embedding_warning(
+                console,
+                f"sync follow-up resurrect failed ({exc})",
+            )
+        else:
+            _log_sync_followup(
+                console,
+                "resurrect: "
+                f"{result.detail_lookups} resurrected, "
+                f"{result.detail_terminal_unavailable} still dead, "
+                f"{result.detail_transient_failures} transient failures, "
+                f"{result.pending_enrichment} remaining",
+            )
+
     if plan.threads:
         _log_sync_followup(console, "running threads expand")
         try:
@@ -870,7 +898,6 @@ async def _sync_collection_ready(
                         "sync completed, but auto-embedding was skipped; "
                         f"run 'tweetxvault embed' later ({exc})",
                     )
-                store.optimize()
             store.close()
     finally:
         lock.release()

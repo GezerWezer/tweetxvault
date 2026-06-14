@@ -1,3 +1,10 @@
+- 2026-06-14 (Dead Tweet Tracking & Resurrection)
+  - Implemented `TerminalUnavailableError` parsing in `extractor.py` and `threads.py` to identify tombstoned tweets (deleted, suspended, private) via `__tombstone__` objects.
+  - Updated `ArchiveStore` to safely record dead tweets with `enrichment_state="terminal_unavailable"`, skipping them on future thread/enrich runs to prevent infinite request loops.
+  - Added an automatic "resurrect dead tweets" trickle pass to the end of normal sync jobs. It periodically tests the oldest 500 dead tweets to catch if an author restored them.
+  - Added `--retry-failed` flag to `tweetxvault sync` commands to allow manually attempting a bulk resurrection of all previously dead tweets.
+  - Updated `tweetxvault stats` to display the number of terminal enrichments and a new "resurrected" counter for restored tweets.
+
 - 2026-06-13 (Native SQLite Migration Complete)
   - Completely scrapped LanceDB and PyArrow dependencies, rewriting `ArchiveStore` to use Python's built-in `sqlite3` natively.
   - Ported all data parsing and search logic (FTS5) to raw SQLite queries for highly performant concurrent web server reads.

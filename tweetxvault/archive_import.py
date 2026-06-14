@@ -1019,6 +1019,42 @@ async def _run_archive_followup(
         pending_enrichment=pending,
     )
 
+async def resurrect_dead_tweets(
+    *,
+    limit: int | None,
+    config: AppConfig,
+    paths: XDGPaths,
+    auth_bundle: ResolvedAuthBundle | None = None,
+    transport: httpx.AsyncBaseTransport | None = None,
+    console: Console | None = None,
+    status: Callable[[str], None] | None = None,
+) -> ArchiveEnrichResult:
+    config, paths = resolve_job_context(config=config, paths=paths)
+    console = console or Console(stderr=True)
+    warnings: list[str] = []
+    
+    if auth_bundle is None:
+        auth_bundle = resolve_auth_bundle(config)
+
+    succeeded, terminal, transient, remaining = await _enrich_pending_rows(
+        limit=limit,
+        config=config,
+        paths=paths,
+        auth_bundle=auth_bundle,
+        transport=transport,
+        console=console,
+        resurrect_dead=True,
+        status=status,
+    )
+    
+    return ArchiveEnrichResult(
+        warnings=warnings,
+        reconciled_collections=0,
+        detail_lookups=succeeded,
+        detail_terminal_unavailable=terminal,
+        detail_transient_failures=transient,
+        pending_enrichment=remaining,
+    )
 
 async def _enrich_pending_rows(
     *,
@@ -1028,20 +1064,28 @@ async def _enrich_pending_rows(
     auth_bundle: ResolvedAuthBundle,
     transport: httpx.AsyncBaseTransport | None,
     console: Console,
+    resurrect_dead: bool = False,
     status: Callable[[str], None] | None = None,
 ) -> tuple[int, int, int, int]:
     if limit is not None and limit <= 0:
         async with locked_archive_job(config=config, paths=paths, console=console) as job:
+            if resurrect_dead:
+                return 0, 0, 0, len(job.store.list_dead_tweets_for_resurrection())
             return 0, 0, 0, len(job.store.list_tweet_objects_for_enrichment())
 
     async with locked_archive_job(config=config, paths=paths, console=console) as job:
         store = job.store
-        rows = store.list_tweet_objects_for_enrichment(limit=limit)
+        if resurrect_dead:
+            rows = store.list_dead_tweets_for_resurrection(limit=limit)
+            desc_type = "dead tweets for resurrection"
+        else:
+            rows = store.list_tweet_objects_for_enrichment(limit=limit)
+            desc_type = "pending tweets"
         if not rows:
-            _emit_status(status, "no pending detail enrichment rows")
+            _emit_status(status, f"no {desc_type} available")
             return 0, 0, 0, 0
         limit_suffix = "" if limit is None else f" (limit {limit})"
-        _emit_status(status, f"detail enrichment over {len(rows)} pending tweets{limit_suffix}")
+        _emit_status(status, f"detail enrichment over {len(rows)} {desc_type}{limit_suffix}")
         query_store = QueryIdStore(paths)
         query_ids = await resolve_query_ids(
             query_store,
@@ -1150,16 +1194,29 @@ async def _enrich_pending_rows(
                             transient += 1
                             wrote_row = True
                     except Exception as exc:
-                        store.update_tweet_object_enrichment(
-                            tweet_id,
-                            enrichment_state="transient_failure",
-                            enrichment_checked_at=utc_now(),
-                            enrichment_http_status=None,
-                            enrichment_reason=exc.__class__.__name__,
-                            cursor=write_buffer,
-                        )
-                        transient += 1
-                        wrote_row = True
+                        from tweetxvault.exceptions import TerminalUnavailableError
+                        if isinstance(exc, TerminalUnavailableError):
+                            store.update_tweet_object_enrichment(
+                                tweet_id,
+                                enrichment_state="terminal_unavailable",
+                                enrichment_checked_at=utc_now(),
+                                enrichment_http_status=404,
+                                enrichment_reason="TerminalUnavailableError",
+                                cursor=write_buffer,
+                            )
+                            # don't increment transient
+                            wrote_row = True
+                        else:
+                            store.update_tweet_object_enrichment(
+                                tweet_id,
+                                enrichment_state="transient_failure",
+                                enrichment_checked_at=utc_now(),
+                                enrichment_http_status=None,
+                                enrichment_reason=exc.__class__.__name__,
+                                cursor=write_buffer,
+                            )
+                            transient += 1
+                            wrote_row = True
                     if wrote_row:
                         buffered_writes += 1
                         if buffered_writes >= _DETAIL_ENRICH_WRITE_BATCH:

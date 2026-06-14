@@ -1274,7 +1274,7 @@ async def test_article_backfill_refreshes_older_duplicate_pages(
     store = open_archive_store(paths, create=False)
     assert store is not None
     try:
-        article_rows = store.table.search().where("record_type = 'article'").to_list()
+        article_rows = store._query(expr="record_type = 'article'")
         assert len(article_rows) == 1
         assert article_rows[0]["tweet_id"] == "2"
         assert article_rows[0]["title"] == "Older article"

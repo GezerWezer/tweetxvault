@@ -499,6 +499,7 @@ def _sync_followup_plan(
     skip_media: bool,
     skip_unfurl: bool,
     skip_threads: bool,
+    retry_failed: bool = False,
 ) -> SyncFollowupPlan:
     return SyncFollowupPlan(
         enrich=not skip_enrich,
@@ -506,6 +507,7 @@ def _sync_followup_plan(
         media=not skip_media,
         unfurl=not skip_unfurl,
         threads=not skip_threads,
+        retry_failed=retry_failed,
     )
 
 
@@ -524,6 +526,7 @@ def _run_sync_all_command(
     skip_media: bool,
     skip_unfurl: bool,
     skip_threads: bool,
+    retry_failed: bool,
 ) -> None:
     followups = _sync_followup_plan(
         skip_enrich=skip_enrich,
@@ -531,6 +534,7 @@ def _run_sync_all_command(
         skip_media=skip_media,
         skip_unfurl=skip_unfurl,
         skip_threads=skip_threads,
+        retry_failed=retry_failed,
     )
     console, outcome = _run_sync_command(
         browser=browser,
@@ -574,27 +578,29 @@ def sync_default(
     profile_path: SYNC_PROFILE_PATH_OPTION = None,
     skip_enrich: SYNC_SKIP_ENRICH_OPTION = False,
     skip_articles: SYNC_SKIP_ARTICLES_OPTION = False,
-    skip_media: SYNC_SKIP_MEDIA_OPTION = False,
-    skip_unfurl: SYNC_SKIP_UNFURL_OPTION = False,
-    skip_threads: SYNC_SKIP_THREADS_OPTION = False,
-) -> None:
-    if ctx.invoked_subcommand is not None:
-        return
-    _run_sync_all_command(
-        full=full,
-        backfill=backfill,
-        article_backfill=article_backfill,
-        head_only=head_only,
-        limit=limit,
-        browser=browser,
-        profile=profile,
-        profile_path=profile_path,
-        skip_enrich=skip_enrich,
-        skip_articles=skip_articles,
-        skip_media=skip_media,
-        skip_unfurl=skip_unfurl,
-        skip_threads=skip_threads,
-    )
+        skip_media: SYNC_SKIP_MEDIA_OPTION = False,
+        skip_unfurl: SYNC_SKIP_UNFURL_OPTION = False,
+        skip_threads: SYNC_SKIP_THREADS_OPTION = False,
+        retry_failed: Annotated[bool, typer.Option("--retry-failed", help="Retry all previously failed/dead tweets in one batch.")] = False,
+    ) -> None:
+        if ctx.invoked_subcommand is not None:
+            return
+        _run_sync_all_command(
+            full=full,
+            backfill=backfill,
+            article_backfill=article_backfill,
+            head_only=head_only,
+            limit=limit,
+            browser=browser,
+            profile=profile,
+            profile_path=profile_path,
+            skip_enrich=skip_enrich,
+            skip_articles=skip_articles,
+            skip_media=skip_media,
+            skip_unfurl=skip_unfurl,
+            skip_threads=skip_threads,
+            retry_failed=retry_failed,
+        )
 
 
 def _register_sync_collection_command(collection: str):
@@ -621,6 +627,7 @@ def _register_sync_collection_command(collection: str):
         skip_media: SYNC_SKIP_MEDIA_OPTION = False,
         skip_unfurl: SYNC_SKIP_UNFURL_OPTION = False,
         skip_threads: SYNC_SKIP_THREADS_OPTION = False,
+        retry_failed: Annotated[bool, typer.Option("--retry-failed", help="Retry all previously failed/dead tweets in one batch.")] = False,
     ) -> None:
         followups = _sync_followup_plan(
             skip_enrich=skip_enrich,
@@ -628,6 +635,7 @@ def _register_sync_collection_command(collection: str):
             skip_media=skip_media,
             skip_unfurl=skip_unfurl,
             skip_threads=skip_threads,
+            retry_failed=retry_failed,
         )
         console, result = _run_sync_command(
             browser=browser,
@@ -900,6 +908,7 @@ def sync_everything(
     skip_media: SYNC_SKIP_MEDIA_OPTION = False,
     skip_unfurl: SYNC_SKIP_UNFURL_OPTION = False,
     skip_threads: SYNC_SKIP_THREADS_OPTION = False,
+    retry_failed: Annotated[bool, typer.Option("--retry-failed", help="Retry all previously failed/dead tweets in one batch.")] = False,
 ) -> None:
     _run_sync_all_command(
         full=full,
@@ -915,6 +924,7 @@ def sync_everything(
         skip_media=skip_media,
         skip_unfurl=skip_unfurl,
         skip_threads=skip_threads,
+        retry_failed=retry_failed,
     )
 
 
@@ -1566,6 +1576,7 @@ def stats_archive() -> None:
                 f"{stats.pending_enrichment_count} pending, "
                 f"{stats.transient_enrichment_failure_count} retryable failures, "
                 f"{stats.terminal_enrichment_count} terminal, "
+                f"{stats.resurrected_enrichment_count} resurrected, "
                 f"{stats.done_enrichment_count} done"
             ),
         )
@@ -1655,8 +1666,7 @@ def rehydrate_archive() -> None:
             with tqdm(total=total, desc="rehydrating", unit="tweets") as pbar:
                 result = store.rehydrate_from_raw_json(progress=pbar.update)
             if result.tweets_updated or result.secondary_records:
-                console.print("compacting archive...")
-                store.optimize()
+                pass
             console.print(
                 f"rehydrated {result.tweets_updated} tweet rows and rebuilt "
                 f"{result.secondary_records} secondary rows"

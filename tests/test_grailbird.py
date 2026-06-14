@@ -149,7 +149,7 @@ def test_convert_archive_round_trips_into_import_x_archive(
     store = open_archive_store(paths, create=False)
     assert store is not None
     assert store.get_archive_owner_id() == "926"
-    tweet_row = store.table.search().where("row_key = 'tweet:tweet::100'").limit(1).to_list()[0]
+    tweet_row = store._query(expr="row_key = 'tweet:tweet::100'", limit=1)[0]
     assert tweet_row["author_username"] == "bradbarrish"
     raw_json = json.loads(tweet_row["raw_json"])
     urls = (raw_json.get("legacy") or {}).get("entities", {}).get("urls", [])
@@ -186,7 +186,7 @@ def test_convert_archive_without_user_details_keeps_owner_unset(
     assert store.get_archive_owner_id() is None
     store.ensure_archive_owner_id("42")
     assert store.get_archive_owner_id() == "42"
-    tweet_row = store.table.search().where("row_key = 'tweet:tweet::100'").limit(1).to_list()[0]
+    tweet_row = store._query(expr="row_key = 'tweet:tweet::100'", limit=1)[0]
     assert tweet_row["author_id"] is None
     assert tweet_row["author_username"] is None
     store.close()

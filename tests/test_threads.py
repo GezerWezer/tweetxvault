@@ -118,13 +118,13 @@ async def test_expand_threads_fetches_membership_and_linked_status(
     store = open_archive_store(paths, create=False)
     assert store is not None
     try:
-        membership_rows = store.table.search().where("record_type = 'tweet'").to_list()
+        membership_rows = store._query(expr="record_type = 'tweet'")
         assert [row["tweet_id"] for row in membership_rows] == ["100"]
 
-        tweet_object_rows = store.table.search().where("record_type = 'tweet_object'").to_list()
+        tweet_object_rows = store._query(expr="record_type = 'tweet_object'")
         assert {row["tweet_id"] for row in tweet_object_rows} == {"100", "200", "300"}
 
-        relation_rows = store.table.search().where("record_type = 'tweet_relation'").to_list()
+        relation_rows = store._query(expr="record_type = 'tweet_relation'")
         relations = {
             (row["tweet_id"], row["relation_type"], row["target_tweet_id"]) for row in relation_rows
         }

@@ -71,7 +71,7 @@ def unwrap_tweet_result(result: Any) -> dict[str, Any] | None:
     if typename == "TweetWithVisibilityResults":
         return unwrap_tweet_result(result.get("tweet"))
     if typename in {"TweetTombstone", "TweetUnavailable"}:
-        return None
+        return {"__tombstone__": True}
     if result.get("rest_id"):
         return result
     return None

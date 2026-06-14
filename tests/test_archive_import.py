@@ -345,7 +345,7 @@ def test_import_x_archive_directory_populates_archive_and_copies_media(
     assert store.get_archive_owner_id() == "42"
     assert store.counts()["import_manifests"] == 1
 
-    tweet_rows = store.table.search().where("record_type = 'tweet'").to_list()
+    tweet_rows = store._query(expr="record_type = 'tweet'")
     row_by_key = {(row["collection_type"], row["tweet_id"]): row for row in tweet_rows}
     assert row_by_key[("tweet", "100")]["source"] == "x_archive"
     assert row_by_key[("tweet", "200")]["deleted_at"] == "Mon Mar 16 00:00:00 +0000 2026"
@@ -353,20 +353,20 @@ def test_import_x_archive_directory_populates_archive_and_copies_media(
 
     tweet_objects = {
         row["tweet_id"]: row
-        for row in store.table.search().where("record_type = 'tweet_object'").to_list()
+        for row in store._query(expr="record_type = 'tweet_object'")
     }
     assert tweet_objects["100"]["source"] == "x_archive"
     assert tweet_objects["200"]["enrichment_state"] == "terminal_unavailable"
     assert tweet_objects["200"]["enrichment_reason"] == "deleted"
     assert tweet_objects["300"]["enrichment_state"] == "pending"
 
-    media_rows = store.table.search().where("record_type = 'media'").to_list()
+    media_rows = store._query(expr="record_type = 'media'")
     assert len(media_rows) == 1
     assert media_rows[0]["download_state"] == "done"
     assert media_rows[0]["local_path"] == "media/100/3_500.jpg"
     assert (paths.data_dir / media_rows[0]["local_path"]).exists()
 
-    manifest_rows = store.table.search().where("record_type = 'import_manifest'").to_list()
+    manifest_rows = store._query(expr="record_type = 'import_manifest'")
     manifest_counts = json.loads(manifest_rows[0]["counts_json"])
     assert manifest_counts["pending_enrichment"] == 1
     store.close()
@@ -529,7 +529,7 @@ def test_repeated_import_can_reuse_existing_archive_for_enrich_followup(
 
     store = open_archive_store(paths, create=False)
     assert store is not None
-    manifest_rows = store.table.search().where("record_type = 'import_manifest'").to_list()
+    manifest_rows = store._query(expr="record_type = 'import_manifest'")
     manifest_counts = json.loads(manifest_rows[0]["counts_json"])
     assert manifest_counts["detail_lookups"] == 3
     assert manifest_counts["pending_enrichment"] == 4
@@ -578,7 +578,7 @@ def test_repeated_import_enrich_preserves_existing_manifest_warnings(
     store = open_archive_store(paths, create=False)
     assert store is not None
     manifest_row = (
-        store.table.search().where("record_type = 'import_manifest'").limit(1).to_list()[0]
+        store._query(expr="record_type = 'import_manifest'", limit=1)[0]
     )
     manifest_warnings = json.loads(manifest_row["warnings_json"])
     assert expected_warning in manifest_warnings
@@ -845,11 +845,11 @@ def test_archive_import_does_not_downgrade_existing_live_tweet_object(
 
     store = open_archive_store(paths, create=False)
     assert store is not None
-    tweet_object = store.table.search().where("row_key = 'tweet_object:300'").limit(1).to_list()[0]
+    tweet_object = store._query(expr="row_key = 'tweet_object:300'", limit=1)[0]
     assert tweet_object["source"] == "live_graphql"
     assert tweet_object["text"] == "live bookmark tweet"
     assert tweet_object["enrichment_state"] == "done"
-    like_row = store.table.search().where("row_key = 'tweet:like::300'").limit(1).to_list()[0]
+    like_row = store._query(expr="row_key = 'tweet:like::300'", limit=1)[0]
     assert like_row["source"] == "x_archive"
     store.close()
 
@@ -883,7 +883,7 @@ def test_live_sync_can_upgrade_archive_like_placeholder_after_import(
         backfill_cursor=None,
         backfill_incomplete=False,
     )
-    tweet_object = store.table.search().where("row_key = 'tweet_object:300'").limit(1).to_list()[0]
+    tweet_object = store._query(expr="row_key = 'tweet_object:300'", limit=1)[0]
     assert tweet_object["source"] == "live_graphql"
     assert tweet_object["text"] == "live liked tweet"
     assert tweet_object["enrichment_state"] == "done"
@@ -1014,7 +1014,7 @@ def test_import_x_archive_reuses_existing_thumbnail_destination(
     assert result.counts["media_files_copied"] == 0
     store = open_archive_store(paths, create=False)
     assert store is not None
-    media_row = store.table.search().where("record_type = 'media'").limit(1).to_list()[0]
+    media_row = store._query(expr="record_type = 'media'", limit=1)[0]
     assert media_row["download_state"] == "pending"
     assert media_row["local_path"] is None
     assert media_row["thumbnail_local_path"] == "media/100/7_500-poster.jpg"
@@ -1046,7 +1046,7 @@ def test_import_x_archive_preserves_main_and_thumbnail_updates_for_video_media(
     assert result.counts["media_files_copied"] == 2
     store = open_archive_store(paths, create=False)
     assert store is not None
-    media_row = store.table.search().where("record_type = 'media'").limit(1).to_list()[0]
+    media_row = store._query(expr="record_type = 'media'", limit=1)[0]
     assert media_row["local_path"] == "media/100/7_500.mp4"
     assert media_row["thumbnail_local_path"] == "media/100/7_500-poster.jpg"
     assert media_row["download_state"] == "done"
@@ -1088,11 +1088,11 @@ def test_archive_deleted_tweet_preserves_existing_live_fields(
 
     store = open_archive_store(paths, create=False)
     assert store is not None
-    tweet_row = store.table.search().where("row_key = 'tweet:tweet::200'").limit(1).to_list()[0]
+    tweet_row = store._query(expr="row_key = 'tweet:tweet::200'", limit=1)[0]
     assert tweet_row["source"] == "live_graphql"
     assert tweet_row["text"] == "live deleted tweet"
     assert tweet_row["deleted_at"] == "Mon Mar 16 00:00:00 +0000 2026"
-    tweet_object = store.table.search().where("row_key = 'tweet_object:200'").limit(1).to_list()[0]
+    tweet_object = store._query(expr="row_key = 'tweet_object:200'", limit=1)[0]
     assert tweet_object["source"] == "live_graphql"
     assert tweet_object["text"] == "live deleted tweet"
     assert tweet_object["deleted_at"] == "Mon Mar 16 00:00:00 +0000 2026"
@@ -1140,11 +1140,11 @@ def test_import_x_archive_detail_api_errors_become_transient_failures(
 
     store = open_archive_store(paths, create=False)
     assert store is not None
-    tweet_object = store.table.search().where("row_key = 'tweet_object:300'").limit(1).to_list()[0]
+    tweet_object = store._query(expr="row_key = 'tweet_object:300'", limit=1)[0]
     assert tweet_object["enrichment_state"] == "transient_failure"
     assert tweet_object["enrichment_http_status"] == 500
     manifest_row = (
-        store.table.search().where("record_type = 'import_manifest'").limit(1).to_list()[0]
+        store._query(expr="record_type = 'import_manifest'", limit=1)[0]
     )
     manifest_counts = json.loads(manifest_row["counts_json"])
     assert manifest_counts["detail_transient_failures"] == 1
@@ -1194,11 +1194,11 @@ def test_import_x_archive_detail_stale_query_id_leaves_rows_retryable(
 
     store = open_archive_store(paths, create=False)
     assert store is not None
-    tweet_object = store.table.search().where("row_key = 'tweet_object:300'").limit(1).to_list()[0]
+    tweet_object = store._query(expr="row_key = 'tweet_object:300'", limit=1)[0]
     assert tweet_object["enrichment_state"] == "pending"
     assert tweet_object["enrichment_http_status"] is None
     manifest_row = (
-        store.table.search().where("record_type = 'import_manifest'").limit(1).to_list()[0]
+        store._query(expr="record_type = 'import_manifest'", limit=1)[0]
     )
     manifest_counts = json.loads(manifest_row["counts_json"])
     assert manifest_counts["pending_enrichment"] == 1
@@ -1232,7 +1232,7 @@ def test_import_x_archive_preserves_attempt_start_time(
     store = open_archive_store(paths, create=False)
     assert store is not None
     manifest_row = (
-        store.table.search().where("record_type = 'import_manifest'").limit(1).to_list()[0]
+        store._query(expr="record_type = 'import_manifest'", limit=1)[0]
     )
     assert manifest_row["import_started_at"] == "2026-03-17T00:00:00Z"
     assert manifest_row["import_completed_at"] == "2026-03-17T00:00:03Z"
@@ -1281,7 +1281,7 @@ def test_sampled_debug_import_stays_non_completed_and_full_import_can_rerun(
     store = open_archive_store(paths, create=False)
     assert store is not None
     manifest_row = (
-        store.table.search().where("record_type = 'import_manifest'").limit(1).to_list()[0]
+        store._query(expr="record_type = 'import_manifest'", limit=1)[0]
     )
     assert manifest_row["status"] == "sampled"
     store.close()
@@ -1299,7 +1299,7 @@ def test_sampled_debug_import_stays_non_completed_and_full_import_can_rerun(
     store = open_archive_store(paths, create=False)
     assert store is not None
     manifest_row = (
-        store.table.search().where("record_type = 'import_manifest'").limit(1).to_list()[0]
+        store._query(expr="record_type = 'import_manifest'", limit=1)[0]
     )
     assert manifest_row["status"] == "completed"
     store.close()
@@ -1335,7 +1335,7 @@ def test_interrupted_import_marks_manifest_failed_and_rerun_reuses_archive_captu
     store = open_archive_store(paths, create=False)
     assert store is not None
     manifest_row = (
-        store.table.search().where("record_type = 'import_manifest'").limit(1).to_list()[0]
+        store._query(expr="record_type = 'import_manifest'", limit=1)[0]
     )
     assert manifest_row["status"] == "failed"
     raw_capture_count = store.counts()["raw_captures"]
@@ -1358,7 +1358,7 @@ def test_interrupted_import_marks_manifest_failed_and_rerun_reuses_archive_captu
     store = open_archive_store(paths, create=False)
     assert store is not None
     manifest_row = (
-        store.table.search().where("record_type = 'import_manifest'").limit(1).to_list()[0]
+        store._query(expr="record_type = 'import_manifest'", limit=1)[0]
     )
     assert manifest_row["status"] == "completed"
     assert store.counts()["raw_captures"] == raw_capture_count
@@ -1400,7 +1400,7 @@ def test_import_x_archive_regen_clears_archive_rows_but_keeps_live_rows(
     store = open_archive_store(paths, create=False)
     assert store is not None
     first_raw_capture_count = store.counts()["raw_captures"]
-    media_row = store.table.search().where("record_type = 'media'").limit(1).to_list()[0]
+    media_row = store._query(expr="record_type = 'media'", limit=1)[0]
     original_media_path = paths.data_dir / str(media_row["local_path"])
     stale_media_path = paths.data_dir / "media" / "100" / "stale.jpg"
     stale_media_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1427,7 +1427,7 @@ def test_import_x_archive_regen_clears_archive_rows_but_keeps_live_rows(
     store = open_archive_store(paths, create=False)
     assert store is not None
     assert store.counts()["raw_captures"] == first_raw_capture_count
-    live_row = store.table.search().where("row_key = 'tweet:bookmark::900'").limit(1).to_list()[0]
+    live_row = store._query(expr="row_key = 'tweet:bookmark::900'", limit=1)[0]
     assert live_row["source"] == "live_graphql"
     assert store.counts()["import_manifests"] == 1
     store.close()

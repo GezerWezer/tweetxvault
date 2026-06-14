@@ -7,6 +7,10 @@ class TweetXVaultError(RuntimeError):
     """Base exception for the project."""
 
 
+class TerminalUnavailableError(TweetXVaultError):
+    """Raised when a requested resource (like a tweet) is permanently unavailable."""
+
+
 class ConfigError(TweetXVaultError):
     """Raised for local configuration issues."""
 

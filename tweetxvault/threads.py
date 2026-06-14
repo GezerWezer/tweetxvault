@@ -113,7 +113,8 @@ async def _fetch_detail(
     tweets = parse_tweet_detail_tweets(payload)
     focal = parse_tweet_detail_response(payload, tweet_id)
     if focal is None:
-        raise ValueError(f"TweetDetail did not include focal tweet {tweet_id}.")
+        from tweetxvault.exceptions import TerminalUnavailableError
+        raise TerminalUnavailableError(f"TweetDetail did not include focal tweet {tweet_id}.")
     return payload, tweets
 
 
@@ -179,6 +180,13 @@ async def _try_expand_target(
             mark_dirty=mark_dirty,
         )
     except Exception as exc:
+        from tweetxvault.exceptions import TerminalUnavailableError
+        if isinstance(exc, TerminalUnavailableError):
+            result.failed += 1
+            _log_thread_status(console, tweet_id, "terminal unavailable (dead/private/suspended)")
+            store.persist_terminal_unavailable_target(tweet_id, "ThreadExpandDetail")
+            expanded_targets.add(tweet_id)
+            return
         result.failed += 1
         _log_thread_status(console, tweet_id, f"failed ({exc})")
         return
