@@ -3,6 +3,7 @@
   - Added a "Browse N Quote Tweets" button directly in the thread detail view. 
   - To prevent linking to unarchived/private quotes, the button dynamically queries the local SQLite `archive` table (via `relation_type = 'quote_of'`) to calculate the exact number of quote tweets actually present in the archive, ignoring Twitter's inflated `legacy.quote_count`.
   - Added a new `GET /api/tweets/{tweet_id}/quotes` endpoint to `server.py` to power the chronological scrollable view.
+  - Fixed UnboundLocalError bug where sorting text searches crashed because `newest_key` was scoped locally inside an unrelated `elif` block.
 
 - 2026-06-16 (Article Cards & Linked-Status Crawler Limits)
   - Fixed Article Card UI missing embed from quote tweets in the main view.

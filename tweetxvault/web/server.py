@@ -238,6 +238,23 @@ def api_tweets(
         elif sort == "default":
             effective_sort = "relevance" if text_query else "newest"
 
+        def sort_index_val(row):
+            try: return int(row.get("sort_index") or 0)
+            except: return 0
+            
+        def newest_key(row):
+            try:
+                dt = datetime.strptime(row.get("created_at") or "", "%a %b %d %H:%M:%S %z %Y")
+                return (0, -dt.timestamp(), -sort_index_val(row), row.get("tweet_id") or "")
+            except: return (1, 0.0, -sort_index_val(row), row.get("tweet_id") or "")
+                
+        def oldest_key(row):
+            try:
+                dt = datetime.strptime(row.get("created_at") or "", "%a %b %d %H:%M:%S %z %Y")
+                return (0, dt.timestamp(), sort_index_val(row), row.get("tweet_id") or "")
+            except: return (1, datetime.max.timestamp(), sort_index_val(row), row.get("tweet_id") or "")
+
+
         if not post_filters and not text_query and not pushable_exprs:
             # Fast path
             sorted_ids = store.get_sorted_tweet_ids(internal_col, sort=effective_sort)
@@ -257,22 +274,6 @@ def api_tweets(
                 filter_expr += f" AND {expr}"
                 
             tweet_rows = store._query(expr=filter_expr, cols=["tweet_id", "created_at", "sort_index"])
-            
-            def sort_index_val(row):
-                try: return int(row.get("sort_index") or 0)
-                except: return 0
-                
-            def newest_key(row):
-                try:
-                    dt = datetime.strptime(row.get("created_at") or "", "%a %b %d %H:%M:%S %z %Y")
-                    return (0, -dt.timestamp(), -sort_index_val(row), row.get("tweet_id") or "")
-                except: return (1, 0.0, -sort_index_val(row), row.get("tweet_id") or "")
-                    
-            def oldest_key(row):
-                try:
-                    dt = datetime.strptime(row.get("created_at") or "", "%a %b %d %H:%M:%S %z %Y")
-                    return (0, dt.timestamp(), sort_index_val(row), row.get("tweet_id") or "")
-                except: return (1, datetime.max.timestamp(), sort_index_val(row), row.get("tweet_id") or "")
 
             if effective_sort == "oldest":
                 tweet_rows.sort(key=oldest_key)
