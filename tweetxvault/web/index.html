@@ -226,7 +226,7 @@
 
                                     <div class="text-[15px] whitespace-pre-wrap leading-normal break-words" x-html="formatText({text: getQuoteText(getQuoteTweet(tweet)), raw_json: getQuoteTweet(tweet)})" @click="handleTextClick($event)"></div>
                                     <div x-html="renderMediaGrid(tweet.qt_media)" class="mt-2" @click.stop></div>
-                                    <div x-html="renderCard(getQuoteTweet(tweet))" @click.stop></div>
+                                    <div x-html="renderCard({raw_json: getQuoteTweet(tweet)})" @click.stop></div>
                                 </div>
                             </template>
 
@@ -835,19 +835,36 @@
                         text = text.replace(/^(@\w+\s+)+/, '');
                     }
                     
+                    let urlMap = {};
                     if (raw && raw.legacy) {
                         const urlsToRemove = [];
                         if (raw.legacy.entities?.media) urlsToRemove.push(...raw.legacy.entities.media.map(m => m.url));
                         if (raw.legacy.extended_entities?.media) urlsToRemove.push(...raw.legacy.extended_entities.media.map(m => m.url));
                         if (raw.legacy.quoted_status_permalink?.url) urlsToRemove.push(raw.legacy.quoted_status_permalink.url);
                         
+                        if (raw.card && raw.card.legacy && raw.card.legacy.url) urlsToRemove.push(raw.card.legacy.url);
+                        if (raw.card && raw.card.url) urlsToRemove.push(raw.card.url);
+                        
                         urlsToRemove.filter(Boolean).forEach(u => {
                             text = text.split(u).join('');
                         });
+                        
+                        if (raw.legacy.entities?.urls) {
+                            raw.legacy.entities.urls.forEach(u => {
+                                if (!urlsToRemove.includes(u.url)) {
+                                    urlMap[u.url] = `<a href="${u.expanded_url}" target="_blank" class="text-[#1d9bf0] hover:underline" @click.stop>${u.display_url}</a>`;
+                                }
+                            });
+                        }
                     }
                     
                     text = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
                     text = text.replace(/@(\w+)/g, '<span class="mention text-[#1d9bf0] hover:underline cursor-pointer" data-user="$1">@$1</span>');
+                    
+                    Object.keys(urlMap).forEach(u => {
+                        text = text.split(u).join(urlMap[u]);
+                    });
+                    
                     return text.trim();
                 },
 
@@ -919,15 +936,33 @@
                     } else if (name === 'summary' || name === 'summary_large_image') {
                         const title = binding.title?.string_value || '';
                         const desc = binding.description?.string_value || '';
-                        const url = binding.vanity_url?.string_value || '';
-                        if (title || desc) {
-                            html += `<div class="mt-3 border border-[var(--border-color)] rounded-xl overflow-hidden hover-bg transition">
+                        const vanityUrl = binding.vanity_url?.string_value || '';
+                        const expandedUrl = binding.card_url?.string_value || vanityUrl || '#';
+                        let imageHtml = '';
+                        
+                        if (name === 'summary_large_image') {
+                            const imgUrl = binding.thumbnail_image_original?.image_value?.url || 
+                                           binding.summary_photo_image_original?.image_value?.url || 
+                                           binding.thumbnail_image_x_large?.image_value?.url ||
+                                           binding.thumbnail_image?.image_value?.url || 
+                                           binding.photo_image_full_size?.image_value?.url || 
+                                           binding.summary_photo_image?.image_value?.url;
+                            if (imgUrl) {
+                                imageHtml = `<div class="w-full aspect-[1.91/1] bg-[var(--bg-tertiary)] overflow-hidden border-b border-[var(--border-color)]">
+                                                <img src="${imgUrl}" class="w-full h-full object-cover" loading="lazy">
+                                             </div>`;
+                            }
+                        }
+                        
+                        if (title || desc || imageHtml) {
+                            html += `<a href="${expandedUrl}" target="_blank" class="mt-3 block border border-[var(--border-color)] rounded-xl overflow-hidden hover-bg transition cursor-pointer">
+                                        ${imageHtml}
                                         <div class="p-3">
-                                            <div class="text-[13px] text-[var(--text-secondary)] mb-1">${url}</div>
-                                            <div class="text-[15px] text-[var(--text-primary)] font-bold" style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">${title}</div>
-                                            <div class="text-[14px] text-[var(--text-secondary)] mt-1" style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">${desc}</div>
+                                            <div class="text-[13px] text-[var(--text-secondary)] mb-1">${vanityUrl}</div>
+                                            <div class="text-[15px] text-[var(--text-primary)] font-bold leading-tight mb-1" style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">${title}</div>
+                                            <div class="text-[14px] text-[var(--text-secondary)]" style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">${desc}</div>
                                         </div>
-                                     </div>`;
+                                     </a>`;
                         }
                     }
                     return html;
