@@ -198,6 +198,12 @@ class ArchiveStore:
             END;
             """)
             self.conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS archive_ai AFTER INSERT ON archive BEGIN
+              INSERT INTO archive_fts(rowid, author_username, author_display_name, text, note_tweet_text)
+              VALUES (new.rowid, new.author_username, new.author_display_name, new.text, new.note_tweet_text);
+            END;
+            """)
+            self.conn.execute("""
             CREATE TRIGGER IF NOT EXISTS archive_au AFTER UPDATE ON archive BEGIN
               INSERT INTO archive_fts(archive_fts, rowid, author_username, author_display_name, text, note_tweet_text)
               VALUES('delete', old.rowid, old.author_username, old.author_display_name, old.text, old.note_tweet_text);
@@ -211,6 +217,10 @@ class ArchiveStore:
         q = f"SELECT {c} FROM archive"
         params = []
         if is_fts and query:
+            if c != "*":
+                c += ", bm25(archive_fts) as rank"
+            else:
+                c = "*, bm25(archive_fts) as rank"
             q = f"SELECT {c} FROM archive JOIN archive_fts ON archive.rowid = archive_fts.rowid WHERE archive_fts MATCH ?"
             params.append(query)
             
@@ -220,6 +230,9 @@ class ArchiveStore:
             else:
                 q += f" WHERE {expr}"
                 
+        if is_fts and query:
+            q += " ORDER BY rank"
+            
         if limit:
             q += f" LIMIT {limit}"
             
@@ -252,6 +265,17 @@ class ArchiveStore:
                 continue
             return value
         return None
+
+    def _parse_bool(self, val: Any) -> bool:
+        if val is None:
+            return False
+        if isinstance(val, bool):
+            return val
+        if isinstance(val, (int, float)):
+            return bool(val)
+        if isinstance(val, str):
+            return val.lower() in ("1", "true", "yes", "t", "y")
+        return bool(val)
 
     def _json_value(self, value: Any) -> str | None:
         if value is None:
@@ -669,7 +693,7 @@ class ArchiveStore:
             collection_type=collection_type,
             last_head_tweet_id=row["last_head_tweet_id"],
             backfill_cursor=row["backfill_cursor"],
-            backfill_incomplete=bool(row["backfill_incomplete"]),
+            backfill_incomplete=self._parse_bool(row["backfill_incomplete"]),
             updated_at=row["updated_at"],
         )
 
@@ -2253,7 +2277,7 @@ class ArchiveStore:
                     if isinstance(backfill_cursor, str) and backfill_cursor
                     else None
                 )
-                collection.backfill_incomplete = bool(row.get("backfill_incomplete"))
+                collection.backfill_incomplete = self._parse_bool(row.get("backfill_incomplete"))
             if (
                 isinstance(updated_at, str)
                 and updated_at
@@ -2519,6 +2543,10 @@ class ArchiveStore:
         }
         return ordered_collections, metadata_by_tweet_id
 
+    def _ordered_search_collections(self, collections: set[str]) -> list[str]:
+        order = {k: i for i, k in enumerate(SEARCH_COLLECTION_ORDER)}
+        return sorted(list(collections), key=lambda c: (order.get(c, 99), c))
+
     def _apply_sort(self, search_results: list[dict[str, Any]], sort: str) -> list[dict[str, Any]]:
         def sort_index_value(row: dict[str, Any]) -> int:
             raw = row.get("sort_index")
@@ -2548,6 +2576,26 @@ class ArchiveStore:
             
         sort_key_fn = oldest_sort_key if sort == "oldest" else newest_sort_key
         return sorted(search_results, key=sort_key_fn)
+
+    def _search_collection_expr(self, collections: set[str] | None) -> str:
+        if not collections:
+            return ""
+        if len(collections) == 1:
+            return f"collection_type = {_expr_quote(list(collections)[0])}"
+        formatted = ", ".join(_expr_quote(c) for c in collections)
+        return f"collection_type IN ({formatted})"
+
+    def _query_tokens(self, query: str) -> list[str]:
+        return [token.strip() for token in query.casefold().split() if token.strip()]
+
+    def _search_score(self, row: dict[str, Any]) -> float:
+        rank = row.get("rank")
+        if rank is not None:
+            return float(-rank)
+        score = row.get("match_score")
+        if score is not None:
+            return float(score)
+        return float("-inf")
 
     def _search_post_rows_fts(
         self, query: str, *, limit: int, collections: set[str] | None = None
@@ -2589,13 +2637,7 @@ class ArchiveStore:
     def _search_post_rows_vector(
         self, vector: list[float], *, limit: int, collections: set[str] | None = None
     ) -> list[dict[str, Any]]:
-        where_expr = _and_expr(
-            "record_type = 'tweet' AND embedding IS NOT NULL",
-            self._search_collection_expr(collections),
-        )
-        return (
-            []
-        )
+        return []
 
     def _search_post_rows_hybrid(
         self,
@@ -2605,10 +2647,7 @@ class ArchiveStore:
         limit: int,
         collections: set[str] | None = None,
     ) -> list[dict[str, Any]]:
-        where_expr = _and_expr("record_type = 'tweet'", self._search_collection_expr(collections))
-        return (
-            []
-        )
+        return []
 
     def _project_post_search_results(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         tweet_ids = [

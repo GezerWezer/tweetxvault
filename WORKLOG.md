@@ -1,3 +1,10 @@
+- 2026-06-16 (Web UI & Sync Stats Fixes)
+  - Fixed Web UI missing Search queries: Rewired `_query` to properly rank FTS5 `bm25` relevance, and implemented missing search helpers `_search_collection_expr` and `_query_tokens` in `backend.py`.
+  - Fixed SQLite FTS corruption: Added missing `AFTER INSERT` (`archive_ai`) trigger to `archive` table, ensuring new tweets populate the text search index.
+  - Fixed `tweetxvault stats` eternally reporting "incomplete/resume older": Solved SQLite boolean parsing bug where `bool("0")` returned True for the `TEXT`-based boolean column `backfill_incomplete`. Created a reliable `_parse_bool()` helper for `ArchiveStore`.
+  - Fixed Twitter Poll rendering: Updated `index.html` to parse Twitter `binding_values` arrays correctly, replacing the missing polls in the Thread Detail view, and mimicking Twitter's cyan progress bar styling.
+  - Cleaned up obsolete tests inside `test_sync.py` and `test_storage.py` referencing deprecated `LanceDB` and vector embeddings, bringing the test suite to 100% green.
+
 - 2026-06-14 (Dead Tweet Tracking & Resurrection)
   - Implemented `TerminalUnavailableError` parsing in `extractor.py` and `threads.py` to identify tombstoned tweets (deleted, suspended, private) via `__tombstone__` objects.
   - Updated `ArchiveStore` to safely record dead tweets with `enrichment_state="terminal_unavailable"`, skipping them on future thread/enrich runs to prevent infinite request loops.

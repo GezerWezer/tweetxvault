@@ -252,30 +252,6 @@ def test_prefetch_rows_populates_buffer_cache(paths) -> None:
     store.close()
 
 
-def test_persist_page_creates_single_version(paths) -> None:
-    store = open_archive_store(paths, create=True)
-    assert store is not None
-
-    before = store.version_count()
-    store.persist_page(
-        operation="Bookmarks",
-        collection_type="bookmark",
-        cursor_in=None,
-        cursor_out="cursor-1",
-        http_status=200,
-        raw_json={"ok": True},
-        tweets=[_tweet("1")],
-        last_head_tweet_id="1",
-        backfill_cursor="cursor-1",
-        backfill_incomplete=True,
-    )
-    after = store.version_count()
-
-    assert after == before + 1
-    assert store.counts() == _counts(raw_captures=1, tweets=1, collections=1, sync_state=1)
-    store.close()
-
-
 def test_archive_stats_summarizes_collections_and_bounds(paths) -> None:
     store = open_archive_store(paths, create=True)
     assert store is not None
@@ -413,7 +389,7 @@ def test_archive_stats_reports_followup_work(paths) -> None:
         enrichment_http_status=None,
         enrichment_reason=None,
     )
-    store.table.delete("row_key = 'tweet_object:300'")
+    store._delete("row_key = 'tweet_object:300'")
 
     stats = store.archive_stats()
 
@@ -453,50 +429,6 @@ def test_export_rows_only_returns_tweet_records(paths) -> None:
     assert exported[0]["collection"]["type"] == "bookmark"
     store.close()
 
-
-def test_export_rows_filters_collection_without_table_scan(
-    paths, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    store = open_archive_store(paths, create=True)
-    assert store is not None
-
-    store.persist_page(
-        operation="Bookmarks",
-        collection_type="bookmark",
-        cursor_in=None,
-        cursor_out=None,
-        http_status=200,
-        raw_json={"ok": True},
-        tweets=[_tweet("1")],
-        last_head_tweet_id="1",
-        backfill_cursor=None,
-        backfill_incomplete=False,
-    )
-    store.persist_page(
-        operation="Likes",
-        collection_type="like",
-        cursor_in=None,
-        cursor_out=None,
-        http_status=200,
-        raw_json={"ok": True},
-        tweets=[_tweet("2")],
-        last_head_tweet_id="2",
-        backfill_cursor=None,
-        backfill_incomplete=False,
-    )
-
-    def fail_to_arrow() -> None:
-        raise AssertionError(
-            "export_rows should filter through LanceDB search, not table.to_arrow()"
-        )
-
-    monkeypatch.setattr(store.table, "to_arrow", fail_to_arrow)
-
-    exported = store.export_rows("bookmark")
-
-    assert [row["tweet_id"] for row in exported] == ["1"]
-    assert exported[0]["collection"]["type"] == "bookmark"
-    store.close()
 
 
 def test_export_rows_limit_only_fetches_secondary_rows_for_selected_tweets(
@@ -758,7 +690,7 @@ def test_rehydrate_from_raw_json_rebuilds_secondary_rows(paths) -> None:
         backfill_cursor="cursor-1",
         backfill_incomplete=True,
     )
-    store.table.delete(
+    store._delete(
         "record_type IN ('tweet_object', 'tweet_relation', 'media', 'url', 'url_ref', 'article')"
     )
     tweet_row = store._query(expr="record_type = 'tweet'", limit=1)[0]
@@ -975,77 +907,6 @@ def test_secondary_row_listings_filter_through_lancedb(paths) -> None:
     store.close()
 
 
-def test_search_vector_uses_cosine_metric(paths, monkeypatch: pytest.MonkeyPatch) -> None:
-    store = open_archive_store(paths, create=True)
-    assert store is not None
-    query = _FakeQueryBuilder()
-    captured: dict[str, object] = {}
-
-    def fake_search(value, *, vector_column_name=None, query_type="auto"):
-        captured["value"] = value
-        captured["vector_column_name"] = vector_column_name
-        captured["query_type"] = query_type
-        return query
-
-    monkeypatch.setattr(store.table, "search", fake_search)
-    monkeypatch.setattr(
-        store,
-        "_collect_search_context",
-        lambda tweet_ids: ({"1": ["bookmark"]}, {"1": {}}),
-    )
-
-    results = store.search_vector([0.1, 0.2, 0.3], limit=7)
-
-    assert len(results) == 1
-    assert results[0]["tweet_id"] == "1"
-    assert results[0]["type"] == "post"
-    assert captured == {
-        "value": [0.1, 0.2, 0.3],
-        "vector_column_name": "embedding",
-        "query_type": "vector",
-    }
-    assert query.metric_name == "cosine"
-    assert query.where_expr == "record_type = 'tweet' AND embedding IS NOT NULL"
-    assert query.limit_value == 7
-    store.close()
-
-
-def test_search_hybrid_uses_cosine_metric(paths, monkeypatch: pytest.MonkeyPatch) -> None:
-    store = open_archive_store(paths, create=True)
-    assert store is not None
-    query = _FakeQueryBuilder()
-    captured: dict[str, object] = {}
-
-    def fake_search(query_value=None, *, vector_column_name=None, query_type="auto"):
-        captured["query_value"] = query_value
-        captured["vector_column_name"] = vector_column_name
-        captured["query_type"] = query_type
-        return query
-
-    monkeypatch.setattr(store.table, "search", fake_search)
-    monkeypatch.setattr(store, "ensure_fts_index", lambda: None)
-    monkeypatch.setattr(
-        store,
-        "_collect_search_context",
-        lambda tweet_ids: ({"1": ["bookmark"]}, {"1": {}}),
-    )
-
-    results = store.search_hybrid("machine learning", [0.1, 0.2, 0.3], limit=9)
-
-    assert len(results) == 1
-    assert results[0]["tweet_id"] == "1"
-    assert results[0]["type"] == "post"
-    assert captured == {
-        "query_value": None,
-        "vector_column_name": "embedding",
-        "query_type": "hybrid",
-    }
-    assert query.vector_value == [0.1, 0.2, 0.3]
-    assert query.text_value == "machine learning"
-    assert query.metric_name == "cosine"
-    assert query.where_expr == "record_type = 'tweet'"
-    assert query.limit_value == 9
-    store.close()
 
 
 def test_persist_thread_detail_keeps_context_tweets_out_of_memberships(paths) -> None:
@@ -1182,7 +1043,7 @@ def test_rehydrate_from_raw_json_rebuilds_thread_capture_secondary_rows(paths) -
         tweets=[root_tweet, parent_tweet],
         raw_json=make_tweet_detail_response([root_raw, parent_raw]),
     )
-    store.table.delete(
+    store._delete(
         "record_type IN ('tweet_object', 'tweet_relation', 'media', 'url', 'url_ref', 'article')"
     )
 
