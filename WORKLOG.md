@@ -1,3 +1,9 @@
+- 2026-06-16 (Web UI Quote Tweets)
+  - Implemented a new Quote Tweets browser natively inside the Web UI.
+  - Added a "Browse N Quote Tweets" button directly in the thread detail view. 
+  - To prevent linking to unarchived/private quotes, the button dynamically queries the local SQLite `archive` table (via `relation_type = 'quote_of'`) to calculate the exact number of quote tweets actually present in the archive, ignoring Twitter's inflated `legacy.quote_count`.
+  - Added a new `GET /api/tweets/{tweet_id}/quotes` endpoint to `server.py` to power the chronological scrollable view.
+
 - 2026-06-16 (Article Cards & Linked-Status Crawler Limits)
   - Fixed Article Card UI missing embed from quote tweets in the main view.
   - Stripped redundant `t.co` URLs corresponding to article cards from tweet text.

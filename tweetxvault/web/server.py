@@ -554,6 +554,11 @@ def api_tweet_thread(
         if not main_tweet:
             raise HTTPException(status_code=404, detail="Tweet not found")
             
+        quote_rows = store._query(
+            expr=f"record_type = 'tweet_relation' AND relation_type = 'quote_of' AND target_tweet_id = '{tweet_id}'"
+        )
+        main_tweet["local_quote_count"] = len(set(r.get("tweet_id") for r in quote_rows if r.get("tweet_id")))
+        
         parents, children_map = [], {}
         seen_parents = set()
         
@@ -613,6 +618,42 @@ def api_tweet_thread(
         }
     except HTTPException:
         raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/tweets/{tweet_id}/quotes")
+def api_tweet_quotes(
+    tweet_id: str,
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    store = Depends(get_store),
+    _auth: bool = Depends(verify_credentials)
+):
+    """Fetch quotes of a specific tweet."""
+    try:
+        start = (page - 1) * limit
+        end = start + limit
+        
+        rows = store._query(
+            expr=f"record_type = 'tweet_relation' AND relation_type = 'quote_of' AND target_tweet_id = '{tweet_id}'"
+        )
+        quote_tweet_ids = list(set(r.get("tweet_id") for r in rows if r.get("tweet_id")))
+        
+        # Sort chronologically (rough approximation via snowflake ID string comparison works well enough, or we let fetch_tweets_by_ids return them and then sort)
+        quote_tweet_ids.sort(reverse=True)
+        
+        total = len(quote_tweet_ids)
+        paginated_ids = quote_tweet_ids[start:end]
+        paginated_tweets = store.fetch_tweets_by_ids(paginated_ids)
+        
+        return {
+            "tweets": paginated_tweets,
+            "total": total,
+            "page": page,
+            "limit": limit
+        }
     except Exception as e:
         import traceback
         traceback.print_exc()
