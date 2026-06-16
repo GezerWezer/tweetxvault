@@ -593,30 +593,31 @@ def sync_default(
     profile_path: SYNC_PROFILE_PATH_OPTION = None,
     skip_enrich: SYNC_SKIP_ENRICH_OPTION = False,
     skip_articles: SYNC_SKIP_ARTICLES_OPTION = False,
-        skip_unfurl: SYNC_SKIP_UNFURL_OPTION = False,
-        skip_threads: SYNC_SKIP_THREADS_OPTION = False,
-        retry_failed: Annotated[bool, typer.Option("--retry-failed", help="Retry all previously failed/dead tweets in one batch.")] = False,
-        max_linked_depth: SYNC_MAX_LINKED_DEPTH_OPTION = None,
-    ) -> None:
-        if ctx.invoked_subcommand is not None:
-            return
-        _run_sync_all_command(
-            full=full,
-            backfill=backfill,
-            article_backfill=article_backfill,
-            head_only=head_only,
-            limit=limit,
-            browser=browser,
-            profile=profile,
-            profile_path=profile_path,
-            skip_enrich=skip_enrich,
-            skip_articles=skip_articles,
-            skip_media=skip_media,
-            skip_unfurl=skip_unfurl,
-            skip_threads=skip_threads,
-            retry_failed=retry_failed,
-            max_linked_depth=max_linked_depth,
-        )
+    skip_media: SYNC_SKIP_MEDIA_OPTION = False,
+    skip_unfurl: SYNC_SKIP_UNFURL_OPTION = False,
+    skip_threads: SYNC_SKIP_THREADS_OPTION = False,
+    retry_failed: Annotated[bool, typer.Option("--retry-failed", help="Retry all previously failed/dead tweets in one batch.")] = False,
+    max_linked_depth: SYNC_MAX_LINKED_DEPTH_OPTION = None,
+) -> None:
+    if ctx.invoked_subcommand is not None:
+        return
+    _run_sync_all_command(
+        full=full,
+        backfill=backfill,
+        article_backfill=article_backfill,
+        head_only=head_only,
+        limit=limit,
+        browser=browser,
+        profile=profile,
+        profile_path=profile_path,
+        skip_enrich=skip_enrich,
+        skip_articles=skip_articles,
+        skip_media=skip_media,
+        skip_unfurl=skip_unfurl,
+        skip_threads=skip_threads,
+        retry_failed=retry_failed,
+        max_linked_depth=max_linked_depth,
+    )
 
 
 def _register_sync_collection_command(collection: str):

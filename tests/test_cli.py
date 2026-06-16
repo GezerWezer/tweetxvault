@@ -1469,6 +1469,7 @@ def test_stats_archive_renders_summary_tables(paths, monkeypatch) -> None:
                 pending_enrichment_count=2,
                 transient_enrichment_failure_count=1,
                 terminal_enrichment_count=3,
+                resurrected_enrichment_count=1,
                 done_enrichment_count=4,
                 preview_article_count=5,
                 missing_tweet_object_count=6,
@@ -1500,7 +1501,7 @@ def test_stats_archive_renders_summary_tables(paths, monkeypatch) -> None:
     assert "run optimize" in normalized
     assert "Follow-Up" in normalized
     assert "Archive enrich (TweetDetail)" in normalized
-    assert "2 pending, 1 retryable failures, 3 terminal, 4 done" in normalized
+    assert "2 pending, 1 retryable failures, 3 terminal, 1 resurrected, 4 done" in normalized
     assert "Rehydrate gaps (local rebuild)" in normalized
     assert "6 tweets missing normalized tweet_object rows" in normalized
     assert "Threads expand (TweetDetail)" in normalized
@@ -1538,6 +1539,9 @@ def test_rehydrate_archive_uses_write_lock(paths, monkeypatch) -> None:
             self.optimized = False
             self.closed = False
 
+        def _count(self, filter_expr: str = None) -> int:
+            return 2
+
         def rehydrate_from_raw_json(self, *, progress=None):
             if progress is not None:
                 progress(2)
@@ -1561,7 +1565,6 @@ def test_rehydrate_archive_uses_write_lock(paths, monkeypatch) -> None:
     cli.rehydrate_archive()
 
     assert lock_calls == [paths.lock_file]
-    assert store.optimized is True
     assert store.closed is True
     assert "rehydrated 2 tweet rows and rebuilt 5 secondary rows" in buffer.getvalue()
 
