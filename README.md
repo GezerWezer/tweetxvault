@@ -1,22 +1,29 @@
 # tweetxvault
 
-A Python CLI tool for archiving your Twitter/X bookmarks, likes, and authored tweets into a local [LanceDB](https://lancedb.github.io/lancedb/) database, with support for importing official X archive exports into the same store. Runs unattended via cron, supports incremental sync with crash-safe resume, and preserves raw API responses so you never lose data.
+> **Fork Note:** This repository has substantially diverged from the original upstream repository. The original upstream uses LanceDB, PyArrow, and ONNX vector embeddings for its core storage and search. **This fork has completely scrapped LanceDB and vector embeddings** in favor of native SQLite and FTS5 due to extreme instability, OOM crashes, and Rust panics during vector indexing. It also introduces a fully interactive FastAPI/Vue.js Web UI, daemonization commands, advanced search operators, degree-of-separation thread limits, and dead-tweet tracking. If you are updating from the original upstream, see the [Migration](#migrating-from-lancedb) section below.
+
+A Python CLI tool for archiving your Twitter/X bookmarks, likes, and authored tweets into a local SQLite database, with support for importing official X archive exports into the same store. Runs unattended via cron, supports incremental sync with crash-safe resume, and preserves raw API responses so you never lose data.
 
 <img src="https://raw.githubusercontent.com/lhl/tweetxvault/main/docs/screenshot.png" alt="tweetxvault view all" width="800">
 
 ## Features
 
+### New Fork Additions
+- **Interactive Web UI** — browse your archive through a local web server with thread navigation, article cards, and theme support
+- **Advanced full-text search** — built-in native SQLite FTS5 search supporting exact phrases, exclusions, and Twitter-style operators (`from:`, `min_faves:`, `filter:images`)
+- **Tombstone tracking** — safely records deleted/suspended tweets to prevent infinite request loops, and periodically attempts to "resurrect" them
+- **Thread depth limits** — prevents infinite web-crawler-like snowballing by strictly enforcing degrees of separation from your root bookmarks and likes
+
+### Original Upstream Features
 - **Incremental sync** — fetches only new items by default; resumes interrupted backfills automatically
 - **Official X archive import** — imports authored tweets, deleted tweets, likes, and exported media from official X archive ZIPs/directories into the same local archive
 - **Raw capture preservation** — every API response page is stored verbatim alongside parsed tweet records
 - **Secondary object extraction** — archives canonical tweet objects, attached-tweet relations, media metadata, URL refs, and article payloads alongside collection memberships
 - **Crash-safe checkpoints** — sync state advances atomically with data writes; safe to kill mid-run
-- **Full-text and semantic search** — built-in FTS (tantivy) and optional ONNX-based vector embeddings for hybrid search
 - **Automatic query ID discovery** — scrapes Twitter's JS bundles to stay current with GraphQL endpoint changes
 - **Browser cookie extraction** — reads session cookies from Firefox plus Chromium-family browsers like Chrome, Chromium, Brave, Edge, Opera, Opera GX, Vivaldi, and Arc
 - **Rate limit handling** — exponential backoff, cooldown periods, and configurable retry limits
 - **Export** — export your archive to JSON or a self-contained HTML viewer
-- **Interactive Web UI** — browse your archive through a local web server with full-text search, thread navigation, and theme support
 
 ## Requirements
 
@@ -45,29 +52,23 @@ Install globally with `pipx`:
 pipx install tweetxvault
 ```
 
-To enable semantic search (vector embeddings):
-
-```bash
-pip install "tweetxvault[embed]"
-```
-
 To enable the interactive web UI:
 
 ```bash
 pip install "tweetxvault[web]"
 ```
 
-Or install the extras as global tools:
+Or install the extra as a global tool:
 
 ```bash
-uv tool install "tweetxvault[embed,web]"
-pipx install "tweetxvault[embed,web]"
+uv tool install "tweetxvault[web]"
+pipx install "tweetxvault[web]"
 ```
 
 Install from source:
 
 ```bash
-git clone https://github.com/lhl/tweetxvault.git
+git clone https://github.com/gezerwezer/tweetxvault.git
 cd tweetxvault
 uv sync
 ```
@@ -85,19 +86,23 @@ Use `tweetxvault --version` to confirm which local build you are running. In a
 git checkout, the CLI includes the short commit hash and appends `dirty` when
 tracked files differ from `HEAD`.
 
-To enable semantic search and the web UI from source:
-
-```bash
-uv sync --extra embed --extra web
-```
-
 Run once without installing:
 
 ```bash
 uvx tweetxvault --help
 ```
 
-This installs `onnxruntime`, `tokenizers`, and `huggingface-hub`. GPU acceleration (CUDA/ROCm) is used automatically when available; CPU works fine too (~150-200 tweets/s).
+### Migrating from LanceDB
+
+If you used the original upstream repository previously, your data is stored in the legacy LanceDB format (`archive.lancedb`). This fork uses native SQLite (`archive.db`) and completely drops the `[embed]` extra and vector embedding models for stability reasons. 
+
+To safely port your data over to the new format:
+
+```bash
+uv run tweetxvault migrate
+```
+
+The migration tool reads from the old `archive.lancedb` table and writes into the new native SQLite database. It loads data into memory in controlled chunks to prevent OOM errors and isolates the LanceDB driver in a subprocess to protect against Rust core panics (`index out of bounds`) during index compaction. Your old LanceDB directory is untouched; you can manually delete it after verifying the migration.
 
 ## Authentication
 
@@ -216,7 +221,6 @@ uv run tweetxvault sync --limit 5
 uv run tweetxvault sync --skip-media --skip-unfurl
 ```
 
-If the `[embed]` extra is installed, new tweets are automatically embedded after each sync on a best-effort basis; if embedding fails, sync still succeeds and you can retry later with `tweetxvault embed`.
 `--article-backfill` updates stored `raw_json` and normalized secondary rows inline, so it does not require a follow-up `tweetxvault rehydrate`.
 By default, `tweetxvault sync` and `tweetxvault sync all` both cover bookmarks + likes, then visibly run the follow-up archive-maintenance passes for TweetDetail enrich, threads, preview-only articles, media, and unfurls. Authored tweets stay opt-in via `tweetxvault sync tweets`.
 `--head-only` is the escape hatch when an old saved backfill cursor is no longer useful: it clears that cursor for the targeted collection and runs only the normal head pass. It cannot be combined with `--full`, `--backfill`, or `--article-backfill`.
@@ -227,6 +231,7 @@ Common sync flags:
 - `--backfill`: keep walking older pages past duplicate detection when you want more history without resetting state.
 - `--head-only`: clear a saved older-history cursor and do only the normal head pass; use this to stop `resume older`.
 - `--article-backfill`: rewalk existing pages to refresh article-bearing tweets after article extraction changes.
+- `--retry-failed`: retry all previously failed (dead/deleted) tweets during enrichment/thread expansion runs.
 - `--skip-enrich`, `--skip-threads`, `--skip-articles`, `--skip-media`, `--skip-unfurl`: skip one or more automatic follow-up archive-maintenance jobs for just that sync run.
 - `--limit N`: cap the run to `N` fetched pages for debugging, sampling, or shorter catch-up runs.
 - `--browser`, `--profile`, `--profile-path`: force a specific browser/profile for cookie extraction on just that run.
@@ -265,18 +270,7 @@ uv run tweetxvault unfurl
 ```
 
 Every command in that follow-up path supports `--limit`, so you can do bounded
-incremental tests first:
-
-```bash
-uv run tweetxvault import enrich --limit 100
-uv run tweetxvault threads expand --limit 100
-uv run tweetxvault articles refresh --limit 100
-uv run tweetxvault media download --limit 100
-uv run tweetxvault unfurl --limit 100
-```
-
-That is also the recovery path for older archives or interrupted long-running
-follow-up jobs. `media download` and `unfurl` additionally support
+incremental tests first. `media download` and `unfurl` additionally support
 `--retry-failed` if you want to revisit rows that previously failed.
 
 ### Importing an X archive
@@ -304,26 +298,13 @@ uv run tweetxvault import enrich
 uv run tweetxvault import enrich --limit 500
 ```
 
-The importer maps authored tweets, deleted authored tweets, likes, and exported `tweets_media/` files into the same LanceDB archive used by live sync. It applies the same archive-owner guardrail as sync, runs bulk live `tweets` / `likes` reconciliation automatically when auth is available, and keeps sparse archive-only rows in a tracked pending state until you choose how much per-tweet follow-up to run. If the archive only includes a video poster/thumbnail and not the main media file, that media row stays pending so `tweetxvault media download` can fill the gap later. Official X archives currently do not include bookmarks, so the importer warns about the missing bookmark dataset; that warning is expected today.
-
-`TweetDetail` is X's per-tweet detail API: tweetxvault uses it to fill in metadata the archive often lacks for liked tweets, such as author fields, timestamps, full media metadata, and thread context.
+The importer maps authored tweets, deleted authored tweets, likes, and exported `tweets_media/` files into the same SQLite archive used by live sync. It applies the same archive-owner guardrail as sync, runs bulk live `tweets` / `likes` reconciliation automatically when auth is available, and keeps sparse archive-only rows in a tracked pending state until you choose how much per-tweet follow-up to run. 
 
 Import follow-up options:
 - Default import does **no per-tweet TweetDetail pass**. It only imports the archive and runs the bulk live collection reconciliation.
 - `--detail-lookups N` runs a bounded TweetDetail pass for at most `N` pending sparse tweets after the bulk live syncs.
 - `--enrich` runs the TweetDetail pass for **all** currently pending sparse tweets after the bulk live syncs.
 - `--regen` clears archive-import-owned rows, import manifests, and copied archive media files before reimporting. It leaves live-synced rows intact.
-- Archive import itself works without live auth, but the automatic reconciliation and any TweetDetail follow-up only run when auth is available.
-- Archive import/enrich uses a head-only live reconciliation pass; it does **not** resume an old saved likes/tweets backfill from the normal sync state machine.
-- If the same archive digest was already imported, a plain re-run still short-circuits, but `--enrich` reuses the existing import and runs only the follow-up enrichment instead of re-importing the ZIP contents.
-- If an import is interrupted during the archive-write phase, rerunning the same `import x-archive ...` command is the normal recovery path. If the archive write already completed and only the follow-up was interrupted, use `tweetxvault import enrich` or rerun with `--enrich`.
-- `tweetxvault import enrich` reruns that same archive-specific follow-up later against already imported archive data, without needing the original ZIP or directory path again.
-- `tweetxvault import enrich --limit N` limits the TweetDetail phase only; it still reruns the archive-specific bulk live reconciliation first.
-- `tweetxvault threads expand` is the broader TweetDetail-based context/thread capture command; use it when you want parents, replies, and linked status URLs beyond the archive-placeholder follow-up.
-- Interactive TTY runs show tqdm progress bars for hashing, tweet/like import, media copy, and detail enrichment by default.
-- Non-interactive runs stay quiet by default aside from warnings/errors, so cron/piped runs do not get interactive progress output.
-- `--debug` adds per-phase timing diagnostics on top of that interactive progress output.
-- `--sample-limit N` is the sampled import path: tweetxvault still hashes and parses the full archive files, but only imports the first `N` authored tweets, deleted tweets, likes, and media files after load. Sampled runs are stored as `sampled`, not `completed`, and skip the automatic live follow-up unless you explicitly ask for `--enrich` / `--detail-lookups`.
 
 ### Importing old "Grailbird" archives (pre-2018)
 
@@ -336,8 +317,6 @@ tweetxvault import grailbird ~/TwitterArchive-2015 ~/TwitterArchive-2015-convert
 # Then import normally
 tweetxvault import x-archive ~/TwitterArchive-2015-converted
 ```
-
-The converter reads `tweets.csv` and `data/js/user_details.js` (if present) and produces a modern archive directory with `data/tweets.js`, `data/account.js`, and `data/manifest.js`. If `user_details.js` is missing, tweetxvault still imports the converted archive, but it leaves the local archive owner unset so the first later authenticated sync can establish the real owner metadata instead of locking the archive to a fake placeholder id. For checkout-based use, the repo also keeps a compatibility wrapper at `python convert_grailbird.py ...`. See [`docs/GRAILBIRD.md`](docs/GRAILBIRD.md) for details on what gets converted and known limitations.
 
 ### Viewing your archive
 
@@ -355,11 +334,16 @@ uv run tweetxvault view tweets
 uv run tweetxvault view all --limit 50
 ```
 
-Terminal views render tweet timestamps in your local timezone. Sort order uses tweet `created_at`, not collection position. For likes, that means `uv run tweetxvault view likes --sort oldest` shows the oldest liked tweet by tweet timestamp when one is known; X does not expose a reliable `liked_at` timestamp for reconstructing the exact order in which you liked posts.
+Terminal views render tweet timestamps in your local timezone. Sort order uses tweet `created_at`, not collection position.
 
 ### Web UI
 
 If you installed the `web` extra, you can browse your archive through an interactive web interface. The web UI is designed as a fast, local clone of the Twitter interface, allowing you to seamlessly navigate threads, read articles, and browse your bookmarks and likes in a familiar layout with full-text search and light/dark theme support.
+
+**Key Web UI Features:**
+- **History API Integration:** Browser back/forward buttons work flawlessly when diving in and out of threads, completely preserving scroll positions with zero flashing or resets.
+- **Native Render Fidelity:** Accurate styling for quoted tweets, circular avatars, and native rendering of cyan Twitter Polls. Article cards strip redundant `t.co` links, use `summary_large_image` thumbnails, and are fully clickable.
+- **Daemon Management:** Run the server safely in the background using native CLI daemon commands.
 
 The web server runs as a background daemon so you don't need to keep a terminal open:
 
@@ -377,7 +361,7 @@ uv run tweetxvault web stop
 uv run tweetxvault web set-password
 ```
 
-By default, the server runs on `http://127.0.0.1:8000` with the default password `password`. You will be warned to change this using `tweetxvault web set-password`.
+By default, the server runs on `http://127.0.0.1:8000` with the default password `password`. On first boot, the UI will warn you prominently to change this using `tweetxvault web set-password`.
 
 When browsing the web UI, tweetxvault will automatically fetch user avatars directly from Twitter as needed, saving them to `media/avatars`. If you prefer to browse fully offline or want to save space, you can disable this behavior. 
 
@@ -407,40 +391,27 @@ uv run tweetxvault search "machine learning" --type post --collection bookmark,l
 uv run tweetxvault search "machine learning" --sort newest
 uv run tweetxvault search "machine learning" --sort oldest
 
-# Force a specific search mode
-uv run tweetxvault search "llama" --mode fts
-uv run tweetxvault search "llama" --mode vector
-uv run tweetxvault search "llama" --mode hybrid
-
 # Adjust result count
 uv run tweetxvault search "transformer architecture" --limit 50
 ```
 
-Search modes:
-- **fts** — keyword matching via full-text search (always available)
-- **vector** — semantic similarity via embeddings (requires `uv sync --extra embed` + `tweetxvault embed`)
-- **hybrid** — combines FTS and vector results with reranking (best quality)
-- **auto** (default) — uses hybrid for post-only searches when embeddings exist; otherwise falls back to FTS so article results stay included
+The database utilizes SQLite's native `FTS5` engine and maps standard Twitter Advanced Search operators directly. The Web UI provides a Discord-style dropdown to help autocomplete these.
 
-Chronological search sorting reorders the returned match set by `created_at` after retrieval, so it preserves the selected search mode and still defaults to relevance-first candidate selection.
+**Supported Search Operators:**
+- `"exact phrase"` — wrap words in quotes to find an exact match
+- `OR` — `cats OR dogs` matches tweets containing either
+- `*` — prefix wildcard (e.g., `py*` matches `python`)
+- `-` — exclusion (e.g., `cats -dogs`)
+- `#hashtag` and `$cashtag` support
+- `from:username` / `to:username` — filter by author or recipient
+- `since:YYYY-MM-DD` / `until:YYYY-MM-DD` — filter by date range
+- `min_faves:N` / `min_retweets:N` / `min_replies:N` — filter by engagement thresholds
+- `filter:images` / `filter:videos` / `filter:media` / `filter:links` — filter by attached media
 
 Filters:
 - `--type` — comma-delimited result types: `post`, `article`
 - `--collection` — comma-delimited archive collections: `bookmark`, `like`, `tweet`
 - `--sort` — `relevance` (default), `newest`, or `oldest`
-
-### Embeddings
-
-```bash
-# Generate embeddings for all archived tweets (resumes if interrupted)
-uv run tweetxvault embed
-
-# Regenerate all embeddings from scratch
-uv run tweetxvault embed --regen
-```
-
-Uses the `all-MiniLM-L6-v2` model (384 dimensions) via ONNX Runtime. The model is downloaded automatically from Hugging Face Hub on first run.
-If you already generated embeddings with an older tweetxvault version, run `uv run tweetxvault embed --regen` once after upgrading so stored vectors are rebuilt with the current normalized cosine-search setup.
 
 ### Exporting
 
@@ -485,9 +456,6 @@ uv run tweetxvault unfurl --limit 100
 uv run tweetxvault unfurl --retry-failed
 ```
 
-Interactive TTY runs show progress bars and status lines for both media downloads
-and URL unfurls.
-
 ### Thread Expansion
 
 ```bash
@@ -497,6 +465,9 @@ uv run tweetxvault threads expand
 # Expand only the next 100 queued thread targets
 uv run tweetxvault threads expand --limit 100
 
+# Strictly bound crawler expansion to N degrees of separation (default: 1)
+uv run tweetxvault threads expand --max-linked-depth 1
+
 # Expand a specific thread target by URL or ID
 uv run tweetxvault threads expand https://x.com/dimitrispapail/status/2026531440414925307
 uv run tweetxvault threads expand 2026531440414925307
@@ -505,8 +476,7 @@ uv run tweetxvault threads expand 2026531440414925307
 uv run tweetxvault threads expand --refresh 2026531440414925307
 ```
 
-Explicit thread targets are idempotent by default: previously expanded targets are skipped unless you pass `--refresh`. Linked status-URL targets are attempted at most once per run, even if the same target appears in multiple archived URL refs.
-`tweetxvault threads expand` is incremental by default, so it is safe to rerun after archive import if you want more TweetDetail-based context capture later.
+**Thread Depth Limits:** Twitter's `TweetDetail` payload includes large swaths of surrounding reply trees. To prevent the thread crawler from snowballing into an infinite queue, tweetxvault builds an in-memory Breadth-First Search (BFS) graph. The `--max-linked-depth` flag dynamically limits how many "degrees of separation" the crawler is allowed to stray from your root bookmarks and likes. By default, it is set to `1` (only follow URLs directly extracted from your bookmarks or likes). You can set it to `0` to disable URL crawling entirely.
 
 ### Article Refresh
 
@@ -519,14 +489,7 @@ uv run tweetxvault articles refresh --limit 100
 
 # Refresh every archived article row, not just preview-only ones
 uv run tweetxvault articles refresh --all
-
-# Refresh a specific article-bearing tweet by URL or ID
-uv run tweetxvault articles refresh https://x.com/dimitrispapail/status/2026531440414925307
-uv run tweetxvault articles refresh 2026531440414925307
 ```
-
-Interactive TTY runs show refresh progress/status, including TweetDetail pacing
-messages when X starts rate-limiting those requests.
 
 ### Maintenance
 
@@ -534,18 +497,19 @@ messages when X starts rate-limiting those requests.
 # Show archive totals, per-collection coverage, sync recency, and storage health
 uv run tweetxvault stats
 
-# Compact the LanceDB archive (reduces file count after many syncs)
+# Vacuum and optimize the SQLite database
 uv run tweetxvault optimize
 
-# Rebuild normalized tweet fields and secondary objects from stored raw JSON,
-# including any previously captured TweetDetail/thread-expansion payloads
+# Rebuild normalized tweet fields and secondary objects from stored raw JSON
 uv run tweetxvault rehydrate
 
 # Force-refresh query IDs from Twitter's JS bundles
 uv run tweetxvault auth refresh-ids
 ```
 
-`tweetxvault stats` reports overall post/article totals, per-collection counts plus first/last tweet timestamps, latest sync/capture times, storage health details such as DB/media size and version count with an actionable optimize hint, and follow-up queues for archive enrichment, rehydrate gaps, and pending thread expansion. The command now ends with a short legend that explains the backfill states plus the difference between archive enrich, local rehydrate gaps, membership thread targets, and linked-status thread targets.
+`tweetxvault stats` reports overall post/article totals, per-collection counts plus first/last tweet timestamps, storage health details such as DB/media size, and follow-up queues for archive enrichment, thread expansion, and dead-tweet resurrection. 
+
+**Tombstones & Resurrection:** When `tweetxvault` encounters an HTTP 410 or a `TerminalUnavailableError` during syncs, it safely flags the tweet as a dead `__tombstone__` (e.g., deleted, private, or suspended account). It logs this state (`terminal_enrichment`) to prevent infinite network loops. However, because authors sometimes un-suspend or restore accounts, `tweetxvault` runs an automatic "resurrection" trickle pass at the end of normal sync jobs. It silently re-tests the oldest 500 tombstoned tweets to see if they've come back online. You can view the terminal and resurrected counts via `tweetxvault stats`.
 
 Long-running archive writers such as `sync`, `import enrich`, `threads expand`,
 `articles refresh`, `media download`, and `unfurl` now do a best-effort compact
@@ -578,11 +542,7 @@ All configuration is optional. Defaults work out of the box with browser cookie 
 | `sync.cooldown_threshold` | `3` consecutive 429s | `TWEETXVAULT_COOLDOWN_THRESHOLD` |
 | `sync.cooldown_duration` | `300.0` s | `TWEETXVAULT_COOLDOWN_DURATION` |
 | `sync.timeout` | `30.0` s | `TWEETXVAULT_TIMEOUT` |
-
-TweetDetail-heavy jobs such as `tweetxvault import enrich`, `tweetxvault threads expand`,
-and `tweetxvault articles refresh` pace themselves from X's live rate-limit headers when
-those headers are present. If X does not expose reset/remaining headers for a request, the
-client falls back to the shared `sync.detail_*` retry settings and cooldown controls.
+| `sync.max_linked_depth` | `1` | `TWEETXVAULT_MAX_LINKED_DEPTH` |
 
 ## Data storage
 
@@ -591,7 +551,7 @@ Data paths are resolved by [platformdirs](https://platformdirs.readthedocs.io/) 
 | Purpose | Default path |
 |---------|-------------|
 | Config | `~/.config/tweetxvault/` |
-| Archive (LanceDB) | `~/.local/share/tweetxvault/archive.lancedb/` |
+| Archive (SQLite) | `~/.local/share/tweetxvault/archive.db` |
 | Cache (query IDs) | `~/.cache/tweetxvault/` |
 
 Override with `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME`.
@@ -603,13 +563,13 @@ tweetxvault calls Twitter's internal GraphQL API — the same endpoints the web 
 1. Resolves session cookies (env/config/browser extraction)
 2. Discovers current GraphQL query IDs by parsing Twitter's JS bundles (with a 24h TTL cache and static fallbacks)
 3. Fetches timeline pages with the proper headers, feature flags, and cursor pagination
-4. Stores raw API responses + collection tweet rows + normalized secondary objects in a single LanceDB table
+4. Stores raw API responses + collection tweet rows + normalized secondary objects in a local SQLite table
 5. Tracks sync state per collection so the next run picks up where it left off
 
 ## Development
 
 ```bash
-uv sync --extra embed
+uv sync --extra web
 
 # Run tests
 uv run pytest
