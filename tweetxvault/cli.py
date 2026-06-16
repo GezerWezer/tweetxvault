@@ -150,8 +150,14 @@ SYNC_SKIP_UNFURL_OPTION = Annotated[
     typer.Option("--skip-unfurl", help=SYNC_SKIP_UNFURL_HELP),
 ]
 SYNC_SKIP_THREADS_OPTION = Annotated[
-    bool,
-    typer.Option("--skip-threads", help=SYNC_SKIP_THREADS_HELP),
+    bool, typer.Option("--skip-threads", help="Skip thread expansion pass.")
+]
+SYNC_MAX_LINKED_DEPTH_OPTION = Annotated[
+    int | None,
+    typer.Option(
+        "--max-linked-depth",
+        help="Maximum degrees of separation for linked-status discovery.",
+    ),
 ]
 DEBUG_AUTH_OPTION = Annotated[
     bool,
@@ -527,6 +533,7 @@ def _run_sync_all_command(
     skip_unfurl: bool,
     skip_threads: bool,
     retry_failed: bool,
+    max_linked_depth: int | None = None,
 ) -> None:
     followups = _sync_followup_plan(
         skip_enrich=skip_enrich,
@@ -540,16 +547,9 @@ def _run_sync_all_command(
         browser=browser,
         profile=profile,
         profile_path=profile_path,
-        runner=lambda config, auth_bundle, runner_console: sync_all(
-            full=full,
-            backfill=backfill,
-            article_backfill=article_backfill,
-            head_only=head_only,
-            limit=limit,
-            config=config,
-            auth_bundle=auth_bundle,
-            console=runner_console,
-            followups=followups,
+        runner=lambda config, auth_bundle, runner_console: _run_with_depth(
+            config, auth_bundle, runner_console, max_linked_depth,
+            full, backfill, article_backfill, head_only, limit, followups
         ),
     )
     for result in outcome.results:
@@ -560,6 +560,21 @@ def _run_sync_all_command(
         console.print(f"{collection}: failed ({error})")
     _maybe_restart_web(console)
     raise typer.Exit(outcome.exit_code)
+
+def _run_with_depth(config, auth_bundle, runner_console, max_linked_depth, full, backfill, article_backfill, head_only, limit, followups):
+    if max_linked_depth is not None:
+        config.sync.max_linked_depth = max_linked_depth
+    return sync_all(
+        full=full,
+        backfill=backfill,
+        article_backfill=article_backfill,
+        head_only=head_only,
+        limit=limit,
+        config=config,
+        auth_bundle=auth_bundle,
+        console=runner_console,
+        followups=followups,
+    )
 
 
 @sync_app.callback()
@@ -578,10 +593,10 @@ def sync_default(
     profile_path: SYNC_PROFILE_PATH_OPTION = None,
     skip_enrich: SYNC_SKIP_ENRICH_OPTION = False,
     skip_articles: SYNC_SKIP_ARTICLES_OPTION = False,
-        skip_media: SYNC_SKIP_MEDIA_OPTION = False,
         skip_unfurl: SYNC_SKIP_UNFURL_OPTION = False,
         skip_threads: SYNC_SKIP_THREADS_OPTION = False,
         retry_failed: Annotated[bool, typer.Option("--retry-failed", help="Retry all previously failed/dead tweets in one batch.")] = False,
+        max_linked_depth: SYNC_MAX_LINKED_DEPTH_OPTION = None,
     ) -> None:
         if ctx.invoked_subcommand is not None:
             return
@@ -600,6 +615,7 @@ def sync_default(
             skip_unfurl=skip_unfurl,
             skip_threads=skip_threads,
             retry_failed=retry_failed,
+            max_linked_depth=max_linked_depth,
         )
 
 
@@ -909,6 +925,7 @@ def sync_everything(
     skip_unfurl: SYNC_SKIP_UNFURL_OPTION = False,
     skip_threads: SYNC_SKIP_THREADS_OPTION = False,
     retry_failed: Annotated[bool, typer.Option("--retry-failed", help="Retry all previously failed/dead tweets in one batch.")] = False,
+    max_linked_depth: SYNC_MAX_LINKED_DEPTH_OPTION = None,
 ) -> None:
     _run_sync_all_command(
         full=full,
@@ -925,6 +942,7 @@ def sync_everything(
         skip_unfurl=skip_unfurl,
         skip_threads=skip_threads,
         retry_failed=retry_failed,
+        max_linked_depth=max_linked_depth,
     )
 
 
@@ -1093,10 +1111,13 @@ def expand_archive_threads(
         ),
     ] = False,
     debug_auth: DEBUG_AUTH_OPTION = False,
+    max_linked_depth: SYNC_MAX_LINKED_DEPTH_OPTION = None,
 ) -> None:
     console = _configure_logging()
     try:
         config, paths = load_config()
+        if max_linked_depth is not None:
+            config.sync.max_linked_depth = max_linked_depth
         config, auth_bundle = _prepare_auth_override(
             config,
             console,

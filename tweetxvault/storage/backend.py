@@ -2131,7 +2131,7 @@ class ArchiveStore:
             "sync_state": self._count("record_type = 'sync_state'"),
         }
 
-    def archive_stats(self) -> ArchiveStats:
+    def archive_stats(self, max_linked_depth: int = 1) -> ArchiveStats:
         counts = self.counts()
         tweet_rows = (
             self._query(expr="record_type = 'tweet'", cols=["tweet_id", "collection_type", "created_at"])
@@ -2296,6 +2296,8 @@ class ArchiveStore:
         pending_thread_membership_count = len(unique_post_ids - expanded_thread_targets)
         known_tweet_ids = unique_post_ids | tweet_object_ids
         pending_linked_status_targets: set[str] = set()
+        
+        edges = {}
         for row in url_ref_rows:
             target_id = None
             for field_name in ("canonical_url", "expanded_url", "url"):
@@ -2304,15 +2306,35 @@ class ArchiveStore:
                     target_id = extract_status_id_from_url(candidate)
                     if target_id:
                         break
-            source_tweet_id = row.get("tweet_id")
-            if (
-                not target_id
-                or target_id == source_tweet_id
-                or target_id in expanded_thread_targets
-                or target_id in known_tweet_ids
-            ):
+            src = row.get("tweet_id")
+            if src and target_id:
+                if src not in edges:
+                    edges[src] = []
+                edges[src].append((target_id, row))
+
+        depths = {tid: 0 for tid in unique_post_ids if tid}
+        for d in range(1, max_linked_depth + 1):
+            current_layer = [tid for tid, depth in depths.items() if depth == d - 1]
+            for src in current_layer:
+                if src in edges:
+                    for tgt_id, _ in edges[src]:
+                        if tgt_id not in depths:
+                            depths[tgt_id] = d
+
+        for src, target_list in edges.items():
+            if max_linked_depth == 0:
+                break
+            if src not in depths or depths[src] >= max_linked_depth:
                 continue
-            pending_linked_status_targets.add(target_id)
+            for target_id, row in target_list:
+                if (
+                    not target_id
+                    or target_id == src
+                    or target_id in expanded_thread_targets
+                    or target_id in known_tweet_ids
+                ):
+                    continue
+                pending_linked_status_targets.add(target_id)
         return ArchiveStats(
             owner_user_id=self.get_archive_owner_id(),
             unique_post_count=len(unique_post_ids),

@@ -404,6 +404,49 @@ def test_archive_stats_reports_followup_work(paths) -> None:
     store.close()
 
 
+def test_archive_stats_bfs_depth(paths) -> None:
+    store = open_archive_store(paths, create=True)
+    assert store is not None
+
+    # Depth 0 (Root)
+    store._merge_records([store._record(
+        record_type="tweet",
+        row_key="tweet:100",
+        tweet_id="100",
+    )])
+
+    # Depth 0 -> Depth 1 (100 -> 200)
+    store._merge_records([store._record(
+        record_type="url_ref",
+        row_key="url_ref:100:0",
+        tweet_id="100",
+        expanded_url="https://x.com/user/status/200",
+    )])
+
+    # Depth 1 -> Depth 2 (200 -> 300)
+    store._merge_records([store._record(
+        record_type="url_ref",
+        row_key="url_ref:200:0",
+        tweet_id="200",
+        expanded_url="https://x.com/user/status/300",
+    )])
+
+    # Depth 2 -> Depth 3 (300 -> 400)
+    store._merge_records([store._record(
+        record_type="url_ref",
+        row_key="url_ref:300:0",
+        tweet_id="300",
+        expanded_url="https://x.com/user/status/400",
+    )])
+
+    assert store.archive_stats(max_linked_depth=0).pending_thread_linked_status_count == 0
+    assert store.archive_stats(max_linked_depth=1).pending_thread_linked_status_count == 1  # 200
+    assert store.archive_stats(max_linked_depth=2).pending_thread_linked_status_count == 2  # 200, 300
+    assert store.archive_stats(max_linked_depth=3).pending_thread_linked_status_count == 3  # 200, 300, 400
+
+    store.close()
+
+
 def test_export_rows_only_returns_tweet_records(paths) -> None:
     store = open_archive_store(paths, create=True)
     assert store is not None

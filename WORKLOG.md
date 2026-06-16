@@ -1,3 +1,14 @@
+- 2026-06-16 (Article Cards & Linked-Status Crawler Limits)
+  - Fixed Article Card UI missing embed from quote tweets in the main view.
+  - Stripped redundant `t.co` URLs corresponding to article cards from tweet text.
+  - Re-rendered UI cards as proper `<a>` links for full clickability, mirroring X.com functionality.
+  - Correctly mapped `summary_large_image` to parse underlying thumbnails or full-sized images to replicate large X.com article cards.
+  - Researched exponential queue growth in thread syncing: Discovered that Twitter`s `TweetDetail` response includes surrounding reply/thread chains natively, causing a web-crawler-like cascade of extracted `url_ref`s on each successive run.
+  - Defined and implemented `--max-linked-depth` (default 1) parameter configurable via `SyncConfig`.
+  - Implemented an in-memory Breadth-First Search (BFS) graph dynamically on the fly during `sync threads` to track `degree of separation` from actual root bookmarks/likes.
+  - Filtered `url_ref` queue internally to strictly adhere to depth cutoffs, safely binding previously infinite linked-status crawling.
+  - Augmented unit tests in `test_storage.py` to assert BFS depth cutoffs.
+
 - 2026-06-16 (Web UI & Sync Stats Fixes)
   - Fixed Web UI missing Search queries: Rewired `_query` to properly rank FTS5 `bm25` relevance, and implemented missing search helpers `_search_collection_expr` and `_query_tokens` in `backend.py`.
   - Fixed SQLite FTS corruption: Added missing `AFTER INSERT` (`archive_ai`) trigger to `archive` table, ensuring new tweets populate the text search index.

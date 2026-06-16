@@ -347,11 +347,47 @@ async def expand_threads(
                     )
                     _log_threads(console, "loading archived url refs...")
                     url_ref_rows = store.list_url_ref_rows()
+                    
+                    max_linked_depth = config.sync.max_linked_depth
+                    
+                    edges = {}
+                    for row in url_ref_rows:
+                        target_id = None
+                        for field_name in ("canonical_url", "expanded_url", "url"):
+                            candidate = row.get(field_name)
+                            if isinstance(candidate, str):
+                                target_id = extract_status_id_from_url(candidate)
+                                if target_id:
+                                    break
+                        src = row.get("tweet_id")
+                        if src and target_id:
+                            if src not in edges:
+                                edges[src] = []
+                            edges[src].append((target_id, row))
+                    
+                    depths = {tid: 0 for tid in membership_ids if tid}
+                    for d in range(1, max_linked_depth + 1):
+                        current_layer = [tid for tid, depth in depths.items() if depth == d - 1]
+                        for src in current_layer:
+                            if src in edges:
+                                for tgt_id, _ in edges[src]:
+                                    if tgt_id not in depths:
+                                        depths[tgt_id] = d
+                    
+                    filtered_url_rows = []
+                    for src, target_list in edges.items():
+                        if max_linked_depth == 0:
+                            break
+                        if src not in depths or depths[src] >= max_linked_depth:
+                            continue
+                        for _, row in target_list:
+                            filtered_url_rows.append(row)
+
                     _log_threads(
                         console,
-                        f"linked-status pass over {len(url_ref_rows)} archived url refs",
+                        f"linked-status pass over {len(filtered_url_rows)} reachable url refs (from {len(url_ref_rows)} total, max depth {max_linked_depth})",
                     )
-                    for scanned, row in enumerate(url_ref_rows, start=1):
+                    for scanned, row in enumerate(filtered_url_rows, start=1):
                         if limit is not None and result.processed >= limit:
                             break
                         target_id = None
@@ -366,7 +402,7 @@ async def expand_threads(
                                 console,
                                 phase="linked-status",
                                 scanned=scanned,
-                                total=len(url_ref_rows),
+                                total=len(filtered_url_rows),
                                 result=result,
                             )
                             continue
@@ -382,7 +418,7 @@ async def expand_threads(
                                 console,
                                 phase="linked-status",
                                 scanned=scanned,
-                                total=len(url_ref_rows),
+                                total=len(filtered_url_rows),
                                 result=result,
                             )
                             continue
@@ -406,7 +442,7 @@ async def expand_threads(
                             console,
                             phase="linked-status",
                             scanned=scanned,
-                            total=len(url_ref_rows),
+                            total=len(filtered_url_rows),
                             result=result,
                         )
                         job.maybe_optimize_mid_job(console=console)

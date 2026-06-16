@@ -53,6 +53,7 @@ class SyncConfig(BaseModel):
     cooldown_threshold: int = Field(default=3, ge=1)
     cooldown_duration: float = Field(default=300.0, ge=0)
     timeout: float = Field(default=30.0, ge=1.0)
+    max_linked_depth: int = Field(default=1, ge=0)
 
 
 class WebConfig(BaseModel):
