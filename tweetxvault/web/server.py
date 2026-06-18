@@ -214,7 +214,7 @@ def api_tweets(
         post_filters = {}
         for k, v in filters.items():
             base_k = k[1:] if k.startswith('-') else k
-            if not k.startswith('-') and base_k in {"from", "conversation_id"}:
+            if not k.startswith('-') and base_k in {"from", "conversation_id", "since", "until", "since_time", "until_time"}:
                 if base_k == "from":
                     vals = [val.replace("@", "") for val in v]
                     joined = " OR ".join(f"LOWER(author_username) = '{val}'" for val in vals)
@@ -222,6 +222,16 @@ def api_tweets(
                 elif base_k == "conversation_id":
                     joined = " OR ".join(f"conversation_id = '{val}'" for val in v)
                     pushable_exprs.append(f"({joined})")
+                elif base_k == "since" or base_k == "since_time":
+                    try:
+                        ts = _parse_twitter_date(v[0]) if base_k == "since" else float(v[0])
+                        if ts is not None: pushable_exprs.append(f"created_at_ts >= {int(ts)}")
+                    except Exception: pass
+                elif base_k == "until" or base_k == "until_time":
+                    try:
+                        ts = _parse_twitter_date(v[0]) if base_k == "until" else float(v[0])
+                        if ts is not None: pushable_exprs.append(f"created_at_ts < {int(ts)}")
+                    except Exception: pass
             else:
                 post_filters[k] = v
 
@@ -243,48 +253,28 @@ def api_tweets(
             except: return 0
             
         def newest_key(row):
-            try:
-                dt = datetime.strptime(row.get("created_at") or "", "%a %b %d %H:%M:%S %z %Y")
-                return (0, -dt.timestamp(), -sort_index_val(row), row.get("tweet_id") or "")
-            except: return (1, 0.0, -sort_index_val(row), row.get("tweet_id") or "")
+            return (0, -(row.get("created_at_ts") or 0.0), -sort_index_val(row), row.get("tweet_id") or "")
                 
         def oldest_key(row):
-            try:
-                dt = datetime.strptime(row.get("created_at") or "", "%a %b %d %H:%M:%S %z %Y")
-                return (0, dt.timestamp(), sort_index_val(row), row.get("tweet_id") or "")
-            except: return (1, datetime.max.timestamp(), sort_index_val(row), row.get("tweet_id") or "")
+            return (0, (row.get("created_at_ts") or 0.0), sort_index_val(row), row.get("tweet_id") or "")
 
-
-        if not post_filters and not text_query and not pushable_exprs:
-            # Fast path
-            sorted_ids = store.get_sorted_tweet_ids(internal_col, sort=effective_sort)
-            total = len(sorted_ids)
-            paginated_tweets = store.fetch_tweets_by_ids(sorted_ids[start:end])
-            
-            if effective_sort == "random":
-                import random
-                random.shuffle(paginated_tweets)
-            
-        elif not post_filters and not text_query and pushable_exprs:
-            # Medium path: Pushable filters only
+        if not post_filters and not text_query:
+            # Fast path: Native SQLite pagination
             filter_expr = "record_type = 'tweet'"
             if internal_col != "all":
                 filter_expr += f" AND collection_type = '{internal_col}'"
             for expr in pushable_exprs:
                 filter_expr += f" AND {expr}"
                 
-            tweet_rows = store._query(expr=filter_expr, cols=["tweet_id", "created_at", "sort_index"])
-
+            total = store._count(filter_expr)
+            order_by = "created_at_ts DESC, CAST(sort_index AS INTEGER) DESC, tweet_id DESC"
             if effective_sort == "oldest":
-                tweet_rows.sort(key=oldest_key)
+                order_by = "created_at_ts ASC, CAST(sort_index AS INTEGER) ASC, tweet_id ASC"
             elif effective_sort == "random":
-                import random
-                random.shuffle(tweet_rows)
-            else:
-                tweet_rows.sort(key=newest_key)
+                order_by = "RANDOM()"
                 
-            total = len(tweet_rows)
-            page_ids = [r["tweet_id"] for r in tweet_rows[start:end] if r.get("tweet_id")]
+            tweet_rows = store._query(expr=filter_expr, cols=["tweet_id"], limit=limit, offset=start, order_by=order_by)
+            page_ids = [r["tweet_id"] for r in tweet_rows if r.get("tweet_id")]
             paginated_tweets = store.fetch_tweets_by_ids(page_ids)
             
         elif not post_filters and text_query and not pushable_exprs:
@@ -293,6 +283,13 @@ def api_tweets(
             search_results = store.search_fts(text_query, limit=1000, collections=coll_set)
             
             if effective_sort == "newest" or effective_sort == "oldest":
+                # Ensure created_at_ts is populated for search results sorting
+                for r in search_results:
+                    if "created_at_ts" not in r and r.get("created_at"):
+                        try:
+                            r["created_at_ts"] = datetime.strptime(r.get("created_at") or "", "%a %b %d %H:%M:%S %z %Y").timestamp()
+                        except:
+                            r["created_at_ts"] = 0.0
                 search_results.sort(key=oldest_key if effective_sort == "oldest" else newest_key)
             elif effective_sort == "random":
                 import random
@@ -637,16 +634,17 @@ def api_tweet_quotes(
         start = (page - 1) * limit
         end = start + limit
         
+        expr = f"record_type = 'tweet_relation' AND relation_type = 'quote_of' AND target_tweet_id = '{tweet_id}'"
+        total = store.conn.execute(f"SELECT COUNT(DISTINCT tweet_id) FROM archive WHERE {expr}").fetchone()[0]
+        
         rows = store._query(
-            expr=f"record_type = 'tweet_relation' AND relation_type = 'quote_of' AND target_tweet_id = '{tweet_id}'"
+            expr=expr,
+            cols=["DISTINCT tweet_id"],
+            order_by="tweet_id DESC",
+            limit=limit,
+            offset=start
         )
-        quote_tweet_ids = list(set(r.get("tweet_id") for r in rows if r.get("tweet_id")))
-        
-        # Sort chronologically (rough approximation via snowflake ID string comparison works well enough, or we let fetch_tweets_by_ids return them and then sort)
-        quote_tweet_ids.sort(reverse=True)
-        
-        total = len(quote_tweet_ids)
-        paginated_ids = quote_tweet_ids[start:end]
+        paginated_ids = [r.get("tweet_id") for r in rows if r.get("tweet_id")]
         paginated_tweets = store.fetch_tweets_by_ids(paginated_ids)
         
         return {

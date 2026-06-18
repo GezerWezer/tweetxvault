@@ -1,9 +1,18 @@
+- 2026-06-17 (Web UI Performance Boost)
+  - Profiled `server.py` and discovered that sorting the entire 2.5 million item cache in Python was consuming up to 3 minutes of pure CPU and sequential Disk I/O per page request.
+  - Pushed all sorting and filtering out of memory and into native SQLite pagination.
+  - Added `created_at_ts` integer column to the `archive` table, along with a background backfill script triggered on boot.
+  - Replaced the cached `get_sorted_tweet_ids` with `get_paginated_tweet_ids` using parameterized `ORDER BY` and `LIMIT ? OFFSET ?` queries.
+  - Re-wrote `api_tweets` to map date filters (`since`, `until`) to raw SQLite queries against `created_at_ts`.
+  - Re-wrote `api_tweet_quotes` to stop Python-sorting 10,000 quote references in memory, allowing SQLite to sort them via database offset.
+
 - 2026-06-16 (Web UI Quote Tweets)
-  - Implemented a new Quote Tweets browser natively inside the Web UI.
   - Added a "Browse N Quote Tweets" button directly in the thread detail view. 
   - To prevent linking to unarchived/private quotes, the button dynamically queries the local SQLite `archive` table (via `relation_type = 'quote_of'`) to calculate the exact number of quote tweets actually present in the archive, ignoring Twitter's inflated `legacy.quote_count`.
   - Added a new `GET /api/tweets/{tweet_id}/quotes` endpoint to `server.py` to power the chronological scrollable view.
   - Fixed UnboundLocalError bug where sorting text searches crashed because `newest_key` was scoped locally inside an unrelated `elif` block.
+  - Fixed race condition in `sync` where `web.auto_start = True` crashed the web server with `[Errno 98] address already in use`. The auto-restarter now waits for the old uvicorn process to properly release port 8000 before spawning the new daemon.
+  - Updated `tweetxvault migrate` to automatically rebuild the SQLite FTS index at the end of the script to prevent missing FTS text for historical migrated tweets.
 
 - 2026-06-16 (Article Cards & Linked-Status Crawler Limits)
   - Fixed Article Card UI missing embed from quote tweets in the main view.

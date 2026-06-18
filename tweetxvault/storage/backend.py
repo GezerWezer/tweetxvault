@@ -142,7 +142,7 @@ class ArchiveStats:
     pending_thread_linked_status_count: int = 0
 
 
-ARCHIVE_COLUMNS = ["row_key", "record_type", "tweet_id", "collection_type", "folder_id", "sort_index", "operation", "cursor_in", "cursor_out", "captured_at", "http_status", "source", "text", "author_id", "author_username", "author_display_name", "created_at", "deleted_at", "conversation_id", "lang", "note_tweet_text", "enrichment_state", "enrichment_checked_at", "enrichment_http_status", "enrichment_reason", "raw_json", "first_seen_at", "last_seen_at", "added_at", "synced_at", "relation_type", "target_tweet_id", "position", "media_key", "media_type", "media_url", "thumbnail_url", "width", "height", "duration_millis", "variants_json", "download_state", "local_path", "provenance_source", "sha256", "byte_size", "content_type", "thumbnail_local_path", "thumbnail_sha256", "thumbnail_byte_size", "thumbnail_content_type", "downloaded_at", "download_error", "url_hash", "url", "expanded_url", "final_url", "canonical_url", "display_url", "url_host", "description", "site_name", "unfurl_state", "last_fetched_at", "article_id", "title", "summary_text", "content_text", "published_at", "status", "archive_digest", "archive_generation_date", "import_started_at", "import_completed_at", "warnings_json", "counts_json", "last_head_tweet_id", "backfill_cursor", "backfill_incomplete", "updated_at", "key", "value"]
+ARCHIVE_COLUMNS = ["row_key", "record_type", "tweet_id", "collection_type", "folder_id", "sort_index", "operation", "cursor_in", "cursor_out", "captured_at", "http_status", "source", "text", "author_id", "author_username", "author_display_name", "created_at", "created_at_ts", "deleted_at", "conversation_id", "lang", "note_tweet_text", "enrichment_state", "enrichment_checked_at", "enrichment_http_status", "enrichment_reason", "raw_json", "first_seen_at", "last_seen_at", "added_at", "synced_at", "relation_type", "target_tweet_id", "position", "media_key", "media_type", "media_url", "thumbnail_url", "width", "height", "duration_millis", "variants_json", "download_state", "local_path", "provenance_source", "sha256", "byte_size", "content_type", "thumbnail_local_path", "thumbnail_sha256", "thumbnail_byte_size", "thumbnail_content_type", "downloaded_at", "download_error", "url_hash", "url", "expanded_url", "final_url", "canonical_url", "display_url", "url_host", "description", "site_name", "unfurl_state", "last_fetched_at", "article_id", "title", "summary_text", "content_text", "published_at", "status", "archive_digest", "archive_generation_date", "import_started_at", "import_completed_at", "warnings_json", "counts_json", "last_head_tweet_id", "backfill_cursor", "backfill_incomplete", "updated_at", "key", "value"]
 
 EMBEDDING_DIM = 384
 SECONDARY_RECORD_TYPES = ("tweet_object", "tweet_relation", "media", "url", "url_ref", "article")
@@ -169,16 +169,13 @@ class ArchiveStore:
         
         if create:
             self._migrate_schema()
-            
-        self._sort_cache: dict[str, list[str]] = {}
-        self._sort_cache_version: int = 1
-
-    def _migrate_schema(self) -> None:
         cols = []
         for f in ARCHIVE_COLUMNS:
             ctype = "TEXT"
             if f == 'row_key':
                 ctype = "TEXT PRIMARY KEY"
+            elif f == 'created_at_ts':
+                ctype = "INTEGER"
             cols.append(f"{f} {ctype}")
             
         col_def = ", ".join(cols)
@@ -211,8 +208,28 @@ class ArchiveStore:
               VALUES (new.rowid, new.author_username, new.author_display_name, new.text, new.note_tweet_text);
             END;
             """)
+            
+            # Migrate created_at_ts backfill
+            try:
+                self.conn.execute("ALTER TABLE archive ADD COLUMN created_at_ts INTEGER")
+                print("Backfilling created_at_ts... this may take a few minutes on large archives.")
+                rows = self.conn.execute("SELECT row_key, created_at FROM archive WHERE created_at IS NOT NULL AND created_at_ts IS NULL").fetchall()
+                if rows:
+                    updates = []
+                    for r in rows:
+                        dt = _parse_created_at(r[1])
+                        if dt:
+                            updates.append((int(dt.timestamp()), r[0]))
+                    if updates:
+                        self.conn.executemany("UPDATE archive SET created_at_ts = ? WHERE row_key = ?", updates)
+            except sqlite3.OperationalError:
+                pass # Column already exists
+                
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_archive_tweet_id ON archive(tweet_id)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_archive_target_tweet_id ON archive(target_tweet_id)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_archive_sort ON archive(collection_type, created_at_ts DESC, CAST(sort_index AS INTEGER) DESC)")
 
-    def _query(self, expr: str, cols: list[str] = None, limit: int = None, is_fts: bool = False, query: str = None) -> list[dict[str, Any]]:
+    def _query(self, expr: str, cols: list[str] = None, limit: int = None, is_fts: bool = False, query: str = None, order_by: str = None, offset: int = None) -> list[dict[str, Any]]:
         c = ", ".join(cols) if cols else "*"
         q = f"SELECT {c} FROM archive"
         params = []
@@ -232,9 +249,15 @@ class ArchiveStore:
                 
         if is_fts and query:
             q += " ORDER BY rank"
+        elif order_by:
+            q += f" ORDER BY {order_by}"
             
-        if limit:
-            q += f" LIMIT {limit}"
+        if limit is not None:
+            q += " LIMIT ?"
+            params.append(limit)
+            if offset is not None:
+                q += " OFFSET ?"
+                params.append(offset)
             
         return [dict(row) for row in self.conn.execute(q, params).fetchall()]
         
@@ -286,7 +309,6 @@ class ArchiveStore:
     def _merge_records(self, records: list[dict[str, Any]]) -> None:
         if not records:
             return
-        self.invalidate_sort_cache()
         cols = [f for f in ARCHIVE_COLUMNS if f != 'embedding']
         placeholders = ", ".join(["?"] * len(cols))
         col_names = ", ".join(cols)
@@ -613,12 +635,13 @@ class ArchiveStore:
                 tweet.author_display_name,
                 prefer_incoming=prefer_incoming,
             ),
-            created_at=self._merge_by_source_precedence(
+            created_at=(merged_created_at := self._merge_by_source_precedence(
                 context,
                 "created_at",
                 tweet.created_at,
                 prefer_incoming=prefer_incoming,
-            ),
+            )),
+            created_at_ts=int(_parse_created_at(merged_created_at).timestamp()) if _parse_created_at(merged_created_at) else None,
             deleted_at=self._merged_deleted_at(
                 context,
                 deleted_at,
@@ -738,8 +761,7 @@ class ArchiveStore:
 
     def reset_sync_state(self, collection_type: str, folder_id: str | None = None) -> None:
         self.invalidate_sort_cache()
-        row_key = self._row_key_for_sync_state(collection_type, folder_id)
-        self._delete(f"row_key = {_expr_quote(row_key)}")
+        self._delete(f"row_key = {_expr_quote(self._row_key_for_sync_state(collection_type, folder_id))}")
 
     def has_membership(
         self, tweet_id: str, collection_type: str, folder_id: str | None = None
@@ -873,12 +895,13 @@ class ArchiveStore:
                 tweet.author_display_name,
                 prefer_incoming=prefer_incoming,
             ),
-            created_at=self._merge_by_source_precedence(
+            created_at=(merged_created_at := self._merge_by_source_precedence(
                 context,
                 "created_at",
                 tweet.created_at,
                 prefer_incoming=prefer_incoming,
-            ),
+            )),
+            created_at_ts=int(_parse_created_at(merged_created_at).timestamp()) if _parse_created_at(merged_created_at) else None,
             deleted_at=self._merged_deleted_at(
                 context,
                 deleted_at,
@@ -1628,6 +1651,7 @@ class ArchiveStore:
                 row.get("author_display_name"),
             )
             updated["created_at"] = self._coalesce_value(tweet.created_at, row.get("created_at"))
+            updated["created_at_ts"] = int(_parse_created_at(updated["created_at"]).timestamp()) if _parse_created_at(updated["created_at"]) else None
             updated["conversation_id"] = self._coalesce_value(
                 legacy.get("conversation_id_str"),
                 row.get("conversation_id"),
@@ -1867,68 +1891,19 @@ class ArchiveStore:
             filter_expr += f" AND collection_type = {_expr_quote(collection)}"
         return self._count(filter_expr)
 
-    def invalidate_sort_cache(self) -> None:
-        self._sort_cache.clear()
-
-    def get_sorted_tweet_ids(self, collection: str, sort: str = "newest") -> list[str]:
-        current_version = 1
-        if current_version != self._sort_cache_version:
-            self.invalidate_sort_cache()
-            self._sort_cache_version = current_version
-            
-        cache_sort = "newest" if sort == "random" else sort
-        cache_key = f"{collection}:{cache_sort}"
-        if cache_key in self._sort_cache:
-            res = list(self._sort_cache[cache_key])
-            if sort == "random":
-                import random
-                random.shuffle(res)
-            return res
-
+    def get_paginated_tweet_ids(self, collection: str, limit: int, offset: int, sort: str = "newest") -> list[str]:
         filter_expr = "record_type = 'tweet'"
         if collection != "all":
             filter_expr += f" AND collection_type = {_expr_quote(collection)}"
             
-        columns = ["tweet_id", "created_at", "sort_index"]
-        tweet_rows = self._query(expr=filter_expr, cols=columns)
-
-        def sort_index_value(row: dict[str, Any]) -> int:
-            raw = row.get("sort_index")
-            if not raw:
-                return 0
-            try:
-                return int(raw)
-            except (TypeError, ValueError):
-                return 0
-
-        def oldest_sort_key(row: dict[str, Any]) -> tuple[Any, ...]:
-            created_at = _parse_created_at(row.get("created_at"))
-            if created_at is not None:
-                return (0, created_at, sort_index_value(row), row.get("tweet_id") or "")
-            return (1, datetime.max, sort_index_value(row), row.get("tweet_id") or "")
-
-        def newest_sort_key(row: dict[str, Any]) -> tuple[Any, ...]:
-            created_at = _parse_created_at(row.get("created_at"))
-            if created_at is not None:
-                return (
-                    0,
-                    -created_at.timestamp(),
-                    -sort_index_value(row),
-                    row.get("tweet_id") or "",
-                )
-            return (1, 0.0, -sort_index_value(row), row.get("tweet_id") or "")
-
-        sort_key_fn = oldest_sort_key if cache_sort == "oldest" else newest_sort_key
-        sorted_rows = sorted(tweet_rows, key=sort_key_fn)
-        
-        sorted_ids = [row["tweet_id"] for row in sorted_rows if row.get("tweet_id")]
-        self._sort_cache[cache_key] = sorted_ids
-        
-        res = list(sorted_ids)
-        if sort == "random":
-            import random
-            random.shuffle(res)
-        return res
+        order_by = "created_at_ts DESC, CAST(sort_index AS INTEGER) DESC, tweet_id DESC"
+        if sort == "oldest":
+            order_by = "created_at_ts ASC, CAST(sort_index AS INTEGER) ASC, tweet_id ASC"
+        elif sort == "random":
+            order_by = "RANDOM()"
+            
+        tweet_rows = self._query(expr=filter_expr, cols=["tweet_id"], limit=limit, offset=offset, order_by=order_by)
+        return [row["tweet_id"] for row in tweet_rows if row.get("tweet_id")]
 
     def _hydrate_exported_rows(
         self,

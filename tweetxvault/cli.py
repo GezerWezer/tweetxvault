@@ -1897,7 +1897,12 @@ def _maybe_restart_web(console: Console) -> None:
             pid = int(pid_file.read_text().strip())
             if _is_running(pid):
                 os.kill(pid, signal.SIGTERM)
-                console.print("[dim]Stopped web server for restart...[/dim]")
+                console.print("[dim]Stopping web server for restart...[/dim]")
+                import time
+                for _ in range(50):
+                    if not _is_running(pid):
+                        break
+                    time.sleep(0.1)
         except (ValueError, ProcessLookupError):
             pass
         finally:

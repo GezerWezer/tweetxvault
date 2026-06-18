@@ -151,6 +151,17 @@ def run_migration() -> None:
     if pbar:
         pbar.close()
         
+    print("Rebuilding Full-Text Search index (this may take a few moments)...")
+    store = open_archive_store(paths, create=False)
+    if store:
+        try:
+            store.conn.execute("INSERT INTO archive_fts(archive_fts) VALUES('rebuild')")
+            store.conn.commit()
+        except Exception as e:
+            print(f"Warning: Failed to rebuild FTS index: {e}")
+        finally:
+            store.close()
+        
     print("Migration complete! You can now run `tweetxvault stats`.")
     print(f"If it works correctly, you may safely backup and delete the original `{lance_path}` directory.")
 
