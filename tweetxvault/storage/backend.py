@@ -169,6 +169,8 @@ class ArchiveStore:
         
         if create:
             self._migrate_schema()
+            
+    def _migrate_schema(self):
         cols = []
         for f in ARCHIVE_COLUMNS:
             ctype = "TEXT"
