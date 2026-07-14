@@ -1,3 +1,12 @@
+- 2026-07-14 (SQLite Performance Investigation & Fix)
+  - SSHed into production server (Intel N95, 4GB RAM, 8.3GB DB) and ran `EXPLAIN QUERY PLAN` + timing benchmarks.
+  - Root cause: default page load (`collection=all`) triggers full table scan of 2.5M rows because no index starts with `record_type`. COUNT took 22s, pagination took 21s — 43s total per page load.
+  - Added composite index `idx_archive_record_sort ON archive(record_type, collection_type, created_at_ts DESC, tweet_id DESC)` to cover both filtered and unfiltered collection queries.
+  - Increased SQLite page cache from 2MB (default) to ~1GB (`PRAGMA cache_size = -1000000`). Server had 3.9GB of idle RAM.
+  - Enabled memory-mapped I/O (`PRAGMA mmap_size = 8589934592`) to let SQLite access DB through kernel page cache.
+  - Added re-backfill for 1,132 tweet rows with NULL `created_at_ts` that slipped through the initial migration.
+  - Expected improvement: `collection=all` page loads from ~43s to <0.1s.
+
 - 2026-06-17 (Web UI Performance Boost)
   - Profiled `server.py` and discovered that sorting the entire 2.5 million item cache in Python was consuming up to 3 minutes of pure CPU and sequential Disk I/O per page request.
   - Pushed all sorting and filtering out of memory and into native SQLite pagination.

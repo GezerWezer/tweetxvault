@@ -166,6 +166,8 @@ class ArchiveStore:
         self.conn = sqlite3.connect(db_file, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA cache_size = -1000000")  # ~1 GB page cache
+        self.conn.execute("PRAGMA mmap_size = 8589934592")  # 8 GB mmap
         
         if create:
             self._migrate_schema()
@@ -227,9 +229,22 @@ class ArchiveStore:
             except sqlite3.OperationalError:
                 pass # Column already exists
                 
+            # Backfill any remaining NULL created_at_ts rows
+            remaining = self.conn.execute("SELECT row_key, created_at FROM archive WHERE created_at IS NOT NULL AND created_at_ts IS NULL").fetchall()
+            if remaining:
+                print(f"Backfilling {len(remaining)} rows with missing created_at_ts...")
+                updates = []
+                for r in remaining:
+                    dt = _parse_created_at(r[1])
+                    if dt:
+                        updates.append((int(dt.timestamp()), r[0]))
+                if updates:
+                    self.conn.executemany("UPDATE archive SET created_at_ts = ? WHERE row_key = ?", updates)
+
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_archive_tweet_id ON archive(tweet_id)")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_archive_target_tweet_id ON archive(target_tweet_id)")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_archive_sort ON archive(collection_type, created_at_ts DESC, CAST(sort_index AS INTEGER) DESC)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_archive_record_sort ON archive(record_type, collection_type, created_at_ts DESC, tweet_id DESC)")
 
     def _query(self, expr: str, cols: list[str] = None, limit: int = None, is_fts: bool = False, query: str = None, order_by: str = None, offset: int = None) -> list[dict[str, Any]]:
         c = ", ".join(cols) if cols else "*"
