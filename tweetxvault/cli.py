@@ -1903,6 +1903,13 @@ def _maybe_restart_web(console: Console) -> None:
                     if not _is_running(pid):
                         break
                     time.sleep(0.1)
+                else:
+                    # Still running after 5 seconds, force kill
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                        time.sleep(0.5)
+                    except OSError:
+                        pass
         except (ValueError, ProcessLookupError):
             pass
         finally:
@@ -1913,6 +1920,7 @@ def _maybe_restart_web(console: Console) -> None:
     cmd = [sys.executable, "-m", "tweetxvault", "serve-daemon"]
     process = subprocess.Popen(
         cmd,
+        stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True,

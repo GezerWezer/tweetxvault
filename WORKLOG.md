@@ -1157,3 +1157,7 @@
 - Slimmed [AGENTS.md](AGENTS.md) (and `CLAUDE.md` symlink) back to repo workflow/safety rules and pointed implementation specifics to [docs/PLAN.md](docs/PLAN.md).
 - Tightened `.gitignore` to ignore Python caches/venvs and common credential/db artifacts (`*.sqlite`, `*.db`, session JSON).
 - Fixed `AGENTS.md` pointer to reference `docs/PLAN.md`/`docs/README.md` instead of a missing `README.md`.
+- **2026-07-14**:
+  - Automatically populate the `[database]` section in `config.toml` with default `1gb` cache and `8gb` mmap if missing.
+  - Fixed a major bug where `tweetxvault sync` would leave a "stale PID file" by ensuring the `uvicorn` web server is daemonized properly (`stdin=subprocess.DEVNULL`) and adding a `SIGKILL` fallback if graceful shutdown fails within 5 seconds.
+  - Fixed a bug where resurrected dead tweets were incorrectly getting their `enrichment_state` overwritten with `"done"` instead of `"resurrected"` due to secondary object parsing overwriting the state buffer.

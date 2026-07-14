@@ -153,7 +153,14 @@ def ensure_paths(paths: XDGPaths) -> XDGPaths:
 
 def _load_config_file(path: Path) -> dict[str, Any]:
     if not path.exists():
-        return {}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("[database]\ncache_size_kb = 1000000\nmmap_size_bytes = 8589934592\n", encoding="utf-8")
+    else:
+        content = path.read_text(encoding="utf-8")
+        if "[database]" not in content:
+            content = content.rstrip() + "\n\n[database]\ncache_size_kb = 1000000\nmmap_size_bytes = 8589934592\n"
+            path.write_text(content, encoding="utf-8")
+            
     with path.open("rb") as handle:
         loaded = tomllib.load(handle)
     return loaded if isinstance(loaded, dict) else {}

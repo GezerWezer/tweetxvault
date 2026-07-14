@@ -1721,6 +1721,12 @@ class ArchiveStore:
         )
         self._refresh_tweet_records_for_details([tweet], cursor=buffer)
         
+        self._buffer_secondary_graph(
+            extract_secondary_objects(tweet.raw_json),
+            source=LIVE_SOURCE,
+            cursor=buffer,
+        )
+        
         row = self._lookup_row(self._row_key_for_tweet_object(tweet.tweet_id), cursor=buffer)
         state = "done"
         if row and row.get("enrichment_state") == "terminal_unavailable":
@@ -1732,11 +1738,6 @@ class ArchiveStore:
             enrichment_checked_at=utc_now(),
             enrichment_http_status=http_status,
             enrichment_reason=None,
-            cursor=buffer,
-        )
-        self._buffer_secondary_graph(
-            extract_secondary_objects(tweet.raw_json),
-            source=LIVE_SOURCE,
             cursor=buffer,
         )
         if owns_buffer:

@@ -68,6 +68,7 @@ def start_web() -> None:
     # Using start_new_session to detach the process
     process = subprocess.Popen(
         cmd,
+        stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True
@@ -91,6 +92,17 @@ def stop_web() -> None:
         if _is_running(pid):
             console.print(f"Stopping web server (PID: {pid})...")
             os.kill(pid, signal.SIGTERM)
+            import time
+            for _ in range(50):
+                if not _is_running(pid):
+                    break
+                time.sleep(0.1)
+            else:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                    time.sleep(0.5)
+                except OSError:
+                    pass
             console.print("[green]Server stopped.[/green]")
         else:
             console.print("[yellow]Server is not running (stale PID file).[/yellow]")
