@@ -1161,3 +1161,7 @@
   - Automatically populate the `[database]` section in `config.toml` with default `1gb` cache and `8gb` mmap if missing.
   - Fixed a major bug where `tweetxvault sync` would leave a "stale PID file" by ensuring the `uvicorn` web server is daemonized properly (`stdin=subprocess.DEVNULL`) and adding a `SIGKILL` fallback if graceful shutdown fails within 5 seconds.
   - Fixed a bug where resurrected dead tweets were incorrectly getting their `enrichment_state` overwritten with `"done"` instead of `"resurrected"` due to secondary object parsing overwriting the state buffer.
+- **2026-07-14 (UI Tweaks)**:
+  - Fixed retweet icon on the `[name] Reposted` label in the Web UI.
+  - Added support for displaying "Tombstone" (missing/suspended) quote tweets as disabled placeholder boxes instead of silently crashing/hiding the quote tweet block.
+  - Added "private account" and "account that no longer exists" tombstone texts to the timeline filter in `server.py` so they are properly hidden from the main feed just like suspended accounts.

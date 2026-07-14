@@ -329,7 +329,11 @@ def api_tweets(
             total = len(filtered_rows)
             paginated_tweets = filtered_rows[start:end]
 
-        paginated_tweets = [t for t in paginated_tweets if t.get("text") != "This Post is from a suspended account. {learnmore}"]
+        paginated_tweets = [t for t in paginated_tweets if t.get("text") not in (
+            "This Post is from a suspended account. {learnmore}",
+            "This Post is from a private account. {learnmore}",
+            "This Post is from an account that no longer exists. {learnmore}"
+        )]
 
         # Batch QT media query
         qt_ids = set()
