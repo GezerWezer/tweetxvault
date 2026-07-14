@@ -928,7 +928,12 @@
                 getQuoteTweet(tweet) {
                     if (!tweet.raw_json) return null;
                     const quote = tweet.raw_json.quoted_status_result?.result;
-                    if (quote?.__typename === 'TweetWithVisibilityResults') return quote.tweet;
+                    if (quote?.__typename === 'TweetWithVisibilityResults') {
+                        if (quote.birdwatch_pivot && quote.tweet) {
+                            quote.tweet.birdwatch_pivot = quote.birdwatch_pivot;
+                        }
+                        return quote.tweet;
+                    }
                     if (quote?.__typename === 'Tweet') return quote;
                     if (quote?.__typename === 'TweetTombstone' || quote?.__typename === 'TweetUnavailable') return quote;
                     if (tweet.raw_json.quoted_status) return tweet.raw_json.quoted_status;
@@ -943,7 +948,10 @@
                 getRetweet(tweet) {
                     if (!tweet.raw_json) return null;
                     const rt = tweet.raw_json.legacy?.retweeted_status_result?.result;
-                    if (rt?.__typename === 'TweetWithVisibilityResults') return rt.tweet;
+                    if (rt?.__typename === 'TweetWithVisibilityResults') {
+                        if (rt.birdwatch_pivot && rt.tweet) rt.tweet.birdwatch_pivot = rt.birdwatch_pivot;
+                        return rt.tweet;
+                    }
                     if (rt?.__typename === 'Tweet') return rt;
                     if (tweet.raw_json.retweeted_status) return tweet.raw_json.retweeted_status;
                     return null;

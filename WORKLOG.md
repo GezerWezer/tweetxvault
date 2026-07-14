@@ -1168,3 +1168,6 @@
 - **2026-07-14 (Community Notes)**:
   - Implemented Twitter-style rendering for Community Notes across all timeline views, thread views, quote tweets, and the media viewer sidebar. 
   - Only active notes (those with text context) are shown, accurately replicating the production Birdwatch structure.
+- **2026-07-14 (Fix Community Notes data drop)**:
+  - Fixed a bug where `extractor.py` was discarding the `birdwatch_pivot` wrapper when unwrapping `TweetWithVisibilityResults` nodes. This caused main tweets to lose their Community Notes when extracted into the SQLite `tweet_object` table.
+  - Added a patch to `getQuoteTweet()` and `getRetweet()` in `index.html` so that Quote Tweet community notes accurately inherit `birdwatch_pivot` from their wrappers when loaded on the frontend.

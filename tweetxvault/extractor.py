@@ -69,7 +69,10 @@ def unwrap_tweet_result(result: Any) -> dict[str, Any] | None:
         return None
     typename = result.get("__typename")
     if typename == "TweetWithVisibilityResults":
-        return unwrap_tweet_result(result.get("tweet"))
+        unwrapped = unwrap_tweet_result(result.get("tweet"))
+        if isinstance(unwrapped, dict) and "birdwatch_pivot" in result:
+            unwrapped["birdwatch_pivot"] = result["birdwatch_pivot"]
+        return unwrapped
     if typename in {"TweetTombstone", "TweetUnavailable"}:
         return {"__tombstone__": True}
     if result.get("rest_id"):
