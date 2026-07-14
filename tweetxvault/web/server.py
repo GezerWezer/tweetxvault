@@ -34,7 +34,7 @@ def _build_fts_in_background(store) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if "paths" in server_state:
-        server_state["store"] = open_archive_store(server_state["paths"], create=False)
+        server_state["store"] = open_archive_store(server_state["paths"], create=False, config=server_state.get("config"))
         # Scalar indices are fast (sub-second) — build them synchronously
         server_state["store"].ensure_scalar_indexes()
         # FTS index can take minutes on large databases — build in background

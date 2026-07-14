@@ -158,7 +158,7 @@ async def run_preflight(
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> PreflightResult:
     auth_bundle = auth_bundle or resolve_auth_bundle(config)
-    existing_store = open_archive_store(paths, create=False)
+    existing_store = open_archive_store(paths, create=False, config=config)
     if existing_store is not None:
         try:
             existing_owner = existing_store.get_archive_owner_id()
@@ -766,7 +766,7 @@ async def _sync_collection_ready(
     lock = ProcessLock(paths.lock_file)
     lock.acquire()
     try:
-        store = open_archive_store(paths, create=True)
+        store = open_archive_store(paths, create=True, config=config)
         assert store is not None
         try:
             store.ensure_archive_owner_id(preflight.auth.user_id)

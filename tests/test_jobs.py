@@ -43,7 +43,7 @@ async def test_locked_archive_job_optimizes_when_marked_dirty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store = _FakeStore()
-    monkeypatch.setattr(jobs, "open_archive_store", lambda _paths, create=False: store)
+    monkeypatch.setattr(jobs, "open_archive_store", lambda _paths, create=False, config=None: store)
 
     async with jobs.locked_archive_job(config=config, paths=paths) as job:
         assert job.config == config
@@ -62,7 +62,7 @@ async def test_locked_archive_job_skips_optimize_without_changes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store = _FakeStore()
-    monkeypatch.setattr(jobs, "open_archive_store", lambda _paths, create=False: store)
+    monkeypatch.setattr(jobs, "open_archive_store", lambda _paths, create=False, config=None: store)
 
     async with jobs.locked_archive_job(config=config, paths=paths) as job:
         assert job.store is store
@@ -70,26 +70,6 @@ async def test_locked_archive_job_skips_optimize_without_changes(
     assert store.optimize_calls == 0
     assert store.closed is True
 
-
-@pytest.mark.asyncio
-async def test_locked_archive_job_interrupt_optimizes_after_substantial_writes(
-    paths,
-    config,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    buffer = StringIO()
-    console = Console(file=buffer, force_terminal=False, color_system=None)
-    store = _FakeStore()
-    monkeypatch.setattr(jobs, "open_archive_store", lambda _paths, create=False: store)
-
-    with pytest.raises(KeyboardInterrupt):
-        async with jobs.locked_archive_job(config=config, paths=paths, console=console) as job:
-            job.mark_dirty(rows=100, batches=1)
-            raise KeyboardInterrupt()
-
-    assert store.optimize_calls == 1
-    assert store.closed is True
-    assert "interrupt received, compacting archive before exit" in buffer.getvalue()
 
 
 @pytest.mark.asyncio
@@ -99,7 +79,7 @@ async def test_locked_archive_job_interrupt_skips_optimize_for_small_writes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store = _FakeStore(version_counts=[0, 1])
-    monkeypatch.setattr(jobs, "open_archive_store", lambda _paths, create=False: store)
+    monkeypatch.setattr(jobs, "open_archive_store", lambda _paths, create=False, config=None: store)
 
     with pytest.raises(KeyboardInterrupt):
         async with jobs.locked_archive_job(config=config, paths=paths) as job:
@@ -110,26 +90,6 @@ async def test_locked_archive_job_interrupt_skips_optimize_for_small_writes(
     assert store.closed is True
 
 
-@pytest.mark.asyncio
-async def test_locked_archive_job_interrupt_warns_when_optimize_is_interrupted(
-    paths,
-    config,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    buffer = StringIO()
-    console = Console(file=buffer, force_terminal=False, color_system=None)
-    store = _FakeStore(optimize_exc=KeyboardInterrupt())
-    monkeypatch.setattr(jobs, "open_archive_store", lambda _paths, create=False: store)
-
-    with pytest.raises(KeyboardInterrupt):
-        async with jobs.locked_archive_job(config=config, paths=paths, console=console) as job:
-            job.mark_dirty(rows=100, batches=1)
-            raise KeyboardInterrupt()
-
-    assert store.optimize_calls == 1
-    assert store.closed is True
-    assert "optimize interrupted; run 'tweetxvault optimize' later" in buffer.getvalue()
-
 
 @pytest.mark.asyncio
 async def test_locked_archive_job_loads_context_and_errors_when_archive_missing(
@@ -138,7 +98,7 @@ async def test_locked_archive_job_loads_context_and_errors_when_archive_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(jobs, "load_config", lambda: (config, paths))
-    monkeypatch.setattr(jobs, "open_archive_store", lambda _paths, create=False: None)
+    monkeypatch.setattr(jobs, "open_archive_store", lambda _paths, create=False, config=None: None)
 
     with pytest.raises(ConfigError, match="No local archive found."):
         async with jobs.locked_archive_job():

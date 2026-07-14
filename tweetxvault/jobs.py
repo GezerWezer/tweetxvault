@@ -127,7 +127,7 @@ async def locked_archive_job(
     lock = ProcessLock(paths.lock_file)
     lock.acquire()
     try:
-        store = open_archive_store(paths, create=False)
+        store = open_archive_store(paths, create=False, config=config)
         if store is None:
             raise ConfigError("No local archive found.")
         tracker = ArchiveWriteTracker(store)

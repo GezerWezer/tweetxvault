@@ -1402,7 +1402,7 @@ def test_optimize_archive_uses_write_lock(paths, monkeypatch) -> None:
             self.closed = True
 
     store = FakeStore()
-    monkeypatch.setattr(cli, "open_archive_store", lambda _paths, create=False: store)
+    monkeypatch.setattr(cli, "open_archive_store", lambda _paths, create=False, config=None: store)
     monkeypatch.setattr(
         cli,
         "_with_archive_write_lock",
@@ -1482,7 +1482,7 @@ def test_stats_archive_renders_summary_tables(paths, monkeypatch) -> None:
             self.closed = True
 
     store = FakeStore()
-    monkeypatch.setattr(cli, "open_archive_store", lambda _paths, create=False: store)
+    monkeypatch.setattr(cli, "open_archive_store", lambda _paths, create=False, config=None: store)
 
     cli.stats_archive()
 
@@ -1554,7 +1554,7 @@ def test_rehydrate_archive_uses_write_lock(paths, monkeypatch) -> None:
             self.closed = True
 
     store = FakeStore()
-    monkeypatch.setattr(cli, "open_archive_store", lambda _paths, create=False: store)
+    monkeypatch.setattr(cli, "open_archive_store", lambda _paths, create=False, config=None: store)
     monkeypatch.setattr(
         cli,
         "_with_archive_write_lock",
@@ -1618,7 +1618,7 @@ def test_embed_archive_uses_write_lock(paths, monkeypatch) -> None:
             self.closed = True
 
     store = FakeStore()
-    monkeypatch.setattr(cli, "open_archive_store", lambda _paths, create=False: store)
+    monkeypatch.setattr(cli, "open_archive_store", lambda _paths, create=False, config=None: store)
     monkeypatch.setattr(
         cli,
         "_with_archive_write_lock",

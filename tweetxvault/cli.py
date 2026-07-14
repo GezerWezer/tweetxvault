@@ -417,8 +417,8 @@ def _parse_search_collections(value: str | None, console: Console) -> set[str] |
 
 
 def _open_store_for_read(console: Console):
-    _, paths = load_config()
-    store = open_archive_store(paths, create=False)
+    config, paths = load_config()
+    store = open_archive_store(paths, create=False, config=config)
     if store is None:
         console.print("[red]No local archive found.[/red]")
         raise typer.Exit(1)
@@ -1508,10 +1508,10 @@ def unfurl_archive(
 def optimize_archive() -> None:
     """Compact the LanceDB archive to reduce file count and reclaim space."""
     console = _configure_logging()
-    _, paths = load_config()
+    config, paths = load_config()
 
     def run() -> None:
-        store = open_archive_store(paths, create=False)
+        store = open_archive_store(paths, create=False, config=config)
         if store is None:
             console.print("[red]No local archive found.[/red]")
             raise typer.Exit(1)
@@ -1673,10 +1673,10 @@ def rehydrate_archive() -> None:
     from tqdm import tqdm
 
     console = _configure_logging()
-    _, paths = load_config()
+    config, paths = load_config()
 
     def run() -> None:
-        store = open_archive_store(paths, create=False)
+        store = open_archive_store(paths, create=False, config=config)
         if store is None:
             console.print("[red]No local archive found.[/red]")
             raise typer.Exit(1)
@@ -1711,10 +1711,10 @@ def embed_archive(regen: EMBED_REGEN_OPTION = False) -> None:
     from tweetxvault.embed import EmbeddingEngine
 
     console = _configure_logging()
-    _, paths = load_config()
+    config, paths = load_config()
 
     def run() -> None:
-        store = open_archive_store(paths, create=False)
+        store = open_archive_store(paths, create=False, config=config)
         if store is None:
             console.print("[red]No local archive found.[/red]")
             raise typer.Exit(1)
@@ -1865,7 +1865,7 @@ def serve_daemon_internal() -> None:
 
     config, paths = load_config()
     
-    store = open_archive_store(paths, create=False)
+    store = open_archive_store(paths, create=False, config=config)
     if store is None:
         raise typer.Exit(1)
     store.close()

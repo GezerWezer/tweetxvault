@@ -66,12 +66,20 @@ class WebConfig(BaseModel):
     fetch_avatars: bool = True
 
 
+class DatabaseConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    cache_size_kb: int = Field(default=1000000, ge=0)
+    mmap_size_bytes: int = Field(default=8589934592, ge=0)
+
+
 class AppConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     auth: AuthConfig = Field(default_factory=AuthConfig)
     sync: SyncConfig = Field(default_factory=SyncConfig)
     web: WebConfig = Field(default_factory=WebConfig)
+    database: DatabaseConfig = Field(default_factory=DatabaseConfig)
 
 
 class XDGPaths(BaseModel):

@@ -95,7 +95,7 @@ def run_migration() -> None:
     new_db_path = paths.database_path
     print(f"Inserting into native SQLite database at {new_db_path}...")
     
-    store = open_archive_store(paths, create=True)
+    store = open_archive_store(paths, create=True, config=config)
     if not store:
         print("Failed to open SQLite store.")
         return
@@ -152,7 +152,7 @@ def run_migration() -> None:
         pbar.close()
         
     print("Rebuilding Full-Text Search index (this may take a few moments)...")
-    store = open_archive_store(paths, create=False)
+    store = open_archive_store(paths, create=False, config=config)
     if store:
         try:
             store.conn.execute("INSERT INTO archive_fts(archive_fts) VALUES('rebuild')")

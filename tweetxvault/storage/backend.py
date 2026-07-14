@@ -157,7 +157,7 @@ SEARCH_TEXT_FIELD = "text"
 class ArchiveStore:
     TABLE_NAME = "archive"
 
-    def __init__(self, db_path: Path, *, create: bool) -> None:
+    def __init__(self, db_path: Path, *, create: bool, config: "AppConfig | None" = None) -> None:
         self.db_path = db_path
         if create:
             db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -166,8 +166,11 @@ class ArchiveStore:
         self.conn = sqlite3.connect(db_file, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
-        self.conn.execute("PRAGMA cache_size = -1000000")  # ~1 GB page cache
-        self.conn.execute("PRAGMA mmap_size = 8589934592")  # 8 GB mmap
+        
+        cache_size_kb = config.database.cache_size_kb if config and hasattr(config, "database") else 1000000
+        mmap_size_bytes = config.database.mmap_size_bytes if config and hasattr(config, "database") else 8589934592
+        self.conn.execute(f"PRAGMA cache_size = -{cache_size_kb}")  # Negative for kibibytes
+        self.conn.execute(f"PRAGMA mmap_size = {mmap_size_bytes}")
         
         if create:
             self._migrate_schema()
@@ -777,7 +780,6 @@ class ArchiveStore:
         self._queue_record(record, cursor=cursor)
 
     def reset_sync_state(self, collection_type: str, folder_id: str | None = None) -> None:
-        self.invalidate_sort_cache()
         self._delete(f"row_key = {_expr_quote(self._row_key_for_sync_state(collection_type, folder_id))}")
 
     def has_membership(
@@ -2865,10 +2867,10 @@ class ArchiveStore:
     def optimize(self, *, cleanup: bool = True) -> None:
         self.conn.execute("VACUUM")
 
-def open_archive_store(paths: XDGPaths, *, create: bool) -> ArchiveStore | None:
+def open_archive_store(paths: XDGPaths, *, create: bool, config: "AppConfig | None" = None) -> ArchiveStore | None:
     if not create and not paths.database_path.exists():
         return None
     try:
-        return ArchiveStore(paths.database_path, create=create)
+        return ArchiveStore(paths.database_path, create=create, config=config)
     except FileNotFoundError:
         return None

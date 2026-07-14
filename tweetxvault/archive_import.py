@@ -1478,7 +1478,7 @@ async def import_x_archive(
         lock = ProcessLock(paths.lock_file)
         lock.acquire()
         try:
-            store = open_archive_store(paths, create=True)
+            store = open_archive_store(paths, create=True, config=config)
             assert store is not None
             write_tracker = ArchiveWriteTracker(store)
             store.ensure_archive_owner_id(identity.account_id)
@@ -1879,7 +1879,7 @@ async def import_x_archive(
         lock = ProcessLock(paths.lock_file)
         lock.acquire()
         try:
-            store = open_archive_store(paths, create=False)
+            store = open_archive_store(paths, create=False, config=config)
             assert store is not None
             final_counts = dict(counts)
             final_counts["detail_lookups"] = followup.detail_lookups
