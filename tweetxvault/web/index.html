@@ -232,7 +232,7 @@
                                             <div class="text-[15px] whitespace-pre-wrap leading-normal break-words" x-html="formatText({text: getQuoteText(getQuoteTweet(tweet)), raw_json: getQuoteTweet(tweet)})" @click="handleTextClick($event)"></div>
                                             <div x-html="renderMediaGrid(tweet.qt_media)" class="mt-2" @click.stop></div>
                                             <div x-html="renderCard({raw_json: getQuoteTweet(tweet)})" @click.stop></div>
-                                            <div x-html="renderCommunityNote(getQuoteTweet(tweet))" @click.stop></div>
+                                            <div x-html="renderCommunityNote(getQuoteTweet(tweet), true)" @click.stop></div>
                                         </div>
                                     </template>
                                 </div>
@@ -358,7 +358,7 @@
                                         <div class="text-[15px] whitespace-pre-wrap leading-normal break-words" x-html="formatText({text: getQuoteText(getQuoteTweet(threadData.main)), raw_json: getQuoteTweet(threadData.main)})" @click="handleTextClick($event)"></div>
                                         <div x-html="renderCard({raw_json: getQuoteTweet(threadData.main)})" @click.stop></div>
                                         <div x-html="renderMediaGrid(threadData.main.qt_media)" class="mt-2" @click.stop></div>
-                                        <div x-html="renderCommunityNote(getQuoteTweet(threadData.main))" @click.stop></div>
+                                        <div x-html="renderCommunityNote(getQuoteTweet(threadData.main), true)" @click.stop></div>
                                     </div>
                                 </template>
                             </div>
@@ -1208,20 +1208,48 @@
                               .replace(/'/g, '&#039;');
                 },
 
-                renderCommunityNote(raw_json) {
+                formatCommunityNoteText(bw) {
+                    let text = bw.subtitle?.text || '';
+                    if (!text) return '';
+                    let entities = bw.subtitle?.entities || [];
+                    
+                    entities = [...entities].sort((a, b) => a.fromIndex - b.fromIndex);
+                    
+                    let html = '';
+                    let lastIndex = 0;
+                    
+                    for (const ent of entities) {
+                        if (ent.ref?.urlType === 'ExternalUrl' && ent.ref?.url) {
+                            html += this.escapeHTML(text.substring(lastIndex, ent.fromIndex));
+                            const linkText = this.escapeHTML(text.substring(ent.fromIndex, ent.toIndex));
+                            const href = this.escapeHTML(ent.ref.url);
+                            html += `<a href="${href}" target="_blank" class="text-[#1d9bf0] hover:underline" @click.stop>${linkText}</a>`;
+                            lastIndex = ent.toIndex;
+                        }
+                    }
+                    html += this.escapeHTML(text.substring(lastIndex));
+                    return html;
+                },
+
+                renderCommunityNote(raw_json, isQuote = false) {
                     if (!raw_json || !raw_json.birdwatch_pivot) return '';
                     const bw = raw_json.birdwatch_pivot;
                     if (!bw.subtitle || !bw.subtitle.text) return '';
                     
+                    const textHtml = this.formatCommunityNoteText(bw);
+                    const containerClass = isQuote 
+                        ? "-mx-3 -mb-3 p-3 bg-[var(--bg-secondary)] border-t border-[var(--border-color)] rounded-b-xl text-left" 
+                        : "mt-3 border border-[var(--border-color)] rounded-xl p-3 bg-[var(--bg-secondary)] hover-bg transition cursor-pointer text-left";
+
+                    const iconSvg = `<svg viewBox="0 0 24 24" fill="#1d9bf0" class="w-[18px] h-[18px]"><path fill-rule="evenodd" d="M8.25 6.75a3.75 3.75 0 117.5 0 3.75 3.75 0 01-7.5 0zM15.75 9.75a3 3 0 116 0 3 3 0 01-6 0zM2.25 9.75a3 3 0 116 0 3 3 0 01-6 0zM6.31 15.117A6.745 6.745 0 0112 12a6.745 6.745 0 016.709 7.498.75.75 0 01-.372.568A12.696 12.696 0 0112 21.75c-2.305 0-4.47-.612-6.337-1.684a.75.75 0 01-.372-.568 6.787 6.787 0 011.019-4.38z" clip-rule="evenodd" /><path d="M5.082 14.254a8.287 8.287 0 00-1.308 5.135 9.687 9.687 0 01-1.764-.44l-.115-.04a.563.563 0 01-.373-.487l-.01-.121a3.75 3.75 0 016.576-3.036c.32.338.608.708.857 1.103a6.732 6.732 0 00-3.863 1.341 6.772 6.772 0 01-.004-3.456z" /><path d="M18.918 14.254a8.287 8.287 0 011.308 5.135 9.687 9.687 0 001.764-.44l.115-.04a.563.563 0 00.373-.487l.01-.121a3.75 3.75 0 00-6.576-3.036c-.32.338-.608.708-.857 1.103a6.732 6.732 0 013.863 1.341 6.772 6.772 0 00.004-3.456z" /></svg>`;
+                    
                     return `
-                    <div class="mt-3 border border-[var(--border-color)] rounded-xl p-3 bg-[var(--bg-primary)] hover-bg transition cursor-pointer text-left" onclick="event.stopPropagation()">
+                    <div class="${containerClass}" ${!isQuote ? 'onclick="event.stopPropagation()"' : ''}>
                         <div class="flex items-center space-x-2 text-[15px] font-bold text-[var(--text-primary)] mb-1">
-                            <svg viewBox="0 0 24 24" class="w-[18px] h-[18px] fill-[#1d9bf0]"><path d="M12.5 7.5c0-1.1-.9-2-2-2s-2 .9-2 2 .9 2 2 2 2-.9 2-2zM9 13.5v6.03c0 .81.67 1.47 1.5 1.47s1.5-.66 1.5-1.47v-4.53h1V20c0 .81.67 1.47 1.5 1.47s1.5-.66 1.5-1.47v-8c0-1.1-.9-2-2-2H9c-1.1 0-2 .9-2 2v2h2v-2.5zm-5 4c0-1.1-.9-2-2-2s-2 .9-2 2 .9 2 2 2 2-.9 2-2zm-2.5 3v3.5c0 .28.22.5.5.5s.5-.22.5-.5V19h1v3.5c0 .28.22.5.5.5s.5-.22.5-.5V18c0-.55-.45-1-1-1h-2c-.55 0-1 .45-1 1zM20 15.5c0-1.1-.9-2-2-2s-2 .9-2 2 .9 2 2 2 2-.9 2-2zm-2.5 3v3.5c0 .28.22.5.5.5s.5-.22.5-.5V19h1v3.5c0 .28.22.5.5.5s.5-.22.5-.5V18c0-.55-.45-1-1-1h-2c-.55 0-1 .45-1 1z"></path></svg>
+                            ${iconSvg}
                             <span>${bw.shorttitle || 'Readers added context'}</span>
                         </div>
-                        <div class="text-[15px] text-[var(--text-primary)] whitespace-pre-wrap break-words leading-normal mt-2">
-                            ${this.escapeHTML(bw.subtitle.text)}
-                        </div>
+                        <div class="text-[15px] text-[var(--text-primary)] whitespace-pre-wrap break-words leading-normal mt-2">${textHtml}</div>
                     </div>`;
                 },
 

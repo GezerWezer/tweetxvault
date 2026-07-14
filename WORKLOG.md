@@ -1171,3 +1171,8 @@
 - **2026-07-14 (Fix Community Notes data drop)**:
   - Fixed a bug where `extractor.py` was discarding the `birdwatch_pivot` wrapper when unwrapping `TweetWithVisibilityResults` nodes. This caused main tweets to lose their Community Notes when extracted into the SQLite `tweet_object` table.
   - Added a patch to `getQuoteTweet()` and `getRetweet()` in `index.html` so that Quote Tweet community notes accurately inherit `birdwatch_pivot` from their wrappers when loaded on the frontend.
+- **2026-07-14 (Community Notes Styling Tweaks)**:
+  - Replaced broken birdwatch SVG with an appropriate solid icon.
+  - Adjusted Community Note rendering for Quote Tweets so they are seamlessly joined with the bottom of the quote tweet container (no extra margin/border), imitating native shape.
+  - Added full hyperlink rendering inside the Community Note body using the `entities` array.
+  - Fixed background color to use the darker `var(--bg-secondary)` hue.
