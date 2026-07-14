@@ -232,11 +232,13 @@
                                             <div class="text-[15px] whitespace-pre-wrap leading-normal break-words" x-html="formatText({text: getQuoteText(getQuoteTweet(tweet)), raw_json: getQuoteTweet(tweet)})" @click="handleTextClick($event)"></div>
                                             <div x-html="renderMediaGrid(tweet.qt_media)" class="mt-2" @click.stop></div>
                                             <div x-html="renderCard({raw_json: getQuoteTweet(tweet)})" @click.stop></div>
+                                            <div x-html="renderCommunityNote(getQuoteTweet(tweet))" @click.stop></div>
                                         </div>
                                     </template>
                                 </div>
                             </template>
 
+                            <div x-html="renderCommunityNote(tweet.raw_json)" @click.stop></div>
                             <div x-html="renderActionBar(tweet)" class="mt-1"></div>
                         </div>
                     </div>
@@ -294,6 +296,7 @@
 
                                 <div class="text-[15px] mt-1 whitespace-pre-wrap leading-normal break-words" x-html="formatText(parent)" @click="handleTextClick($event)"></div>
                                 <div x-html="renderMediaGrid(parent.media)" class="mt-3" @click.stop></div>
+                                <div x-html="renderCommunityNote(parent.raw_json)" @click.stop></div>
                                 <div x-html="renderActionBar(parent)" class="mt-2"></div>
                             </div>
                         </div>
@@ -355,6 +358,7 @@
                                         <div class="text-[15px] whitespace-pre-wrap leading-normal break-words" x-html="formatText({text: getQuoteText(getQuoteTweet(threadData.main)), raw_json: getQuoteTweet(threadData.main)})" @click="handleTextClick($event)"></div>
                                         <div x-html="renderCard({raw_json: getQuoteTweet(threadData.main)})" @click.stop></div>
                                         <div x-html="renderMediaGrid(threadData.main.qt_media)" class="mt-2" @click.stop></div>
+                                        <div x-html="renderCommunityNote(getQuoteTweet(threadData.main))" @click.stop></div>
                                     </div>
                                 </template>
                             </div>
@@ -374,6 +378,7 @@
                             </template>
                         </div>
                         
+                        <div x-html="renderCommunityNote(threadData.main.raw_json)" @click.stop></div>
                         <div x-html="renderActionBar(threadData.main, true)" class="mt-1 pb-3"></div>
                     </div>
 
@@ -414,6 +419,7 @@
                                     <div class="text-[15px] mt-1 whitespace-pre-wrap leading-normal break-words" x-html="formatText(child)" @click="handleTextClick($event)"></div>
                                     <div x-html="renderCard(child)" @click.stop></div>
                                     <div x-html="renderMediaGrid(child.media)" class="mt-3" @click.stop></div>
+                                    <div x-html="renderCommunityNote(child.raw_json)" @click.stop></div>
                                     <div x-html="renderActionBar(child)" class="mt-2"></div>
                                 </div>
                             </div>
@@ -460,6 +466,7 @@
                                                 <div class="text-[15px] mt-1 whitespace-pre-wrap leading-normal break-words" x-html="formatText(reply)" @click="handleTextClick($event)"></div>
                                                 <div x-html="renderCard(reply)" @click.stop></div>
                                                 <div x-html="renderMediaGrid(reply.media)" class="mt-3" @click.stop></div>
+                                                <div x-html="renderCommunityNote(reply.raw_json)" @click.stop></div>
                                                 <div x-html="renderActionBar(reply)" class="mt-2"></div>
                                             </div>
                                         </div>
@@ -528,6 +535,7 @@
                             <div class="text-[15px] mt-1 whitespace-pre-wrap leading-normal break-words" x-html="formatText(tweet)" @click="handleTextClick($event)"></div>
                             <div x-html="renderCard(tweet)" @click.stop></div>
                             <div x-html="renderMediaGrid(tweet.media)" class="mt-3" @click.stop></div>
+                            <div x-html="renderCommunityNote(tweet.raw_json)" @click.stop></div>
                             <div x-html="renderActionBar(tweet)" class="mt-3"></div>
                         </div>
                     </div>
@@ -1181,6 +1189,23 @@
 
                 renderRawMediaGrid(rawMediaList) {
                     return this.renderMediaGrid(rawMediaList, true);
+                },
+
+                renderCommunityNote(raw_json) {
+                    if (!raw_json || !raw_json.birdwatch_pivot) return '';
+                    const bw = raw_json.birdwatch_pivot;
+                    if (!bw.subtitle || !bw.subtitle.text) return '';
+                    
+                    return `
+                    <div class="mt-3 border border-[var(--border-color)] rounded-xl p-3 bg-[var(--bg-primary)] hover-bg transition cursor-pointer text-left" onclick="event.stopPropagation()">
+                        <div class="flex items-center space-x-2 text-[15px] font-bold text-[var(--text-primary)] mb-1">
+                            <svg viewBox="0 0 24 24" class="w-[18px] h-[18px] fill-[#1d9bf0]"><path d="M12.5 7.5c0-1.1-.9-2-2-2s-2 .9-2 2 .9 2 2 2 2-.9 2-2zM9 13.5v6.03c0 .81.67 1.47 1.5 1.47s1.5-.66 1.5-1.47v-4.53h1V20c0 .81.67 1.47 1.5 1.47s1.5-.66 1.5-1.47v-8c0-1.1-.9-2-2-2H9c-1.1 0-2 .9-2 2v2h2v-2.5zm-5 4c0-1.1-.9-2-2-2s-2 .9-2 2 .9 2 2 2 2-.9 2-2zm-2.5 3v3.5c0 .28.22.5.5.5s.5-.22.5-.5V19h1v3.5c0 .28.22.5.5.5s.5-.22.5-.5V18c0-.55-.45-1-1-1h-2c-.55 0-1 .45-1 1zM20 15.5c0-1.1-.9-2-2-2s-2 .9-2 2 .9 2 2 2 2-.9 2-2zm-2.5 3v3.5c0 .28.22.5.5.5s.5-.22.5-.5V19h1v3.5c0 .28.22.5.5.5s.5-.22.5-.5V18c0-.55-.45-1-1-1h-2c-.55 0-1 .45-1 1z"></path></svg>
+                            <span>${bw.shorttitle || 'Readers added context'}</span>
+                        </div>
+                        <div class="text-[15px] text-[var(--text-primary)] whitespace-pre-wrap break-words leading-normal mt-2">
+                            ${this.escapeHTML(bw.subtitle.text)}
+                        </div>
+                    </div>`;
                 },
 
                 renderActionBar(tweet, isMain = false) {

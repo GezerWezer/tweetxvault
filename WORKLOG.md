@@ -1165,3 +1165,6 @@
   - Fixed retweet icon on the `[name] Reposted` label in the Web UI.
   - Added support for displaying "Tombstone" (missing/suspended) quote tweets as disabled placeholder boxes instead of silently crashing/hiding the quote tweet block.
   - Added "private account" and "account that no longer exists" tombstone texts to the timeline filter in `server.py` so they are properly hidden from the main feed just like suspended accounts.
+- **2026-07-14 (Community Notes)**:
+  - Implemented Twitter-style rendering for Community Notes across all timeline views, thread views, quote tweets, and the media viewer sidebar. 
+  - Only active notes (those with text context) are shown, accurately replicating the production Birdwatch structure.
