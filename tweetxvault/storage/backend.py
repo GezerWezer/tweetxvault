@@ -1597,17 +1597,22 @@ class ArchiveStore:
         preview_only: bool = False,
         limit: int | None = None,
     ) -> list[str]:
-        return [
-            row["tweet_id"]
-            for row in self.list_article_rows(preview_only=preview_only, limit=limit)
-        ]
+        where_expr = _and_expr(
+            "record_type = 'article'",
+            "(status IS NULL OR status != 'body_present')" if preview_only else "",
+        )
+        rows = self._query(expr=where_expr, cols=["tweet_id"])
+        rows.sort(key=lambda row: row.get("tweet_id") or "")
+        ids = [row["tweet_id"] for row in rows if row.get("tweet_id")]
+        return ids[:limit] if limit is not None else ids
 
     def list_tweet_objects_for_enrichment(
         self, *, limit: int | None = None
     ) -> list[dict[str, Any]]:
         rows = self._query(expr=
             "record_type = 'tweet_object' "
-            "AND (enrichment_state = 'pending' OR enrichment_state = 'transient_failure')"
+            "AND (enrichment_state = 'pending' OR enrichment_state = 'transient_failure')",
+            cols=["tweet_id", "enrichment_checked_at"]
         )
         rows.sort(
             key=lambda row: (row.get("enrichment_checked_at") or "", row.get("tweet_id") or "")
@@ -1617,7 +1622,10 @@ class ArchiveStore:
     def list_dead_tweets_for_resurrection(
         self, *, limit: int | None = None
     ) -> list[dict[str, Any]]:
-        rows = self._query(expr="record_type = 'tweet_object' AND enrichment_state = 'terminal_unavailable'")
+        rows = self._query(
+            expr="record_type = 'tweet_object' AND enrichment_state = 'terminal_unavailable'",
+            cols=["tweet_id"]
+        )
         rows.sort(
             key=lambda row: (row.get("enrichment_checked_at") or "", row.get("tweet_id") or "")
         )

@@ -1176,3 +1176,8 @@
   - Adjusted Community Note rendering for Quote Tweets so they are seamlessly joined with the bottom of the quote tweet container (no extra margin/border), imitating native shape.
   - Added full hyperlink rendering inside the Community Note body using the `entities` array.
   - Fixed background color to use the darker `var(--bg-secondary)` hue.
+- **2026-07-15 (Memory Spike Fix)**:
+  - Investigated RAM/swap exhaustion during sync after "linked-status" phase.
+  - Root cause was the automated follow-up step (`archive_enrich`) that called `store.list_tweet_objects_for_enrichment()` or `store.get_article_tweet_ids()` to get row counts.
+  - These queries were indiscriminately loading the full massive `raw_json` payload for every pending item (up to hundreds of thousands of items) into memory.
+  - Optimized these SQLite database retrieval functions (`list_tweet_objects_for_enrichment`, `list_dead_tweets_for_resurrection`, and `get_article_tweet_ids`) to explicitly specify `cols=["tweet_id"]`, eliminating the giant JSON payload deserialization and resolving the out-of-memory issue.
