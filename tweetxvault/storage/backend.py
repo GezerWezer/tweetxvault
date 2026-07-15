@@ -1409,7 +1409,14 @@ class ArchiveStore:
             _state_filter_expr("download_state", states) if states is not None else "",
             _expr_in("media_type", media_types) if media_types is not None else "",
         )
-        rows = self._query(expr=where_expr)
+        cols = [
+            "row_key", "tweet_id", "position", "media_key", "media_type", 
+            "media_url", "thumbnail_url", "download_state", "local_path", 
+            "thumbnail_local_path", "sha256", "byte_size", "content_type", 
+            "thumbnail_sha256", "thumbnail_byte_size", "thumbnail_content_type", 
+            "variants_json", "source"
+        ]
+        rows = self._query(expr=where_expr, cols=cols)
         rows.sort(
             key=lambda row: (
                 row.get("tweet_id") or "",
@@ -1472,7 +1479,10 @@ class ArchiveStore:
         downloaded_at: str | None,
         download_error: str | None,
     ) -> dict[str, Any]:
-        updated = dict(row)
+        full_row = self._get_row(row["row_key"])
+        if full_row is None:
+            raise KeyError(f"Media row not found: {row['row_key']}")
+        updated = dict(full_row)
         updated.update(
             {
                 "download_state": download_state,
@@ -1503,7 +1513,12 @@ class ArchiveStore:
             "record_type = 'url'",
             _state_filter_expr("unfurl_state", states) if states is not None else "",
         )
-        rows = self._query(expr=where_expr)
+        cols = [
+            "row_key", "url_hash", "canonical_url", "url", "expanded_url", 
+            "final_url", "http_status", "title", "description", "site_name", 
+            "content_type", "unfurl_state"
+        ]
+        rows = self._query(expr=where_expr, cols=cols)
         rows.sort(key=lambda row: row.get("canonical_url") or row.get("url") or "")
         return rows[:limit] if limit is not None else rows
 
@@ -1558,7 +1573,10 @@ class ArchiveStore:
         last_fetched_at: str | None,
         download_error: str | None,
     ) -> dict[str, Any]:
-        updated = dict(row)
+        full_row = self._get_row(row["row_key"])
+        if full_row is None:
+            raise KeyError(f"URL row not found: {row['row_key']}")
+        updated = dict(full_row)
         updated.update(
             {
                 "http_status": http_status,

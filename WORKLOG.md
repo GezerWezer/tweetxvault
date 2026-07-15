@@ -1181,3 +1181,8 @@
   - Root cause was the automated follow-up step (`archive_enrich`) that called `store.list_tweet_objects_for_enrichment()` or `store.get_article_tweet_ids()` to get row counts.
   - These queries were indiscriminately loading the full massive `raw_json` payload for every pending item (up to hundreds of thousands of items) into memory.
   - Optimized these SQLite database retrieval functions (`list_tweet_objects_for_enrichment`, `list_dead_tweets_for_resurrection`, and `get_article_tweet_ids`) to explicitly specify `cols=["tweet_id"]`, eliminating the giant JSON payload deserialization and resolving the out-of-memory issue.
+- **2026-07-15 (Memory Spike Fix part 2)**:
+  - Addressed secondary RAM/swap exhaustion occurring after media downloads (during the unfurl phase).
+  - Similar to the enrichment bug, `store.list_url_rows` and `store.list_media_rows` were indiscriminately fetching all columns (including massive `raw_json` blobs for up to hundreds of thousands of items) into memory.
+  - Optimized `list_url_rows` and `list_media_rows` to explicitly define the necessary column subsets without `raw_json`.
+  - Refactored `build_url_unfurl_update` and `build_media_download_update` to selectively fetch the full database row by `row_key` right before `merge_rows` insertion, ensuring data integrity without memory bloat.
