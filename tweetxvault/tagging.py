@@ -50,6 +50,15 @@ async def tag_media_tweets(
 
     client = genai.Client(api_key=tag_config.api_key)
     
+    try:
+        for f in client.files.list():
+            try:
+                client.files.delete(name=f.name)
+            except Exception:
+                pass
+    except Exception as e:
+        console.print(f"[yellow]Warning: Could not clear Gemini File API: {e}[/yellow]")
+    
     all_media: dict[str, list[dict[str, Any]]] = defaultdict(list)
     tweet_objs: dict[str, dict[str, Any]] = {}
     
