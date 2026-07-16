@@ -82,6 +82,7 @@ class TaggingConfig(BaseModel):
     thinking_level: str = "high"
     batch: bool = True
     limit: int = Field(default=20, ge=1)
+    google_search: bool = True
 
 
 class AppConfig(BaseModel):

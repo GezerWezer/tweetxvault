@@ -149,20 +149,29 @@ async def tag_media_tweets(
     
     try:
         response = None
+        use_search = tag_config.google_search
         for attempt in range(3):
             try:
+                config_args = {
+                    "response_mime_type": "application/json",
+                    "response_schema": list[TagResult],
+                }
+                if use_search:
+                    config_args["tools"] = [{"google_search": {}}]
+                
                 response = await asyncio.to_thread(
                     client.models.generate_content,
                     model=model_name,
                     contents=generation_parts,
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        response_schema=list[TagResult],
-                        tools=[{"google_search": {}}],
-                    )
+                    config=types.GenerateContentConfig(**config_args)
                 )
                 break
             except Exception as e:
+                if ("429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)) and use_search:
+                    console.print("[yellow]Google Search Grounding failed (429/Quota limit). Retrying immediately without Search...[/yellow]")
+                    use_search = False
+                    continue
+                
                 if "429" in str(e) and attempt < 2:
                     console.print(f"[yellow]Hit rate limit (429). Retrying in 15 seconds...[/yellow]")
                     await asyncio.sleep(15)
