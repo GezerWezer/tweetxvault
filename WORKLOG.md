@@ -1191,3 +1191,6 @@
   - The root cause was that `len(store.list_tweet_objects_for_enrichment())` was called to count the remaining records after processing a chunk. Even though we limited the chunk to 500, this `len()` call was made without any limit.
   - As a result, SQLite would load the IDs for *all* pending and transient failure tweets (which could be millions of strings) into Python dictionaries and create a massive Python list just to calculate the length.
   - Fixed by adding efficient `count_tweet_objects_for_enrichment` and `count_dead_tweets_for_resurrection` methods directly to `backend.py`, leveraging SQLite's `COUNT(*)` which consumes effectively zero RAM.
+- **2026-07-16 (Enrichment Chunk Size Fix)**:
+  - Fixed an issue where the `archive enrich` detail step was not respecting the limit parameter, causing it to attempt processing thousands of rows instead of chunking them.
+  - Adjusted the default limit for both `tweetxvault sync` and `tweetxvault import enrich` from 500 down to 200 per the user's request, preventing rate limiting issues and excessively long passes.

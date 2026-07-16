@@ -1405,7 +1405,7 @@ def import_archive_enrich(
                 "per-tweet TweetDetail API after bulk live syncs."
             ),
         ),
-    ] = None,
+    ] = 200,
     browser: SYNC_BROWSER_OPTION = None,
     profile: SYNC_PROFILE_OPTION = None,
     profile_path: SYNC_PROFILE_PATH_OPTION = None,

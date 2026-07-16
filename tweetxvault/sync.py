@@ -482,7 +482,7 @@ async def _run_followup_archive_enrich(
     from tweetxvault.archive_import import enrich_imported_archive
 
     return await enrich_imported_archive(
-        limit=None,
+        limit=200,
         config=config,
         paths=paths,
         auth_bundle=auth_bundle,
@@ -619,7 +619,7 @@ async def _run_auto_followups(
         try:
             from tweetxvault.archive_import import resurrect_dead_tweets
             result = await resurrect_dead_tweets(
-                limit=None if plan.retry_failed else 500,
+                limit=None if plan.retry_failed else 200,
                 config=config,
                 paths=paths,
                 auth_bundle=auth_bundle,
