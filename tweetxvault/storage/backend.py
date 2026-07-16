@@ -2173,6 +2173,23 @@ class ArchiveStore:
 
         return self._hydrate_exported_rows(sorted_rows, include_raw_json, defer_raw_json)
 
+    def get_tag_counts(self, query: str = "", limit: int = 50) -> list[dict[str, Any]]:
+        sql = '''
+        SELECT json_each.value as tag, count(*) as count 
+        FROM archive, json_each(archive.raw_json, '$.tags') 
+        WHERE record_type = 'media_tag'
+        '''
+        params = []
+        if query:
+            sql += " AND LOWER(json_each.value) LIKE ?"
+            params.append(f"%{query.lower()}%")
+            
+        sql += " GROUP BY LOWER(json_each.value) ORDER BY count DESC LIMIT ?"
+        params.append(limit)
+        
+        rows = self.conn.execute(sql, tuple(params)).fetchall()
+        return [dict(r) for r in rows]
+
     def counts(self) -> dict[str, int]:
         tweet_rows = self._count("record_type = 'tweet'")
         return {

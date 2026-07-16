@@ -681,6 +681,19 @@ def api_tweet_quotes(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+@app.get("/api/tags/autocomplete")
+def api_tags_autocomplete(
+    q: str = "",
+    store = Depends(get_store),
+    _auth: bool = Depends(verify_credentials)
+):
+    try:
+        results = store.get_tag_counts(query=q)
+        return {"tags": results}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/stats")
 def api_stats(

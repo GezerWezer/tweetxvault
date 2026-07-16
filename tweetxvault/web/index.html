@@ -132,15 +132,27 @@
                     </button>
                 </div>
                 
-                <!-- Autocomplete Dropdown -->
                 <div x-show="showDropdown && options.length > 0" x-transition.opacity.duration.100ms class="absolute top-full left-4 right-4 mt-1 bg-[var(--dropdown-bg)] border border-[var(--border-color)] rounded-xl shadow-[0_0_15px_rgba(255,255,255,0.1)] overflow-hidden z-50 py-2">
                     <template x-for="(opt, index) in options" :key="index">
-                        <div @click="selectOptionIndex(index)" @mouseenter="selectedIndex = index" :class="{'bg-[var(--bg-tertiary)]': selectedIndex === index}" class="px-4 py-3 cursor-pointer flex flex-col justify-center transition">
-                            <div class="flex items-center space-x-2">
-                                <span class="text-[var(--text-primary)] font-bold" x-text="opt.prefix"></span>
-                                <span class="text-[var(--text-secondary)]" x-text="opt.value || opt.desc"></span>
-                            </div>
-                            <div class="text-[var(--text-secondary)] text-sm" x-show="opt.value" x-text="opt.desc"></div>
+                        <div @click="selectOptionIndex(index)" @mouseenter="selectedIndex = index" :class="{'bg-[var(--bg-tertiary)]': selectedIndex === index}" class="px-4 py-3 cursor-pointer flex transition justify-between items-center">
+                            <template x-if="!opt.isTag">
+                                <div class="flex flex-col justify-center">
+                                    <div class="flex items-center space-x-2">
+                                        <span class="text-[var(--text-primary)] font-bold" x-text="opt.prefix"></span>
+                                        <span class="text-[var(--text-secondary)]" x-text="opt.value || opt.desc"></span>
+                                    </div>
+                                    <div class="text-[var(--text-secondary)] text-sm" x-show="opt.value" x-text="opt.desc"></div>
+                                </div>
+                            </template>
+                            <template x-if="opt.isTag">
+                                <div class="flex w-full justify-between items-center">
+                                    <div class="flex items-center space-x-2">
+                                        <span class="text-[var(--text-primary)] font-bold" x-text="opt.prefix"></span>
+                                        <span class="text-[var(--text-primary)]" x-text="opt.value"></span>
+                                    </div>
+                                    <span class="text-[var(--text-secondary)] text-sm bg-[var(--bg-tertiary)] px-2 py-0.5 rounded-full font-medium" x-text="opt.count"></span>
+                                </div>
+                            </template>
                         </div>
                     </template>
                 </div>
@@ -1453,6 +1465,21 @@
                             this.options = this.hasOptions.filter(o => o.value.startsWith(val));
                         } else if (prefix === 'filter:') {
                             this.options = this.filterOptions.filter(o => o.value.startsWith(val));
+                        } else if (prefix === 'tag:') {
+                            fetch(`/api/tags/autocomplete?q=${encodeURIComponent(val)}`)
+                                .then(res => res.json())
+                                .then(data => {
+                                    this.options = data.tags.map(t => ({
+                                        isTag: true,
+                                        prefix: 'tag:',
+                                        value: t.tag,
+                                        count: t.count.toLocaleString()
+                                    }));
+                                    if (this.options.length === 0) {
+                                        this.showDropdown = false;
+                                    }
+                                })
+                                .catch(err => console.error(err));
                         } else {
                             this.options = [];
                             this.showDropdown = false;
