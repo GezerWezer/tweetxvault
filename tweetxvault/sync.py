@@ -592,6 +592,7 @@ async def _run_followup_tagging(
         return await tag_media_tweets(
             store=job.store,
             config=config,
+            paths=paths,
             console=console,
             tweet_ids=tweet_ids,
         )

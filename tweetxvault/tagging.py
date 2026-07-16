@@ -12,10 +12,8 @@ from google import genai
 from google.genai import types
 from PIL import Image
 
-from .config import AppConfig, TaggingConfig
+from .config import AppConfig, TaggingConfig, XDGPaths
 from .storage.backend import ArchiveStore
-from .models import TimelineTweet
-from .exceptions import TweetXVaultError
 
 TAGGING_SYSTEM_PROMPT = """You will be provided with a tweet (including its author, handle, text, and attached images or videos). Your task is to analyze the content and generate a description alongside highly specific search tags.
 
@@ -37,6 +35,7 @@ class TagResult(BaseModel):
 async def tag_media_tweets(
     store: ArchiveStore,
     config: AppConfig,
+    paths: XDGPaths,
     console: Console,
     tweet_ids: list[str],
     model_override: str | None = None,
@@ -50,8 +49,6 @@ async def tag_media_tweets(
         return 0
 
     client = genai.Client(api_key=tag_config.api_key)
-    
-    prompts = []
     
     all_media: dict[str, list[dict[str, Any]]] = defaultdict(list)
     tweet_objs: dict[str, dict[str, Any]] = {}
@@ -68,6 +65,7 @@ async def tag_media_tweets(
     generation_parts = [TAGGING_SYSTEM_PROMPT, "\n\n--- TWEETS TO TAG ---\n\n"]
     
     uploaded_videos: list[types.File] = []
+    has_media = False
     
     for tid in tweet_ids:
         t_obj = tweet_objs.get(tid)
@@ -75,15 +73,16 @@ async def tag_media_tweets(
             continue
             
         t_json = json.loads(t_obj.get("raw_json") or "{}")
+        legacy = t_json.get("legacy") or {}
         
         author_name = t_obj.get("author_display_name", "")
         author_handle = t_obj.get("author_username", "")
         text = t_obj.get("text", "")
         
         tweet_type = "Standalone"
-        if "quoted_status_id_str" in t_json:
+        if legacy.get("quoted_status_id_str"):
             tweet_type = "Quote Tweet"
-        elif "in_reply_to_status_id_str" in t_json:
+        elif legacy.get("in_reply_to_status_id_str"):
             tweet_type = "Reply"
 
         tweet_text = f"[ID: {tid}]\nType: {tweet_type}\nAuthor: {author_name} (@{author_handle})\nText: {json.dumps(text)}\nMedia: "
@@ -94,7 +93,7 @@ async def tag_media_tweets(
             if not local_path:
                 continue
                 
-            abs_path = config.paths.media_dir / local_path
+            abs_path = paths.media_dir / local_path
             if not abs_path.exists():
                 continue
                 
@@ -105,6 +104,7 @@ async def tag_media_tweets(
                     uploaded_videos.append(f)
                     generation_parts.append(f)
                     generation_parts.append(f" [Attached Video: {m.get('media_key')}] ")
+                    has_media = True
                 except Exception as e:
                     console.print(f"[red]Failed to upload video {abs_path}: {e}[/red]")
             else:
@@ -113,12 +113,14 @@ async def tag_media_tweets(
                     img.load()
                     generation_parts.append(img)
                     generation_parts.append(f" [Attached Image: {m.get('media_key')}] ")
+                    has_media = True
                 except Exception as e:
                     console.print(f"[red]Failed to load image {abs_path}: {e}[/red]")
                     
         generation_parts.append("\n\n")
 
-    if not uploaded_videos and len(generation_parts) <= 2:
+    if not has_media:
+        console.print("[yellow]No loadable media found for the selected tweets.[/yellow]")
         return 0
 
     if uploaded_videos:
@@ -178,6 +180,6 @@ async def tag_media_tweets(
     finally:
         for v in uploaded_videos:
             try:
-                genai.delete_file(v.name)
+                client.files.delete(name=v.name)
             except:
                 pass

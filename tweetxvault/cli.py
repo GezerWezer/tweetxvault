@@ -1511,6 +1511,7 @@ def tag_archive(
                 await tag_media_tweets(
                     store=job.store,
                     config=config,
+                    paths=paths,
                     console=console,
                     tweet_ids=tweet_ids,
                     model_override=model,
