@@ -1488,6 +1488,43 @@ def unfurl_archive(
     )
 
 
+@app.command("tag", help="Use Gemini to generate search tags and descriptions for media tweets.")
+def tag_archive(
+    model: Annotated[
+        str | None, typer.Option("--model", help="Override the Gemini model specified in config.toml")
+    ] = None,
+) -> None:
+    console = _configure_logging()
+    try:
+        config, paths = load_config()
+        from tweetxvault.tagging import tag_media_tweets
+        from tweetxvault.jobs import locked_archive_job
+
+        async def run_tagging():
+            async with locked_archive_job(config=config, paths=paths, console=console) as job:
+                # We fetch eligible tweets up to limit, or 1 if batching is disabled
+                limit = config.tagging.limit if config.tagging.batch else 1
+                tweet_ids = job.store.get_eligible_tweets_for_tagging(limit=limit)
+                if not tweet_ids:
+                    console.print("No eligible untagged media tweets found.")
+                    return
+                await tag_media_tweets(
+                    store=job.store,
+                    config=config,
+                    console=console,
+                    tweet_ids=tweet_ids,
+                    model_override=model,
+                )
+
+        asyncio.run(run_tagging())
+    except ConfigError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+    except TweetXVaultError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2) from exc
+
+
 @app.command("optimize")
 def optimize_archive() -> None:
     """Vacuum the SQLite database to reclaim space after large deletions."""

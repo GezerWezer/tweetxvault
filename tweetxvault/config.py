@@ -73,6 +73,17 @@ class DatabaseConfig(BaseModel):
     mmap_size_bytes: int = Field(default=8589934592, ge=0)
 
 
+class TaggingConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    enabled: bool = False
+    api_key: str | None = None
+    model: str = "gemini-3.5-flash"
+    thinking_level: str = "high"
+    batch: bool = True
+    limit: int = Field(default=20, ge=1)
+
+
 class AppConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -80,6 +91,7 @@ class AppConfig(BaseModel):
     sync: SyncConfig = Field(default_factory=SyncConfig)
     web: WebConfig = Field(default_factory=WebConfig)
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
+    tagging: TaggingConfig = Field(default_factory=TaggingConfig)
 
 
 class XDGPaths(BaseModel):

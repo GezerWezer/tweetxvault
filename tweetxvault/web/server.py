@@ -214,13 +214,16 @@ def api_tweets(
         post_filters = {}
         for k, v in filters.items():
             base_k = k[1:] if k.startswith('-') else k
-            if not k.startswith('-') and base_k in {"from", "conversation_id", "since", "until", "since_time", "until_time"}:
+            if not k.startswith('-') and base_k in {"from", "conversation_id", "since", "until", "since_time", "until_time", "tag"}:
                 if base_k == "from":
                     vals = [val.replace("@", "") for val in v]
                     joined = " OR ".join(f"LOWER(author_username) = '{val}'" for val in vals)
                     pushable_exprs.append(f"({joined})")
                 elif base_k == "conversation_id":
                     joined = " OR ".join(f"conversation_id = '{val}'" for val in v)
+                    pushable_exprs.append(f"({joined})")
+                elif base_k == "tag":
+                    joined = " OR ".join(f"tweet_id IN (SELECT tweet_id FROM archive WHERE record_type = 'media_tag' AND raw_json LIKE '%\"' || '{val.replace(\"'\", \"''\")}' || '\"%')" for val in v)
                     pushable_exprs.append(f"({joined})")
                 elif base_k == "since" or base_k == "since_time":
                     try:
@@ -430,6 +433,20 @@ def get_avatar(user_id: str, store = Depends(get_store), _auth: bool = Depends(v
             pass
             
     return save_and_return_transparent()
+
+@app.delete("/api/tags/{tweet_id}")
+def api_delete_tag(
+    tweet_id: str,
+    store = Depends(get_store),
+    _auth: bool = Depends(verify_credentials)
+):
+    try:
+        store.delete_media_tag(tweet_id)
+        return {"success": True}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/tweets/{tweet_id}")
 def api_tweet_thread(

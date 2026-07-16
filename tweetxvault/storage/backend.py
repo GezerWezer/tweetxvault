@@ -1658,6 +1658,30 @@ class ArchiveStore:
     def count_dead_tweets_for_resurrection(self) -> int:
         return self._count("record_type = 'tweet_object' AND enrichment_state = 'terminal_unavailable'")
 
+    def get_eligible_tweets_for_tagging(self, *, limit: int = 20) -> list[str]:
+        # Must be bookmarked/liked, have an enriched tweet_object, have media, and NOT be tagged already.
+        query = """
+            SELECT DISTINCT t.tweet_id
+            FROM archive t
+            JOIN archive o ON o.tweet_id = t.tweet_id AND o.record_type = 'tweet_object'
+            JOIN archive m ON m.tweet_id = t.tweet_id AND m.record_type = 'media'
+            LEFT JOIN archive tg ON tg.tweet_id = t.tweet_id AND tg.record_type = 'media_tag'
+            WHERE t.record_type = 'tweet'
+              AND o.enrichment_state = 'done'
+              AND tg.tweet_id IS NULL
+            ORDER BY t.created_at_ts DESC
+            LIMIT ?
+        """
+        rows = self.conn.execute(query, (limit,)).fetchall()
+        return [row["tweet_id"] for row in rows]
+
+    def delete_media_tag(self, tweet_id: str) -> None:
+        self.conn.execute(
+            "DELETE FROM archive WHERE record_type = 'media_tag' AND tweet_id = ?",
+            (tweet_id,)
+        )
+        self.conn.commit()
+
     def update_tweet_object_enrichment(
         self,
         tweet_id: str,
@@ -2025,6 +2049,9 @@ class ArchiveStore:
                 }
             )
 
+        media_tag_rows = self._rows_for_values("media_tag", "tweet_id", tweet_ids, columns=["tweet_id", "raw_json"])
+        tags_by_tweet = {row["tweet_id"]: json.loads(row["raw_json"]) for row in media_tag_rows if row.get("raw_json")}
+
         exported = []
         for row in sorted_rows:
             tweet_media = media_by_tweet.get(row["tweet_id"], [])
@@ -2056,6 +2083,7 @@ class ArchiveStore:
                     "media": tweet_media,
                     "urls": url_refs_by_tweet.get(row["tweet_id"], []),
                     "article": article,
+                    "media_tags": tags_by_tweet.get(row["tweet_id"]),
                     "raw_json": json.loads(row["raw_json"]) if include_raw_json and row.get("raw_json") else None,
                 }
             )

@@ -108,11 +108,12 @@ class SyncFollowupPlan:
     media: bool = True
     unfurl: bool = True
     threads: bool = True
+    tagging: bool = True
     retry_failed: bool = False
 
     @property
     def enabled(self) -> bool:
-        return any((self.enrich, self.articles, self.media, self.unfurl, self.threads, self.retry_failed))
+        return any((self.enrich, self.articles, self.media, self.unfurl, self.threads, self.tagging, self.retry_failed))
 
 
 class ProcessLock:
@@ -573,6 +574,29 @@ async def _run_followup_unfurl(
     )
 
 
+async def _run_followup_tagging(
+    *,
+    config: AppConfig,
+    paths: XDGPaths,
+    console: Console,
+):
+    from tweetxvault.tagging import tag_media_tweets
+    from tweetxvault.jobs import locked_archive_job
+
+    async with locked_archive_job(config=config, paths=paths, console=console) as job:
+        limit = config.tagging.limit if config.tagging.batch else 1
+        tweet_ids = job.store.get_eligible_tweets_for_tagging(limit=limit)
+        if not tweet_ids:
+            return 0
+            
+        return await tag_media_tweets(
+            store=job.store,
+            config=config,
+            console=console,
+            tweet_ids=tweet_ids,
+        )
+
+
 async def _run_auto_followups(
     *,
     plan: SyncFollowupPlan,
@@ -739,6 +763,26 @@ async def _run_auto_followups(
                 f"{result.updated} updated, "
                 f"{result.failed} failed",
             )
+
+    if plan.tagging and config.tagging.enabled:
+        _log_sync_followup(console, "running media tagging")
+        try:
+            tagged_count = await _run_followup_tagging(
+                config=config,
+                paths=paths,
+                console=console,
+            )
+        except Exception as exc:
+            _log_embedding_warning(
+                console,
+                f"sync follow-up tagging failed; run 'tweetxvault tag' later ({exc})",
+            )
+        else:
+            _log_sync_followup(
+                console,
+                f"tagging: {tagged_count} tagged",
+            )
+
 
 
 async def _sync_collection_ready(
