@@ -93,7 +93,7 @@ async def tag_media_tweets(
             if not local_path:
                 continue
                 
-            abs_path = paths.media_dir / local_path
+            abs_path = paths.data_dir / local_path
             if not abs_path.exists():
                 continue
                 
