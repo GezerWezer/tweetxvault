@@ -223,8 +223,11 @@ def api_tweets(
                     joined = " OR ".join(f"conversation_id = '{val}'" for val in v)
                     pushable_exprs.append(f"({joined})")
                 elif base_k == "tag":
-                    joined = " OR ".join(f"tweet_id IN (SELECT tweet_id FROM archive WHERE record_type = 'media_tag' AND raw_json LIKE '%\"' || '{val.replace(\"'\", \"''\")}' || '\"%')" for val in v)
-                    pushable_exprs.append(f"({joined})")
+                    exprs = []
+                    for val in v:
+                        safe_val = val.replace("'", "''")
+                        exprs.append(f"tweet_id IN (SELECT tweet_id FROM archive WHERE record_type = 'media_tag' AND raw_json LIKE '%\"' || '{safe_val}' || '\"%')")
+                    pushable_exprs.append(f"({' OR '.join(exprs)})")
                 elif base_k == "since" or base_k == "since_time":
                     try:
                         ts = _parse_twitter_date(v[0]) if base_k == "since" else float(v[0])
