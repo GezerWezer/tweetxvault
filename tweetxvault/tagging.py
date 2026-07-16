@@ -8,8 +8,8 @@ from pathlib import Path
 from rich.console import Console
 from pydantic import BaseModel, Field
 
-import google.generativeai as genai
-from google.generativeai.types import HarmCategory, HarmBlockerThreshold
+from google import genai
+from google.genai import types
 from PIL import Image
 
 from .config import AppConfig, TaggingConfig
@@ -49,7 +49,7 @@ async def tag_media_tweets(
     if not tweet_ids:
         return 0
 
-    genai.configure(api_key=tag_config.api_key)
+    client = genai.Client(api_key=tag_config.api_key)
     
     prompts = []
     
@@ -67,7 +67,7 @@ async def tag_media_tweets(
 
     generation_parts = [TAGGING_SYSTEM_PROMPT, "\n\n--- TWEETS TO TAG ---\n\n"]
     
-    uploaded_videos: list[genai.types.File] = []
+    uploaded_videos: list[types.File] = []
     
     for tid in tweet_ids:
         t_obj = tweet_objs.get(tid)
@@ -101,7 +101,7 @@ async def tag_media_tweets(
             m_type = m.get("media_type")
             if m_type == "video" or m_type == "animated_gif":
                 try:
-                    f = genai.upload_file(path=str(abs_path))
+                    f = client.files.upload(file=str(abs_path))
                     uploaded_videos.append(f)
                     generation_parts.append(f)
                     generation_parts.append(f" [Attached Video: {m.get('media_key')}] ")
@@ -125,7 +125,7 @@ async def tag_media_tweets(
         console.print(f"Waiting for {len(uploaded_videos)} videos to process in Gemini...")
         for v in uploaded_videos:
             while True:
-                f = genai.get_file(v.name)
+                f = client.files.get(name=v.name)
                 if f.state.name == "ACTIVE":
                     break
                 elif f.state.name == "FAILED":
@@ -137,17 +137,14 @@ async def tag_media_tweets(
     console.print(f"Generating tags for {len(tweet_ids)} tweets using {model_name}...")
     
     try:
-        model = genai.GenerativeModel(
-            model_name=model_name,
-            tools=[{"google_search": {}}],
-        )
-        
         response = await asyncio.to_thread(
-            model.generate_content,
-            generation_parts,
-            generation_config=genai.GenerationConfig(
+            client.models.generate_content,
+            model=model_name,
+            contents=generation_parts,
+            config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 response_schema=list[TagResult],
+                tools=[{"google_search": {}}],
             )
         )
         
