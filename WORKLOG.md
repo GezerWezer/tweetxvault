@@ -1194,3 +1194,7 @@
 - **2026-07-16 (Enrichment Chunk Size Fix)**:
   - Fixed an issue where the `archive enrich` detail step was not respecting the limit parameter, causing it to attempt processing thousands of rows instead of chunking them.
   - Adjusted the default limit for both `tweetxvault sync` and `tweetxvault import enrich` from 500 down to 200 per the user's request, preventing rate limiting issues and excessively long passes.
+- **2026-07-16 (Optimize command clean up)**:
+  - Removed all automatic `.optimize()` calls that were being run at the end of every sync/import command.
+  - This was leftover logic from LanceDB where compacting versions frequently was necessary. In SQLite, `VACUUM` is incredibly slow and expensive (it rebuilds the entire file from scratch) and is not needed after standard inserts or updates.
+  - Users can still manually run `tweetxvault optimize` if they delete massive amounts of data and want to reclaim disk space, but it won't happen automatically anymore.

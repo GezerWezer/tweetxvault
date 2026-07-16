@@ -143,9 +143,6 @@ async def locked_archive_job(
             if is_interrupt_exception(exc):
                 best_effort_interrupt_optimize(store, tracker, console=console)
             raise
-        else:
-            if tracker.has_writes:
-                store.optimize()
         finally:
             store.close()
     finally:

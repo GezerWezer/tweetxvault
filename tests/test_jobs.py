@@ -37,7 +37,7 @@ class _FakeStore:
 
 
 @pytest.mark.asyncio
-async def test_locked_archive_job_optimizes_when_marked_dirty(
+async def test_locked_archive_job_does_not_optimize_automatically(
     paths,
     config,
     monkeypatch: pytest.MonkeyPatch,
@@ -51,7 +51,7 @@ async def test_locked_archive_job_optimizes_when_marked_dirty(
         assert job.store is store
         job.mark_dirty()
 
-    assert store.optimize_calls == 1
+    assert store.optimize_calls == 0
     assert store.closed is True
 
 
@@ -64,8 +64,8 @@ async def test_locked_archive_job_skips_optimize_without_changes(
     store = _FakeStore()
     monkeypatch.setattr(jobs, "open_archive_store", lambda _paths, create=False, config=None: store)
 
-    async with jobs.locked_archive_job(config=config, paths=paths) as job:
-        assert job.store is store
+    async with jobs.locked_archive_job(config=config, paths=paths):
+        pass
 
     assert store.optimize_calls == 0
     assert store.closed is True

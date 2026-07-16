@@ -1798,16 +1798,6 @@ async def import_x_archive(
                     counts=counts,
                 )
                 write_tracker.mark_dirty()
-                _emit_status(status, "optimizing archive storage...")
-                optimize_started = perf_counter()
-                store.optimize()
-                if debug:
-                    _record_debug_timing(
-                        status,
-                        debug_summaries,
-                        "archive optimize",
-                        optimize_started,
-                    )
             store.close()
         except BaseException as exc:
             try:

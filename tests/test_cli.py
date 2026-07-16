@@ -1353,34 +1353,6 @@ def test_expand_archive_threads_refresh_requires_targets(paths, monkeypatch) -> 
     assert "--refresh requires one or more explicit thread targets." in buffer.getvalue()
 
 
-def test_with_auto_optimize_exits_when_lock_is_held(paths, monkeypatch) -> None:
-    buffer = StringIO()
-    console = Console(file=buffer, force_terminal=False, color_system=None)
-    attempts = {"count": 0}
-
-    class FakeStore:
-        def optimize(self) -> None:
-            raise AssertionError("optimize should not run when the lock is unavailable")
-
-    def fail(_store) -> None:
-        attempts["count"] += 1
-        raise OSError("Too many open files")
-
-    def blocked(_paths, _fn):
-        raise ProcessLockError("Another tweetxvault archive job is already running.")
-
-    monkeypatch.setattr(cli, "_with_archive_write_lock", blocked)
-
-    with pytest.raises(typer.Exit) as excinfo:
-        cli._with_auto_optimize(FakeStore(), paths, console, fail)
-
-    assert excinfo.value.exit_code == 2
-    assert attempts["count"] == 1
-    output = buffer.getvalue()
-    assert "Another tweetxvault archive job is already running." in output
-    assert "Archive optimize is blocked while another job is writing." in output
-
-
 def test_optimize_archive_uses_write_lock(paths, monkeypatch) -> None:
     buffer = StringIO()
     _capture_console(monkeypatch, buffer)
@@ -1391,9 +1363,6 @@ def test_optimize_archive_uses_write_lock(paths, monkeypatch) -> None:
         def __init__(self) -> None:
             self.optimized = False
             self.closed = False
-
-        def version_count(self) -> int:
-            return 1 if self.optimized else 3
 
         def optimize(self) -> None:
             self.optimized = True
@@ -1414,7 +1383,8 @@ def test_optimize_archive_uses_write_lock(paths, monkeypatch) -> None:
     assert lock_calls == [paths.lock_file]
     assert store.optimized is True
     assert store.closed is True
-    assert "optimized archive: 3 versions -> 1 versions" in buffer.getvalue()
+    assert "vacuuming database..." in buffer.getvalue()
+    assert "vacuum complete." in buffer.getvalue()
 
 
 def test_stats_archive_renders_summary_tables(paths, monkeypatch) -> None:
@@ -1635,7 +1605,6 @@ def test_embed_archive_uses_write_lock(paths, monkeypatch) -> None:
 
     assert lock_calls == [paths.lock_file]
     assert store.cleared is True
-    assert store.optimized is True
     assert store.closed is True
     assert len(store.writes) == 1
     assert "embedded 1 tweets" in buffer.getvalue()

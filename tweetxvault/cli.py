@@ -435,24 +435,8 @@ def _with_archive_write_lock(paths, fn):
 
 
 def _with_auto_optimize(store, paths, console: Console, fn):
-    """Run fn(store), auto-optimizing and retrying once on too-many-open-files."""
-    try:
-        return fn(store)
-    except (RuntimeError, OSError) as exc:
-        if "Too many open files" not in str(exc):
-            raise
-        try:
-
-            def optimize_archive() -> None:
-                console.print("archive has too many versions, optimizing...")
-                store.optimize()
-
-            _with_archive_write_lock(paths, optimize_archive)
-        except ProcessLockError as lock_exc:
-            console.print(f"[red]{lock_exc}[/red]")
-            console.print("[red]Archive optimize is blocked while another job is writing.[/red]")
-            raise typer.Exit(2) from lock_exc
-        return fn(store)
+    """Run fn(store) (Legacy wrapper for LanceDB auto-optimize)."""
+    return fn(store)
 
 
 def _print_archive_followup(console: Console, result: Any) -> None:
@@ -1506,7 +1490,7 @@ def unfurl_archive(
 
 @app.command("optimize")
 def optimize_archive() -> None:
-    """Compact the LanceDB archive to reduce file count and reclaim space."""
+    """Vacuum the SQLite database to reclaim space after large deletions."""
     console = _configure_logging()
     config, paths = load_config()
 
@@ -1516,11 +1500,9 @@ def optimize_archive() -> None:
             console.print("[red]No local archive found.[/red]")
             raise typer.Exit(1)
         try:
-            before = store.version_count()
-            console.print(f"compacting {before} versions...")
+            console.print("vacuuming database...")
             store.optimize()
-            after = store.version_count()
-            console.print(f"optimized archive: {before} versions -> {after} versions")
+            console.print("vacuum complete.")
         finally:
             store.close()
 
@@ -1738,8 +1720,6 @@ def embed_archive(regen: EMBED_REGEN_OPTION = False) -> None:
                     vectors = engine.embed_batch(texts)
                     store.write_embeddings(batch, vectors)
                     pbar.update(len(batch))
-            console.print("compacting archive...")
-            store.optimize()
             console.print(f"embedded {remaining} tweets")
         finally:
             store.close()
