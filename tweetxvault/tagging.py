@@ -142,23 +142,36 @@ async def tag_media_tweets(
                 elif f.state.name == "FAILED":
                     console.print(f"[red]Gemini failed to process video {v.name}[/red]")
                     break
-                await asyncio.sleep(2)
+                await asyncio.sleep(10)  # Increased from 2 to 10 to avoid 429s
 
     model_name = model_override or tag_config.model
     console.print(f"Generating tags for {len(tweet_ids)} tweets using {model_name}...")
     
     try:
-        response = await asyncio.to_thread(
-            client.models.generate_content,
-            model=model_name,
-            contents=generation_parts,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=list[TagResult],
-                tools=[{"google_search": {}}],
-            )
-        )
+        response = None
+        for attempt in range(3):
+            try:
+                response = await asyncio.to_thread(
+                    client.models.generate_content,
+                    model=model_name,
+                    contents=generation_parts,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        response_schema=list[TagResult],
+                        tools=[{"google_search": {}}],
+                    )
+                )
+                break
+            except Exception as e:
+                if "429" in str(e) and attempt < 2:
+                    console.print(f"[yellow]Hit rate limit (429). Retrying in 15 seconds...[/yellow]")
+                    await asyncio.sleep(15)
+                else:
+                    raise e
         
+        if not response:
+            return 0
+            
         res_json = response.text
         results = json.loads(res_json)
         
