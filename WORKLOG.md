@@ -1186,3 +1186,8 @@
   - Similar to the enrichment bug, `store.list_url_rows` and `store.list_media_rows` were indiscriminately fetching all columns (including massive `raw_json` blobs for up to hundreds of thousands of items) into memory.
   - Optimized `list_url_rows` and `list_media_rows` to explicitly define the necessary column subsets without `raw_json`.
   - Refactored `build_url_unfurl_update` and `build_media_download_update` to selectively fetch the full database row by `row_key` right before `merge_rows` insertion, ensuring data integrity without memory bloat.
+- **2026-07-16 (Memory Spike Fix part 3)**:
+  - Investigated an out of memory error occurring at the very end of the archive enrichment pass ("archive enrich detail 98%").
+  - The root cause was that `len(store.list_tweet_objects_for_enrichment())` was called to count the remaining records after processing a chunk. Even though we limited the chunk to 500, this `len()` call was made without any limit.
+  - As a result, SQLite would load the IDs for *all* pending and transient failure tweets (which could be millions of strings) into Python dictionaries and create a massive Python list just to calculate the length.
+  - Fixed by adding efficient `count_tweet_objects_for_enrichment` and `count_dead_tweets_for_resurrection` methods directly to `backend.py`, leveraging SQLite's `COUNT(*)` which consumes effectively zero RAM.

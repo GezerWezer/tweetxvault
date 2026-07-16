@@ -1006,10 +1006,10 @@ async def _run_archive_followup(
         except Exception as exc:
             warnings.append(f"detail enrichment failed: {exc}")
             async with locked_archive_job(config=config, paths=paths) as job:
-                pending = len(job.store.list_tweet_objects_for_enrichment())
+                pending = job.store.count_tweet_objects_for_enrichment()
     else:
         async with locked_archive_job(config=config, paths=paths) as job:
-            pending = len(job.store.list_tweet_objects_for_enrichment())
+            pending = job.store.count_tweet_objects_for_enrichment()
     return ArchiveEnrichResult(
         warnings=warnings,
         reconciled_collections=reconciled_collections,
@@ -1070,8 +1070,8 @@ async def _enrich_pending_rows(
     if limit is not None and limit <= 0:
         async with locked_archive_job(config=config, paths=paths, console=console) as job:
             if resurrect_dead:
-                return 0, 0, 0, len(job.store.list_dead_tweets_for_resurrection())
-            return 0, 0, 0, len(job.store.list_tweet_objects_for_enrichment())
+                return 0, 0, 0, job.store.count_dead_tweets_for_resurrection()
+            return 0, 0, 0, job.store.count_tweet_objects_for_enrichment()
 
     async with locked_archive_job(config=config, paths=paths, console=console) as job:
         store = job.store
@@ -1226,7 +1226,10 @@ async def _enrich_pending_rows(
         finally:
             await client.aclose()
             flush_detail_writes()
-        remaining = len(store.list_tweet_objects_for_enrichment())
+        if resurrect_dead:
+            remaining = store.count_dead_tweets_for_resurrection()
+        else:
+            remaining = store.count_tweet_objects_for_enrichment()
     return succeeded, terminal, transient, remaining
 
 
@@ -1784,7 +1787,7 @@ async def import_x_archive(
                         processed=media_total,
                         unit="files",
                     )
-                pending_after_import = len(store.list_tweet_objects_for_enrichment())
+                pending_after_import = store.count_tweet_objects_for_enrichment()
                 store.set_import_manifest(
                     digest,
                     archive_generation_date=generation_date,

@@ -1637,6 +1637,12 @@ class ArchiveStore:
         )
         return rows[:limit] if limit is not None else rows
 
+    def count_tweet_objects_for_enrichment(self) -> int:
+        return self._count(
+            "record_type = 'tweet_object' "
+            "AND (enrichment_state = 'pending' OR enrichment_state = 'transient_failure')"
+        )
+
     def list_dead_tweets_for_resurrection(
         self, *, limit: int | None = None
     ) -> list[dict[str, Any]]:
@@ -1648,6 +1654,9 @@ class ArchiveStore:
             key=lambda row: (row.get("enrichment_checked_at") or "", row.get("tweet_id") or "")
         )
         return rows[:limit] if limit is not None else rows
+
+    def count_dead_tweets_for_resurrection(self) -> int:
+        return self._count("record_type = 'tweet_object' AND enrichment_state = 'terminal_unavailable'")
 
     def update_tweet_object_enrichment(
         self,
