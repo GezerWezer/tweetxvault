@@ -17,7 +17,7 @@ from .storage.backend import ArchiveStore
 
 TAGGING_SYSTEM_PROMPT = """You will be provided with a tweet (including its author, handle, text, and attached images or videos). Your task is to analyze the content and generate a description alongside highly specific search tags.
 
-1. **Description:** Provide a concise text description of the media. Capture the primary subjects, actions, setting, key visual elements, overall context, and transcribe any prominent text.
+1. **Description:** Provide a concise text description of the media. Capture the primary subjects, actions, setting, key visual elements, and overall context. You MUST thoroughly transcribe any prominent text, subtitles, or captions found within the image or video.
 2. **Franchise Identification (Primary Tag):** If the content refers to, depicts, or originates from a specific video game, movie, TV show, anime, or pop culture entity, identify and include the exact name of that franchise as a tag (e.g., "Deadlock"). Use implicit visual clues—such as UI elements, art styles, settings, or meme formats—to deduce the correct source material. Utilize search extensively to verify this.
 3. **Specific Entity Formatting:** When tagging specific characters, items, abilities, or locations, you MUST append the franchise name in parentheses to disambiguate the tag (e.g., "character name (franchise)"). 
 4. **NO Generic Tags:** Do NOT include broad, categorical, or meta-tags. Exclude terms like "Video Game", "Gameplay", "Hero Shooter", "MOBA", "Gaming Fail", "Screenshot", or "Funny". Focus entirely on specific proper nouns, franchises, characters, and distinct subjects.

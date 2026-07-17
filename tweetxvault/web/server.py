@@ -176,6 +176,10 @@ def _apply_advanced_filters(rows: list[dict], filters: dict[str, list[str]]) -> 
                 elif base_k == "url": match = any(val in (u.get("expanded_url") or "").lower() or val in (u.get("display_url") or "").lower() for u in r.get("urls", []))
                 elif base_k == "source": match = val.replace("_", " ") in raw.get("source", "").lower()
                 elif base_k == "card_name": match = raw.get("card", {}).get("name") == val
+                elif base_k == "tag":
+                    media_tags = r.get("media_tags", {})
+                    tags = media_tags.get("tags", []) if media_tags else []
+                    match = any(val.lower() == tag.lower() for tag in tags)
                 else: match = True
                     
                 if is_negated:
@@ -226,7 +230,7 @@ def api_tweets(
                     exprs = []
                     for val in v:
                         safe_val = val.replace("'", "''")
-                        exprs.append(f"tweet_id IN (SELECT tweet_id FROM archive WHERE record_type = 'media_tag' AND raw_json LIKE '%\"' || '{safe_val}' || '\"%')")
+                        exprs.append(f"tweet_id IN (SELECT tweet_id FROM archive WHERE record_type = 'media_tag' AND LOWER(raw_json) LIKE LOWER('%\"' || '{safe_val}' || '\"%'))")
                     pushable_exprs.append(f"({' OR '.join(exprs)})")
                 elif base_k == "since" or base_k == "since_time":
                     try:
