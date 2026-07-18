@@ -83,6 +83,7 @@ class TaggingConfig(BaseModel):
     batch: bool = True
     limit: int = Field(default=20, ge=1)
     google_search: bool = True
+    rpd: int | None = None
 
 
 class AppConfig(BaseModel):
