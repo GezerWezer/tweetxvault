@@ -150,7 +150,7 @@ async def tag_media_tweets(
     try:
         response = None
         use_search = tag_config.google_search
-        for attempt in range(3):
+        for attempt in range(5):
             try:
                 config_args = {
                     "response_mime_type": "application/json",
@@ -167,14 +167,18 @@ async def tag_media_tweets(
                 )
                 break
             except Exception as e:
-                if ("429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)) and use_search:
+                err_str = str(e)
+                if ("429" in err_str or "RESOURCE_EXHAUSTED" in err_str) and use_search:
                     console.print("[yellow]Google Search Grounding failed (429/Quota limit). Retrying immediately without Search...[/yellow]")
                     use_search = False
                     continue
                 
-                if "429" in str(e) and attempt < 2:
-                    console.print(f"[yellow]Hit rate limit (429). Retrying in 15 seconds...[/yellow]")
-                    await asyncio.sleep(15)
+                is_retryable = "429" in err_str or "503" in err_str
+                if is_retryable and attempt < 4:
+                    delay = 15 * (2 ** attempt)
+                    reason = "429" if "429" in err_str else "503"
+                    console.print(f"[yellow]Gemini API busy ({reason}). Retrying in {delay} seconds (Attempt {attempt + 1}/5)...[/yellow]")
+                    await asyncio.sleep(delay)
                 else:
                     raise e
         
