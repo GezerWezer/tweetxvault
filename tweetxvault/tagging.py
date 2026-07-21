@@ -168,8 +168,8 @@ async def tag_media_tweets(
                 break
             except Exception as e:
                 err_str = str(e)
-                if ("429" in err_str or "RESOURCE_EXHAUSTED" in err_str) and use_search:
-                    console.print("[yellow]Google Search Grounding failed (429/Quota limit). Retrying immediately without Search...[/yellow]")
+                if ("429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "400" in err_str or "INVALID_ARGUMENT" in err_str) and use_search:
+                    console.print("[yellow]Google Search Grounding failed or is incompatible with the requested schema (429/400). Retrying immediately without Search...[/yellow]")
                     use_search = False
                     continue
                 
