@@ -25,37 +25,26 @@
             --white-icon: #ffffff;
             --dropdown-bg: #000000;
             --gray-700: #374151;
+            --accent-color: #1d9bf0;
+            --accent-hover: #1a8cd8;
+            --font-size-base: 15px;
+            --tweet-padding: 12px;
         }
 
-        html.light {
-            --bg-primary: #ffffff;
-            --bg-secondary: #eff3f4;
-            --bg-tertiary: rgba(15, 20, 25, 0.1);
-            --bg-header: rgba(255, 255, 255, 0.85);
-            --text-primary: #0f1419;
-            --text-secondary: #536471;
-            --border-color: #eff3f4;
-            --hover-bg: rgba(0, 0, 0, 0.03);
-            --scrollbar-bg: #ffffff;
-            --scrollbar-thumb: #c1c8cd;
-            --scrollbar-thumb-hover: #aab8c2;
-            --thread-line: #cfd9de;
-            --input-border: #cfd9de;
-            --white-icon: #0f1419;
-            --dropdown-bg: #ffffff;
-            --gray-700: #536471;
-        }
-
-        body { background-color: var(--bg-primary); color: var(--text-primary); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; transition: background-color 0.2s, color 0.2s; }
-        .tweet-border { border-bottom: 1px solid var(--border-color); }
+        body { background-color: var(--bg-primary); color: var(--text-primary); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: var(--font-size-base); transition: background-color 0.2s, color 0.2s; }
+        .tweet-border { border-bottom: 1px solid var(--border-color); padding-top: var(--tweet-padding); padding-bottom: var(--tweet-padding); }
         .hover-bg:hover { background-color: var(--hover-bg); }
-        .blue-hover:hover { color: #1d9bf0; }
+        .blue-hover:hover { color: var(--accent-color); }
         [x-cloak] { display: none !important; }
         
         ::-webkit-scrollbar { width: 8px; }
         ::-webkit-scrollbar-track { background: var(--scrollbar-bg); }
         ::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 4px; }
         ::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
+        .tag-capsule { background-color: color-mix(in srgb, var(--accent-color) 10%, transparent); }
+        .tag-capsule:hover { background-color: color-mix(in srgb, var(--accent-color) 20%, transparent); }
+        .danger-capsule { background-color: color-mix(in srgb, var(--danger-color) 10%, transparent); color: var(--danger-color); }
+        .danger-capsule:hover { background-color: color-mix(in srgb, var(--danger-color) 20%, transparent); }
 
         .roll-wrapper {
             position: relative;
@@ -98,9 +87,8 @@
             </div>
             
             <div x-show="viewMode === 'list'" class="flex items-center space-x-2">
-                <button @click="toggleTheme()" class="p-2 rounded-full hover-bg transition text-[var(--text-primary)]" aria-label="Toggle theme">
-                    <svg x-show="darkMode" viewBox="0 0 24 24" class="w-5 h-5 fill-current"><path fill-rule="evenodd" d="M12 2.25a.75.75 0 01.75.75v2.25a.75.75 0 01-1.5 0V3a.75.75 0 01.75-.75zM7.5 12a4.5 4.5 0 119 0 4.5 4.5 0 01-9 0zM18.894 6.166a.75.75 0 00-1.06-1.06l-1.591 1.59a.75.75 0 101.06 1.061l1.591-1.59zM21.75 12a.75.75 0 01-.75.75h-2.25a.75.75 0 010-1.5H21a.75.75 0 01.75.75zM17.834 18.894a.75.75 0 001.06-1.06l-1.59-1.591a.75.75 0 10-1.061 1.06l1.59 1.591zM12 18a.75.75 0 01.75.75V21a.75.75 0 01-1.5 0v-2.25A.75.75 0 0112 18zM7.758 17.303a.75.75 0 00-1.061-1.06l-1.591 1.59a.75.75 0 001.06 1.061l1.591-1.59zM6 12a.75.75 0 01-.75.75H3a.75.75 0 010-1.5h2.25A.75.75 0 016 12zM6.697 7.757a.75.75 0 001.06-1.06l-1.59-1.591a.75.75 0 00-1.061 1.06l1.59 1.591z" clip-rule="evenodd" /></svg>
-                    <svg x-show="!darkMode" viewBox="0 0 24 24" class="w-5 h-5 fill-current" x-cloak><path fill-rule="evenodd" d="M9.528 1.718a.75.75 0 01.162.819A8.97 8.97 0 009 6a9 9 0 009 9 8.97 8.97 0 003.463-.69.75.75 0 01.981.98 10.503 10.503 0 01-9.694 6.46c-5.799 0-10.5-4.701-10.5-10.5 0-4.368 2.667-8.112 6.46-9.694a.75.75 0 01.818.162z" clip-rule="evenodd" /></svg>
+                <button @click="showSettingsModal = true" class="p-2 rounded-full hover-bg transition text-[var(--text-primary)]" aria-label="Settings">
+                    <svg viewBox="0 0 24 24" fill="currentColor" class="w-5 h-5"><path fill-rule="evenodd" d="M11.078 2.25c-.917 0-1.699.663-1.85 1.567L9.05 4.889c-.02.12-.115.26-.297.348a7.493 7.493 0 0 0-.986.57c-.166.115-.334.126-.45.083L6.3 5.508a1.875 1.875 0 0 0-2.282.819l-.922 1.597a1.875 1.875 0 0 0 .432 2.385l.84.692c.095.078.17.229.154.43a7.598 7.598 0 0 0 0 1.139c.015.2-.059.352-.153.43l-.841.692a1.875 1.875 0 0 0-.432 2.385l.922 1.597a1.875 1.875 0 0 0 2.282.818l1.019-.382c.115-.043.283-.031.45.082.312.214.641.405.985.57.182.088.277.228.297.35l.178 1.071c.151.904.933 1.567 1.85 1.567h1.844c.916 0 1.699-.663 1.85-1.567l.178-1.072c.02-.12.114-.26.297-.349.344-.165.673-.356.985-.57.167-.114.335-.125.45-.082l1.02.382a1.875 1.875 0 0 0 2.28-.819l.923-1.597a1.875 1.875 0 0 0-.432-2.385l-.84-.692c-.095-.078-.17-.229-.154-.43a7.614 7.614 0 0 0 0-1.139c-.016-.2.059-.352.153-.43l.84-.692c.708-.582.891-1.59.433-2.385l-.922-1.597a1.875 1.875 0 0 0-2.282-.818l-1.02.382c-.114.043-.282.031-.449-.083a7.49 7.49 0 0 0-.985-.57c-.183-.087-.277-.227-.297-.348l-.179-1.072a1.875 1.875 0 0 0-1.85-1.567h-1.843ZM12 15.75a3.75 3.75 0 1 0 0-7.5 3.75 3.75 0 0 0 0 7.5Z" clip-rule="evenodd" /></svg>
                 </button>
                 <select x-model="sortOrder" @change="search()" class="bg-transparent text-[var(--text-primary)] font-bold text-sm outline-none cursor-pointer border border-[var(--border-color)] rounded-full px-3 py-1 hover-bg transition appearance-none">
                     <option value="default" class="text-black" x-show="searchQuery">Relevance</option>
@@ -126,7 +114,7 @@
 
             <div class="p-4 border-b border-[var(--border-color)] relative" x-data="searchAutocomplete()" @click.away="showDropdown = false">
                 <div class="relative w-full">
-                    <input type="text" x-model="searchQuery" @input="handleInput" @focus="showDropdown = true; handleInput()" @keydown.enter="search(); showDropdown = false" @keydown.up.prevent="moveUp" @keydown.down.prevent="moveDown" @keydown.tab.prevent="selectOption" x-ref="searchInput" placeholder="Search..." class="w-full bg-[var(--bg-secondary)] text-[var(--text-primary)] rounded-full py-2 pl-4 pr-10 focus:outline-none focus:ring-1 focus:ring-[#1d9bf0] placeholder-gray-500 border border-[var(--input-border)]">
+                    <input type="text" x-model="searchQuery" @input="handleInput" @focus="showDropdown = true; handleInput()" @keydown.enter="search(); showDropdown = false" @keydown.up.prevent="moveUp" @keydown.down.prevent="moveDown" @keydown.tab.prevent="selectOption" x-ref="searchInput" placeholder="Search..." class="w-full bg-[var(--bg-secondary)] text-[var(--text-primary)] rounded-full py-2 pl-4 pr-10 focus:outline-none focus:ring-1 focus:ring-[var(--accent-color)] placeholder-gray-500 border border-[var(--input-border)]">
                     <button x-show="searchQuery" @click="searchQuery = ''; search()" class="absolute right-3 top-1/2 -translate-y-1/2 p-1 bg-[var(--text-secondary)] rounded-full hover:bg-[var(--text-primary)] transition">
                         <svg viewBox="0 0 24 24" class="w-3 h-3 fill-[var(--bg-primary)]"><path d="M13.414 12l5.793-5.793c.39-.39.39-1.023 0-1.414s-1.023-.39-1.414 0L12 10.586 6.207 4.793c-.39-.39-1.023-.39-1.414 0s-.39 1.023 0 1.414L10.586 12l-5.793 5.793c-.39.39-.39 1.023 0 1.414.195.195.45.293.707.293s.512-.098.707-.293L12 13.414l5.793 5.793c.195.195.45.293.707.293s.512-.098.707-.293c.39-.39.39-1.023 0-1.414L13.414 12z"></path></svg>
                     </button>
@@ -158,7 +146,7 @@
             </div>
 
             <template x-if="error">
-                <div class="p-4 mx-4 my-2 bg-red-900/50 border border-red-500 rounded-lg text-red-200">
+                <div class="p-4 mx-4 my-2 border rounded-lg" style="background-color: color-mix(in srgb, var(--danger-color) 20%, transparent); border-color: var(--danger-color); color: var(--danger-color);">
                     <div class="font-bold mb-1">Error Loading Tweets</div>
                     <div x-text="error"></div>
                     <button @click="error = null; fetchTweets()" class="mt-2 text-sm text-red-300 hover:text-red-100 underline">Try Again</button>
@@ -196,14 +184,14 @@
                                 <div class="roll-wrapper text-[var(--text-secondary)]" @click.stop>
                                     <div class="roll-inner">
                                         <span class="roll-item hover:underline" x-text="formatDate(tweet.created_at)"></span>
-                                        <span class="roll-item text-[#1d9bf0] text-[13px] font-medium" x-text="formatSyncDate(tweet)"></span>
+                                        <span class="roll-item text-[var(--accent-color)] text-[13px] font-medium" x-text="formatSyncDate(tweet)"></span>
                                     </div>
                                 </div>
                             </div>
                             
                             <template x-if="getReplyTo(tweet)">
                                 <div class="text-[15px] text-[var(--text-secondary)] mb-1">
-                                    Replying to <span class="text-[#1d9bf0] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo(tweet))" x-text="'@' + getReplyTo(tweet)"></span>
+                                    Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo(tweet))" x-text="'@' + getReplyTo(tweet)"></span>
                                 </div>
                             </template>
 
@@ -236,7 +224,7 @@
                                             
                                             <template x-if="getReplyTo({raw_json: getQuoteTweet(tweet)})">
                                                 <div class="text-[15px] text-[var(--text-secondary)] mb-1">
-                                                    Replying to <span class="text-[#1d9bf0] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo({raw_json: getQuoteTweet(tweet)}))" x-text="'@' + getReplyTo({raw_json: getQuoteTweet(tweet)})"></span>
+                                                    Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo({raw_json: getQuoteTweet(tweet)}))" x-text="'@' + getReplyTo({raw_json: getQuoteTweet(tweet)})"></span>
                                                 </div>
                                             </template>
 
@@ -257,7 +245,7 @@
             </template>
 
             <!-- Infinite Scroll Sentinel -->
-            <div x-show="!loading && page < totalPages" x-intersect="loadMore()" class="p-6 text-center text-[#1d9bf0] flex justify-center">
+            <div x-show="!loading && page < totalPages" x-intersect="loadMore()" class="p-6 text-center text-[var(--accent-color)] flex justify-center">
                 <svg class="animate-spin h-6 w-6" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                     <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
@@ -294,14 +282,14 @@
                                     <div class="roll-wrapper text-[var(--text-secondary)]" @click.stop>
                                         <div class="roll-inner">
                                             <span class="roll-item hover:underline" x-text="formatDate(parent.created_at)"></span>
-                                            <span class="roll-item text-[#1d9bf0] text-[13px] font-medium" x-text="formatSyncDate(parent)"></span>
+                                            <span class="roll-item text-[var(--accent-color)] text-[13px] font-medium" x-text="formatSyncDate(parent)"></span>
                                         </div>
                                     </div>
                                 </div>
                                 
                                 <template x-if="getReplyTo(parent)">
                                     <div class="text-[15px] text-[var(--text-secondary)] mb-1">
-                                        Replying to <span class="text-[#1d9bf0] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo(parent))" x-text="'@' + getReplyTo(parent)"></span>
+                                        Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo(parent))" x-text="'@' + getReplyTo(parent)"></span>
                                     </div>
                                 </template>
 
@@ -333,7 +321,7 @@
                         
                         <template x-if="getReplyTo(threadData.main) && threadData.parents.length === 0">
                             <div class="text-[15px] text-[var(--text-secondary)] mb-2">
-                                Replying to <span class="text-[#1d9bf0] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo(threadData.main))" x-text="'@' + getReplyTo(threadData.main)"></span>
+                                Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo(threadData.main))" x-text="'@' + getReplyTo(threadData.main)"></span>
                             </div>
                         </template>
 
@@ -362,7 +350,7 @@
                                         
                                         <template x-if="getReplyTo({raw_json: getQuoteTweet(threadData.main)})">
                                             <div class="text-[15px] text-[var(--text-secondary)] mb-1">
-                                                Replying to <span class="text-[#1d9bf0] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo({raw_json: getQuoteTweet(threadData.main)}))" x-text="'@' + getReplyTo({raw_json: getQuoteTweet(threadData.main)})"></span>
+                                                Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo({raw_json: getQuoteTweet(threadData.main)}))" x-text="'@' + getReplyTo({raw_json: getQuoteTweet(threadData.main)})"></span>
                                             </div>
                                         </template>
 
@@ -379,11 +367,11 @@
                             <div class="roll-wrapper cursor-default">
                                 <div class="roll-inner">
                                     <span class="roll-item" x-text="formatDate(threadData.main.created_at, true)"></span>
-                                    <span class="roll-item text-[#1d9bf0] font-medium" x-text="formatSyncDate(threadData.main)"></span>
+                                    <span class="roll-item text-[var(--accent-color)] font-medium" x-text="formatSyncDate(threadData.main)"></span>
                                 </div>
                             </div>
                             <template x-if="threadData.main.local_quote_count > 0">
-                                <button @click="openQuotes(threadData.main.tweet_id)" class="text-[#1d9bf0] hover:underline text-[15px] font-medium transition ml-auto">
+                                <button @click="openQuotes(threadData.main.tweet_id)" class="text-[var(--accent-color)] hover:underline text-[15px] font-medium transition ml-auto">
                                     Browse <span x-text="threadData.main.local_quote_count"></span> Quote Tweets
                                 </button>
                             </template>
@@ -416,14 +404,14 @@
                                         <div class="roll-wrapper text-[#71767b]" @click.stop>
                                             <div class="roll-inner">
                                                 <span class="roll-item hover:underline" x-text="formatDate(child.created_at)"></span>
-                                                <span class="roll-item text-[#1d9bf0] text-[13px] font-medium" x-text="formatSyncDate(child)"></span>
+                                                <span class="roll-item text-[var(--accent-color)] text-[13px] font-medium" x-text="formatSyncDate(child)"></span>
                                             </div>
                                         </div>
                                     </div>
 
                                     <template x-if="getReplyTo(child) && getReplyTo(child) !== (threadData.main.author.username)">
                                         <div class="text-[15px] text-[#71767b] mb-1">
-                                            Replying to <span class="text-[#1d9bf0] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo(child))" x-text="'@' + getReplyTo(child)"></span>
+                                            Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo(child))" x-text="'@' + getReplyTo(child)"></span>
                                         </div>
                                     </template>
 
@@ -463,14 +451,14 @@
                                                     <div class="roll-wrapper text-[#71767b]" @click.stop>
                                                         <div class="roll-inner">
                                                             <span class="roll-item hover:underline" x-text="formatDate(reply.created_at)"></span>
-                                                            <span class="roll-item text-[#1d9bf0] text-[13px] font-medium" x-text="formatSyncDate(reply)"></span>
+                                                            <span class="roll-item text-[var(--accent-color)] text-[13px] font-medium" x-text="formatSyncDate(reply)"></span>
                                                         </div>
                                                     </div>
                                                 </div>
                                                 
                                                 <template x-if="getReplyTo(reply)">
                                                     <div class="text-[15px] text-[#71767b] mb-1">
-                                                        Replying to <span class="text-[#1d9bf0] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo(reply))" x-text="'@' + getReplyTo(reply)"></span>
+                                                        Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo(reply))" x-text="'@' + getReplyTo(reply)"></span>
                                                     </div>
                                                 </template>
 
@@ -539,7 +527,7 @@
                             
                             <template x-if="getReplyTo(tweet)">
                                 <div class="text-[15px] text-[#71767b] mb-1">
-                                    Replying to <span class="text-[#1d9bf0] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo(tweet))" x-text="'@' + getReplyTo(tweet)"></span>
+                                    Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo(tweet))" x-text="'@' + getReplyTo(tweet)"></span>
                                 </div>
                             </template>
 
@@ -596,7 +584,7 @@
             </template>
         </div>
 
-        <!-- AI Tag Modal -->
+        <!-- Tag Modal -->
         <div x-show="tagModalOpen" 
              @keydown.window.escape="closeTagModal()" 
              class="fixed inset-0 z-[100] bg-black/60 flex items-center justify-center p-4" 
@@ -606,15 +594,15 @@
                 
                 <div class="flex items-center justify-between p-4 border-b border-[var(--border-color)]">
                     <div class="flex items-center text-[var(--text-primary)] font-bold text-lg">
-                        <svg viewBox="0 0 24 24" class="w-5 h-5 fill-current mr-2 text-[#1d9bf0]"><path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10-4.477 10-10 10zm-1-11v6h2v-6h-2zm0-4v2h2V7h-2z"></path></svg>
-                        AI Media Tags
+                        <svg viewBox="0 0 24 24" class="w-5 h-5 fill-current mr-2 text-[var(--accent-color)]"><path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10-4.477 10-10 10zm-1-11v6h2v-6h-2zm0-4v2h2V7h-2z"></path></svg>
+                        Tags
                     </div>
                     <button @click="closeTagModal()" class="text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-secondary)] p-2 rounded-full transition">
                         <svg viewBox="0 0 24 24" class="w-5 h-5 fill-current"><path d="M13.414 12l5.793-5.793c.39-.39.39-1.023 0-1.414s-1.024-.39-1.414 0L12 10.586 6.207 4.793c-.39-.39-1.023-.39-1.414 0s-.39 1.024 0 1.414L10.586 12l-5.793 5.793c-.39.39-.39 1.023 0 1.414.195.195.45.293.707.293s.512-.098.707-.293L12 13.414l5.793 5.793c.195.195.45.293.707.293s.512-.098.707-.293c.39-.39.39-1.023 0-1.414L13.414 12z"></path></svg>
                     </button>
                 </div>
 
-                <div class="p-4 overflow-y-auto max-h-[60vh] text-[var(--text-primary)]">
+                <div class="p-4 overflow-y-auto max-h-[60vh] text-[var(--text-primary)] min-h-[150px]">
                     <template x-if="tagModalData">
                         <div>
                             <div class="mb-4">
@@ -624,28 +612,433 @@
                             
                             <div>
                                 <div class="text-sm text-[var(--text-secondary)] font-bold uppercase tracking-wider mb-2">Tags</div>
-                                <div class="flex flex-wrap gap-2">
-                                    <template x-for="tag in tagModalData.tags" :key="tag">
-                                        <div @click="closeTagModal(); searchQuery='tag:' + tag; search()" class="px-3 py-1 bg-[#1d9bf0]/10 text-[#1d9bf0] text-sm rounded-full font-medium cursor-pointer hover:bg-[#1d9bf0]/20 transition" x-text="tag"></div>
+                                <div class="flex flex-wrap gap-2 relative">
+                                    <template x-for="tag in (isEditingTags ? editableTags : tagModalData.tags)" :key="tag">
+                                        <div class="relative group">
+                                            <div @click="!isEditingTags && (closeTagModal(), searchQuery = 'tag:' + (tag.includes(' ') ? '&quot;' + tag + '&quot;' : tag), search())" 
+                                                 :class="isEditingTags ? 'px-3 py-1 pr-8 bg-[var(--bg-secondary)] border border-[var(--border-color)] text-[var(--text-primary)]' : 'px-3 py-1 text-[var(--accent-color)] cursor-pointer tag-capsule'"
+                                                 class="text-sm rounded-full font-medium transition flex items-center" >
+                                                <span x-text="tag"></span>
+                                            </div>
+                                            <button x-show="isEditingTags" @click="editableTags = editableTags.filter(t => t !== tag)" class="absolute right-1.5 top-1/2 -translate-y-1/2 text-[var(--text-secondary)] hover:text-[var(--danger-color)] rounded-full p-0.5">
+                                                <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current"><path d="M13.414 12l5.793-5.793c.39-.39.39-1.023 0-1.414s-1.024-.39-1.414 0L12 10.586 6.207 4.793c-.39-.39-1.023-.39-1.414 0s-.39 1.024 0 1.414L10.586 12l-5.793 5.793c-.39.39-.39 1.023 0 1.414.195.195.45.293.707.293s.512-.098.707-.293L12 13.414l5.793 5.793c.195.195.45.293.707.293s.512-.098.707-.293c.39-.39.39-1.023 0-1.414L13.414 12z"></path></svg>
+                                            </button>
+                                        </div>
                                     </template>
+
+                                    <!-- Add Tag Button & Dropdown -->
+                                    <div x-show="isEditingTags" class="relative inline-block" @click.away="tagSearchDropdown = false">
+                                        <button @click="tagSearchDropdown = true; tagSearchQuery = ''; fetchTagAutocomplete(''); $nextTick(() => $refs.tagSearchInput.focus())" class="px-3 py-1 bg-[var(--bg-secondary)] border border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] text-sm rounded-full font-medium transition flex items-center h-[28px]">
+                                            <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current"><path d="M11 11V4h2v7h7v2h-7v7h-2v-7H4v-2h7z"></path></svg>
+                                        </button>
+                                        <div x-show="tagSearchDropdown" class="absolute left-0 mt-2 w-48 bg-[var(--dropdown-bg)] border border-[var(--border-color)] rounded-xl shadow-lg z-50 overflow-hidden">
+                                            <input type="text" x-ref="tagSearchInput" x-model="tagSearchQuery" @input.debounce.250ms="fetchTagAutocomplete(tagSearchQuery)" @keydown.enter.prevent="if(tagSearchQuery) { addEditableTag(tagSearchQuery); tagSearchDropdown = false }" placeholder="Add tag..." class="w-full bg-transparent text-[var(--text-primary)] px-3 py-2 border-b border-[var(--border-color)] focus:outline-none text-sm">
+                                            <div class="max-h-40 overflow-y-auto">
+                                                <template x-for="opt in tagAutocompleteOptions" :key="opt.tag">
+                                                    <div @click="addEditableTag(opt.tag); tagSearchDropdown = false" class="px-3 py-2 text-sm text-[var(--text-primary)] hover:bg-[var(--hover-bg)] cursor-pointer flex justify-between items-center">
+                                                        <span x-text="opt.tag"></span>
+                                                        <span class="text-[var(--text-secondary)] text-xs font-bold" x-text="opt.count"></span>
+                                                    </div>
+                                                </template>
+                                                <div x-show="tagSearchQuery && !tagAutocompleteOptions.find(o => o.tag.toLowerCase() === tagSearchQuery.toLowerCase())" @click="addEditableTag(tagSearchQuery); tagSearchDropdown = false" class="px-3 py-2 text-sm text-[var(--accent-color)] hover:bg-[var(--hover-bg)] cursor-pointer font-medium">
+                                                    Add "<span x-text="tagSearchQuery"></span>"
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+
                                 </div>
                             </div>
                         </div>
                     </template>
                 </div>
 
-                <div class="p-4 border-t border-[var(--border-color)] bg-[var(--bg-secondary)] flex justify-end">
-                    <button @click="deleteTags()" class="text-sm text-red-500 hover:text-red-600 font-medium px-4 py-2 hover:bg-red-500/10 rounded-full transition">Delete Tags</button>
+                <div class="p-4 border-t border-[var(--border-color)] bg-[var(--bg-secondary)] flex justify-between items-center">
+                    <button @click="isEditingTags ? (isEditingTags = false) : deleteTags()" 
+                            class="text-sm font-medium px-4 py-2 rounded-full transition"
+                            :class="isEditingTags ? 'text-[var(--text-primary)] hover:bg-[var(--hover-bg)] border border-[var(--border-color)]' : 'danger-capsule'"
+                            x-text="isEditingTags ? 'Cancel' : 'Delete Tags'">
+                    </button>
+                    <button @click="isEditingTags ? saveTags() : startEditingTags()" 
+                            class="text-sm font-bold px-4 py-2 rounded-full transition"
+                            :class="isEditingTags ? 'bg-[var(--accent-color)] text-white hover:bg-[var(--accent-hover)]' : 'text-[var(--text-primary)] bg-[var(--bg-tertiary)] hover:bg-[var(--hover-bg)]'"
+                            x-text="isEditingTags ? 'Save Changes' : 'Edit Tags'">
+                    </button>
                 </div>
             </div>
         </div>
         
+        <!-- Settings Modal -->
+        <div x-show="showSettingsModal" 
+             @keydown.window.escape="showSettingsModal = false" 
+             class="fixed inset-0 z-[100] bg-black/60 flex justify-center items-center p-4 md:p-0" 
+             x-cloak 
+             @click.self="showSettingsModal = false">
+            <div class="bg-[var(--bg-primary)] md:rounded-2xl w-full h-full md:h-auto md:max-h-[85vh] md:max-w-3xl flex flex-col md:flex-row overflow-hidden shadow-2xl relative">
+                
+                <!-- Sidebar -->
+                <div class="w-full md:w-64 border-b md:border-b-0 md:border-r border-[var(--border-color)] flex flex-col">
+                    <div class="p-4 flex items-center mb-2">
+                        <button @click="showSettingsModal = false" class="md:hidden mr-4 text-[var(--text-primary)] p-1 -ml-1 rounded-full hover-bg">
+                            <svg viewBox="0 0 24 24" class="w-5 h-5 fill-current"><path d="M7.414 13l5.043 5.04-1.414 1.42L3.586 12l7.457-7.46 1.414 1.42L7.414 11H21v2H7.414z"></path></svg>
+                        </button>
+                        <div class="text-xl font-bold text-[var(--text-primary)]">Settings</div>
+                    </div>
+                    <div class="flex-1 overflow-y-auto hidden md:block">
+                        <button @click="settingsTab = 'tags'" 
+                                :class="settingsTab === 'tags' ? 'bg-[var(--bg-tertiary)] border-r-2 border-[var(--accent-color)]' : 'hover-bg'"
+                                class="w-full text-left px-6 py-3 text-[15px] font-medium text-[var(--text-primary)] transition">
+                            Tags
+                        </button>
+                        <button @click="settingsTab = 'config'" 
+                                :class="settingsTab === 'config' ? 'bg-[var(--bg-tertiary)] border-r-2 border-[var(--accent-color)]' : 'hover-bg'"
+                                class="w-full text-left px-6 py-3 text-[15px] font-medium text-[var(--text-primary)] transition">
+                            Config
+                        </button>
+                        <button @click="settingsTab = 'appearance'" 
+                                :class="settingsTab === 'appearance' ? 'bg-[var(--bg-tertiary)] border-r-2 border-[var(--accent-color)]' : 'hover-bg'"
+                                class="w-full text-left px-6 py-3 text-[15px] font-medium text-[var(--text-primary)] transition">
+                            Appearance
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Main Content -->
+                <div class="flex-1 flex flex-col max-h-full overflow-hidden bg-[var(--bg-primary)]">
+                    <div class="p-4 border-b border-[var(--border-color)] flex items-center justify-between">
+                        <h2 class="text-xl font-bold text-[var(--text-primary)]" x-text="settingsTab === 'tags' ? 'Tag Management' : settingsTab === 'config' ? 'Configuration' : 'Appearance'"></h2>
+                        <button @click="showSettingsModal = false" class="hidden md:block text-[var(--text-secondary)] hover:text-[var(--text-primary)] p-2 rounded-full hover-bg transition">
+                            <svg viewBox="0 0 24 24" class="w-5 h-5 fill-current"><path d="M13.414 12l5.793-5.793c.39-.39.39-1.023 0-1.414s-1.024-.39-1.414 0L12 10.586 6.207 4.793c-.39-.39-1.023-.39-1.414 0s-.39 1.024 0 1.414L10.586 12l-5.793 5.793c-.39.39-.39 1.023 0 1.414.195.195.45.293.707.293s.512-.098.707-.293L12 13.414l5.793 5.793c.195.195.45.293.707.293s.512-.098.707-.293c.39-.39.39-1.023 0-1.414L13.414 12z"></path></svg>
+                        </button>
+                    </div>
+
+                    <div class="flex-1 overflow-y-auto p-4 md:p-6" x-show="settingsTab === 'tags'">
+                        
+                        <!-- Merge Section -->
+                        <div class="mb-10">
+                            <h3 class="text-lg font-bold text-[var(--text-primary)] mb-4">Merge Tags</h3>
+                            <p class="text-[15px] text-[var(--text-secondary)] mb-6">Select multiple tags to merge into a single primary tag. The old tags will be removed from all posts.</p>
+                            
+                            <div class="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl p-5 mb-4">
+                                <div class="flex flex-col md:flex-row gap-6">
+                                    <div class="flex-1 relative">
+                                        <label class="block text-sm font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">Tags to Merge</label>
+                                        <div @click.outside="mergeTagsDropdown = false">
+                                            <div class="relative w-full">
+                                                <input type="text" x-model="mergeSearchTerm" @focus="mergeTagsDropdown = true" @input="mergeTagsDropdown = true; mergeSelectedIndex = 0" @keydown.enter.prevent="addMergeTagFromInput()" @keydown.tab.prevent="addMergeTagFromInput()" @keydown.up.prevent="mergeMoveUp" @keydown.down.prevent="mergeMoveDown" @keydown.escape.prevent.stop="if(mergeSearchTerm) { mergeSearchTerm = ''; } else { mergeTagsDropdown = false; $el.blur(); }" placeholder="Search to add..." class="w-full bg-[var(--bg-primary)] border border-[var(--input-border)] text-[var(--text-primary)] rounded-lg px-3 py-2 pr-10 text-sm focus:outline-none focus:border-[var(--accent-color)] transition">
+                                                <button x-show="mergeSearchTerm" @click="mergeSearchTerm = ''" class="absolute right-2 top-1/2 -translate-y-1/2 p-1 bg-[var(--text-secondary)] rounded-full hover:bg-[var(--text-primary)] transition z-10">
+                                                    <svg viewBox="0 0 24 24" class="w-3 h-3 fill-[var(--bg-primary)]"><path d="M13.414 12l5.793-5.793c.39-.39.39-1.023 0-1.414s-1.023-.39-1.414 0L12 10.586 6.207 4.793c-.39-.39-1.023-.39-1.414 0s-.39 1.023 0 1.414L10.586 12l-5.793 5.793c-.39.39-.39 1.023 0 1.414.195.195.45.293.707.293s.512-.098.707-.293L12 13.414l5.793 5.793c.195.195.45.293.707.293s.512-.098.707-.293c.39-.39.39-1.023 0-1.414L13.414 12z"></path></svg>
+                                                </button>
+                                            </div>
+                                            
+                                            <div x-show="mergeTagsDropdown && mergeSearchTerm.length > 0 && filteredMergeOptions.length > 0" class="absolute z-20 left-0 right-0 mt-1 bg-[var(--dropdown-bg)] border border-[var(--border-color)] rounded-lg shadow-lg max-h-48 overflow-y-auto">
+                                                <template x-for="(t, index) in filteredMergeOptions" :key="t.tag">
+                                                    <div @click="addMergeTag(t.tag)" @mouseenter="mergeSelectedIndex = index" :class="{'bg-[var(--bg-tertiary)]': mergeSelectedIndex === index}" class="px-3 py-2 text-sm text-[var(--text-primary)] hover:bg-[var(--hover-bg)] cursor-pointer flex justify-between transition items-center">
+                                                        <span x-text="t.tag"></span>
+                                                        <div class="flex items-center space-x-3">
+                                                            <span class="text-[var(--text-secondary)] text-xs" x-text="t.count"></span>
+                                                            <button class="bg-[var(--text-primary)] text-[var(--bg-primary)] px-2 py-0.5 rounded-full text-xs font-bold transition hover:opacity-80">Add</button>
+                                                        </div>
+                                                    </div>
+                                                </template>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div class="flex-1 relative">
+                                        <label class="block text-sm font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">Primary Tag</label>
+                                        <div @click.outside="mergePrimaryDropdown = false">
+                                            <div class="relative w-full">
+                                                <input type="text" x-model="mergePrimarySearchTerm" @focus="mergePrimaryDropdown = true" @input="mergePrimaryDropdown = true; primarySelectedIndex = 0" @keydown.enter.prevent="setPrimaryTagFromInput()" @keydown.tab.prevent="setPrimaryTagFromInput()" @keydown.up.prevent="primaryMoveUp" @keydown.down.prevent="primaryMoveDown" @keydown.escape.prevent.stop="if(mergePrimarySearchTerm) { mergePrimarySearchTerm = ''; } else { mergePrimaryDropdown = false; $el.blur(); }" placeholder="Search primary tag..." class="w-full bg-[var(--bg-primary)] border border-[var(--input-border)] text-[var(--accent-color)] font-bold rounded-lg px-3 py-2 pr-10 text-sm focus:outline-none focus:border-[var(--accent-color)] transition">
+                                                <button x-show="mergePrimarySearchTerm" @click="mergePrimarySearchTerm = ''" class="absolute right-2 top-1/2 -translate-y-1/2 p-1 bg-[var(--text-secondary)] rounded-full hover:bg-[var(--text-primary)] transition z-10">
+                                                    <svg viewBox="0 0 24 24" class="w-3 h-3 fill-[var(--bg-primary)]"><path d="M13.414 12l5.793-5.793c.39-.39.39-1.023 0-1.414s-1.023-.39-1.414 0L12 10.586 6.207 4.793c-.39-.39-1.023-.39-1.414 0s-.39 1.023 0 1.414L10.586 12l-5.793 5.793c-.39.39-.39 1.023 0 1.414.195.195.45.293.707.293s.512-.098.707-.293L12 13.414l5.793 5.793c.195.195.45.293.707.293s.512-.098.707-.293c.39-.39.39-1.023 0-1.414L13.414 12z"></path></svg>
+                                                </button>
+                                            </div>
+                                            
+                                            <div x-show="mergePrimaryDropdown && mergePrimarySearchTerm.length > 0 && filteredPrimaryOptions.length > 0" class="absolute z-20 left-0 right-0 mt-1 bg-[var(--dropdown-bg)] border border-[var(--border-color)] rounded-lg shadow-lg max-h-48 overflow-y-auto">
+                                                <template x-for="(t, index) in filteredPrimaryOptions" :key="t.tag">
+                                                    <div @click="mergePrimaryTag = t.tag; mergePrimarySearchTerm = ''; mergePrimaryDropdown = false" @mouseenter="primarySelectedIndex = index" :class="{'bg-[var(--bg-tertiary)]': primarySelectedIndex === index}" class="px-3 py-2 text-sm text-[var(--text-primary)] hover:bg-[var(--hover-bg)] cursor-pointer flex justify-between transition items-center">
+                                                        <span x-text="t.tag"></span>
+                                                        <span class="text-[var(--text-secondary)] text-xs" x-text="t.count"></span>
+                                                    </div>
+                                                </template>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <!-- Visualization -->
+                                <div class="flex items-stretch justify-between mt-8 px-2 relative min-h-[120px] py-4">
+                                    <div class="flex flex-col w-2/5 z-10">
+                                        <template x-for="(tag, i) in mergeTagsList" :key="tag">
+                                            <div class="flex-1 flex flex-col justify-center py-1">
+                                                <div class="px-3 py-2 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-lg text-sm text-[var(--text-primary)] flex justify-between items-center shadow-sm">
+                                                    <span x-text="tag" class="truncate font-medium pr-2"></span>
+                                                    <button @click="removeMergeTag(tag)" class="text-[var(--text-secondary)] hover:text-[var(--danger-color)] shrink-0"><svg viewBox="0 0 24 24" class="w-4 h-4 fill-current"><path d="M13.414 12l5.793-5.793c.39-.39.39-1.023 0-1.414s-1.024-.39-1.414 0L12 10.586 6.207 4.793c-.39-.39-1.023-.39-1.414 0s-.39 1.024 0 1.414L10.586 12l-5.793 5.793c-.39.39-.39 1.023 0 1.414.195.195.45.293.707.293s.512-.098.707-.293L12 13.414l5.793 5.793c.195.195.45.293.707.293s.512-.098.707-.293c.39-.39.39-1.023 0-1.414L13.414 12z"></path></svg></button>
+                                                </div>
+                                            </div>
+                                        </template>
+                                        <div x-show="mergeTagsList.length === 0" class="flex-1 flex flex-col justify-center py-1">
+                                            <div class="px-3 py-2 border border-dashed border-[var(--border-color)] rounded-lg text-sm text-[var(--text-secondary)] text-center">No tags selected</div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="absolute inset-y-4 flex items-center justify-center pointer-events-none" style="left: 40%; right: 40%;">
+                                        <svg class="w-full h-full" viewBox="0 0 100 100" preserveAspectRatio="none" x-html="mergeTagsList.map((t, i) => `<path d='${getMergePath(i, mergeTagsList.length)}' fill='none' stroke='var(--accent-color)' stroke-width='2' vector-effect='non-scaling-stroke'></path>`).join('')">
+                                        </svg>
+                                    </div>
+                                    
+                                    <div class="w-2/5 flex flex-col justify-center z-10">
+                                        <div x-show="mergePrimaryTag" class="px-3 py-2 bg-[var(--accent-color)]/10 border border-[var(--accent-color)]/30 rounded-lg text-sm text-[var(--accent-color)] flex justify-between items-center shadow-sm w-full">
+                                            <span x-text="mergePrimaryTag" class="truncate font-medium pr-2"></span>
+                                            <button @click="mergePrimaryTag = ''; mergePrimarySearchTerm = ''" class="text-[var(--accent-color)] hover:text-[var(--danger-color)] shrink-0"><svg viewBox="0 0 24 24" class="w-4 h-4 fill-current"><path d="M13.414 12l5.793-5.793c.39-.39.39-1.023 0-1.414s-1.024-.39-1.414 0L12 10.586 6.207 4.793c-.39-.39-1.023-.39-1.414 0s-.39 1.024 0 1.414L10.586 12l-5.793 5.793c-.39.39-.39 1.023 0 1.414.195.195.45.293.707.293s.512-.098.707-.293L12 13.414l5.793 5.793c.195.195.45.293.707.293s.512-.098.707-.293c.39-.39.39-1.023 0-1.414L13.414 12z"></path></svg></button>
+                                        </div>
+                                        <div x-show="!mergePrimaryTag" class="px-3 py-2 border border-dashed border-[var(--accent-color)]/30 bg-[var(--accent-color)]/5 rounded-lg text-sm text-[var(--accent-color)]/70 text-center w-full">No primary tag</div>
+                                    </div>
+                                </div>
+                                
+                                <div class="mt-6 flex justify-end">
+                                    <button @click="submitMerge()" :disabled="!mergePrimaryTag || mergeTagsList.length === 0" class="bg-[var(--accent-color)] text-white font-bold py-2 px-6 rounded-full hover:bg-[var(--accent-hover)] transition disabled:opacity-50 disabled:cursor-not-allowed">
+                                        Merge Tags
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Global Tags List -->
+                        <div>
+                            <div class="flex justify-between items-center mb-4">
+                                <h3 class="text-lg font-bold text-[var(--text-primary)]">All Tags</h3>
+                                <div class="relative w-48">
+                                    <input type="text" x-model="tagSearchTerm" placeholder="Filter..." class="w-full bg-[var(--bg-secondary)] border border-[var(--input-border)] text-[var(--text-primary)] rounded-full px-3 py-1.5 pl-8 text-sm focus:outline-none focus:border-[var(--accent-color)] transition">
+                                    <svg viewBox="0 0 24 24" class="w-4 h-4 fill-[var(--text-secondary)] absolute left-2.5 top-1/2 -translate-y-1/2"><path d="M10.25 3.75c-3.59 0-6.5 2.91-6.5 6.5s2.91 6.5 6.5 6.5c1.795 0 3.419-.726 4.596-1.904 1.178-1.177 1.904-2.801 1.904-4.596 0-3.59-2.91-6.5-6.5-6.5zm-8.5 6.5c0-4.694 3.806-8.5 8.5-8.5s8.5 3.806 8.5 8.5c0 1.986-.682 3.815-1.824 5.262l4.781 4.781-1.414 1.414-4.781-4.781c-1.447 1.142-3.276 1.824-5.262 1.824-4.694 0-8.5-3.806-8.5-8.5z"></path></svg>
+                                </div>
+                            </div>
+                            
+                            <div class="bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl overflow-hidden">
+                                <template x-if="globalTagsLoading">
+                                    <div class="p-8 text-center text-[var(--text-secondary)]">Loading tags...</div>
+                                </template>
+                                <template x-if="!globalTagsLoading && filteredGlobalTags.length === 0">
+                                    <div class="p-8 text-center text-[var(--text-secondary)]">No tags found.</div>
+                                </template>
+                                
+                                <div class="max-h-[400px] overflow-y-auto">
+                                    <template x-for="tag in filteredGlobalTags" :key="tag.tag">
+                                        <div class="flex justify-between items-center p-3 border-b border-[var(--border-color)] hover-bg transition group">
+                                            <div class="flex items-center space-x-3">
+                                                <span class="text-[var(--text-primary)] font-medium" x-text="tag.tag"></span>
+                                                <span class="bg-[var(--bg-tertiary)] text-[var(--text-secondary)] text-xs font-bold px-2 py-0.5 rounded-full" x-text="tag.count"></span>
+                                            </div>
+                                            <button @click="deleteGlobalTag(tag.tag)" class="text-[var(--text-secondary)] hover:text-[var(--danger-color)] opacity-0 group-hover:opacity-100 transition p-1.5 rounded-full" title="Delete globally">
+                                                <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current"><path d="M13.414 12l5.793-5.793c.39-.39.39-1.023 0-1.414s-1.024-.39-1.414 0L12 10.586 6.207 4.793c-.39-.39-1.023-.39-1.414 0s-.39 1.024 0 1.414L10.586 12l-5.793 5.793c-.39.39-.39 1.023 0 1.414.195.195.45.293.707.293s.512-.098.707-.293L12 13.414l5.793 5.793c.195.195.45.293.707.293s.512-.098.707-.293c.39-.39.39-1.023 0-1.414L13.414 12z"></path></svg>
+                                            </button>
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
+                    
+                    <!-- Config Section -->
+                    <div class="flex-1 overflow-y-auto p-4 md:p-6" x-show="settingsTab === 'config'">
+                        <div class="mb-6">
+                            <div class="mb-4">
+                                <h3 class="text-lg font-bold text-[var(--text-primary)]">App Settings</h3>
+                                <p class="text-[15px] text-[var(--text-secondary)]">Manage config.toml settings.</p>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <label class="flex items-center cursor-pointer">
+                                    <div class="relative">
+                                        <input type="checkbox" x-model="showAdvancedConfig" class="sr-only">
+                                        <div class="block bg-[var(--bg-tertiary)] w-10 h-6 rounded-full border border-[var(--border-color)]"></div>
+                                        <div :class="showAdvancedConfig ? 'translate-x-full bg-[var(--accent-color)]' : 'bg-[var(--text-secondary)]'" class="dot absolute left-1 top-1 w-4 h-4 rounded-full transition transform"></div>
+                                    </div>
+                                    <div class="ml-2 text-sm font-bold text-[var(--text-primary)]">Advanced</div>
+                                </label>
+                                <div class="flex items-center space-x-3">
+                                    <button @click="restoreConfigDefaults()" class="border border-[var(--border-color)] text-[var(--text-primary)] px-4 py-2 rounded-full font-bold hover:bg-[var(--bg-tertiary)] transition" :disabled="configSaving || !configData">
+                                        Restore Defaults
+                                    </button>
+                                    <button @click="saveConfig()" id="save-config-btn" class="bg-[var(--accent-color)] text-white px-4 py-2 rounded-full font-bold hover:bg-[var(--accent-hover)] transition" :disabled="configSaving || !configData">
+                                        Save Config
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <template x-if="!configData">
+                            <div class="text-center p-8 text-[var(--text-secondary)]">Loading...</div>
+                        </template>
+
+                        <template x-if="configData && configSchema">
+                            <div class="space-y-6 pb-10">
+                                <template x-for="(sectionData, sectionName) in configData" :key="sectionName">
+                                    <div class="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl p-5" x-show="hasVisibleFields(sectionName)" x-transition>
+                                        <h4 class="text-[16px] font-bold text-[var(--text-primary)] mb-4 pb-2 border-b border-[var(--border-color)]" x-text="configSchema.labels[sectionName] || sectionName"></h4>
+                                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                            <template x-for="(value, key) in sectionData" :key="key">
+                                                <div class="flex flex-col" x-show="isFieldVisible(sectionName, key)" x-transition :class="{'md:col-span-2': isFieldFullWidth(sectionName, key)}">
+                                                    <label class="text-sm font-bold text-[var(--text-secondary)] mb-1" x-text="configSchema.labels[sectionName + '.' + key] || key"></label>
+                                                    
+                                                    <!-- Boolean -->
+                                                    <template x-if="getFieldType(sectionName, key) === 'boolean'">
+                                                        <select x-model="configData[sectionName][key]" class="w-full bg-[var(--bg-primary)] border border-[var(--input-border)] text-[var(--text-primary)] rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[var(--accent-color)] transition">
+                                                            <option value="true">On</option>
+                                                            <option value="false">Off</option>
+                                                        </select>
+                                                    </template>
+
+                                                    <!-- Select -->
+                                                    <template x-if="getFieldType(sectionName, key) === 'select'">
+                                                        <select x-model="configData[sectionName][key]" class="w-full bg-[var(--bg-primary)] border border-[var(--input-border)] text-[var(--text-primary)] rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[var(--accent-color)] transition">
+                                                            <template x-for="opt in configSchema.select_options[sectionName + '.' + key]">
+                                                                <option :value="opt.value" x-text="opt.label"></option>
+                                                            </template>
+                                                        </select>
+                                                    </template>
+
+                                                    <!-- Password -->
+                                                    <template x-if="getFieldType(sectionName, key) === 'password'">
+                                                        <div class="relative">
+                                                            <input type="password" x-model="configData[sectionName][key]" class="w-full bg-[var(--bg-primary)] border border-[var(--input-border)] text-[var(--text-primary)] rounded-lg px-3 py-2 pr-10 text-sm focus:outline-none focus:border-[var(--accent-color)] transition">
+                                                            <button type="button" @click="$el.previousElementSibling.type = $el.previousElementSibling.type === 'password' ? 'text' : 'password'" class="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition">
+                                                                <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"></path></svg>
+                                                            </button>
+                                                        </div>
+                                                    </template>
+                                                    
+                                                    <!-- Number -->
+                                                    <template x-if="getFieldType(sectionName, key) === 'number'">
+                                                        <input type="number" step="any" x-model.number="configData[sectionName][key]" class="w-full bg-[var(--bg-primary)] border border-[var(--input-border)] text-[var(--text-primary)] rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[var(--accent-color)] transition">
+                                                    </template>
+
+                                                    <!-- Text -->
+                                                    <template x-if="getFieldType(sectionName, key) === 'text'">
+                                                        <input type="text" x-model="configData[sectionName][key]" class="w-full bg-[var(--bg-primary)] border border-[var(--input-border)] text-[var(--text-primary)] rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[var(--accent-color)] transition">
+                                                    </template>
+                                                    
+                                                    <template x-if="configSchema.descriptions[sectionName + '.' + key]">
+                                                        <span class="text-xs text-[var(--text-secondary)] mt-1" x-text="configSchema.descriptions[sectionName + '.' + key]"></span>
+                                                    </template>
+                                                </div>
+                                            </template>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+                        </template>
+                    </div>
+
+                    <!-- Appearance Section -->
+                    <div class="flex-1 overflow-y-auto p-4 md:p-6" x-show="settingsTab === 'appearance'">
+                        
+                        <!-- Theme Selector -->
+                        <div class="mb-8">
+                            <h3 class="text-lg font-bold text-[var(--text-primary)] mb-2">Theme</h3>
+                            <p class="text-sm text-[var(--text-secondary)] mb-4">Choose a theme for the interface.</p>
+                            <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                                <template x-for="(theme, key) in THEMES" :key="key">
+                                    <button @click="applyTheme(key)" 
+                                            :class="currentTheme === key ? 'ring-2 ring-[var(--accent-color)] ring-offset-2 ring-offset-[var(--bg-primary)]' : 'hover:opacity-80'"
+                                            class="rounded-xl overflow-hidden transition-all duration-200 cursor-pointer border border-[var(--border-color)]">
+                                        <!-- Mini tweet preview swatch -->
+                                        <div class="p-3 h-20" :style="'background-color:' + theme['--bg-primary']">
+                                            <div class="flex items-start gap-2">
+                                                <!-- Avatar circle -->
+                                                <div class="w-6 h-6 rounded-full flex-shrink-0" :style="'background-color:' + theme['--text-secondary']"></div>
+                                                <div class="flex-1 space-y-1.5 overflow-hidden">
+                                                    <!-- Name line -->
+                                                    <div class="h-2 rounded-full w-3/4" :style="'background-color:' + theme['--text-primary']"></div>
+                                                    <!-- Text lines -->
+                                                    <div class="h-1.5 rounded-full w-full" :style="'background-color:' + theme['--text-secondary']"></div>
+                                                    <div class="h-1.5 rounded-full w-2/3" :style="'background-color:' + theme['--text-secondary']"></div>
+                                                    <!-- Accent element -->
+                                                    <div class="h-1.5 rounded-full w-1/3" :style="'background-color:' + theme['--accent-color']"></div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="px-3 py-2 text-center" :style="'background-color:' + theme['--bg-secondary']">
+                                            <span class="text-xs font-bold" :style="'color:' + theme['--text-primary']" x-text="theme._name"></span>
+                                        </div>
+                                    </button>
+                                </template>
+                            </div>
+                        </div>
+
+
+                        <!-- Font Family -->
+                        <div class="mb-8">
+                            <h3 class="text-lg font-bold text-[var(--text-primary)] mb-2">Font</h3>
+                            <p class="text-sm text-[var(--text-secondary)] mb-4">Choose a display font.</p>
+                            <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                                <template x-for="f in [
+                                    {key: 'system', label: 'System Default', family: '-apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif'},
+                                    {key: 'inter', label: 'Inter', family: '\"Inter\", sans-serif'},
+                                    {key: 'roboto', label: 'Roboto', family: '\"Roboto\", sans-serif'},
+                                    {key: 'jakarta', label: 'Plus Jakarta Sans', family: '\"Plus Jakarta Sans\", sans-serif'},
+                                    {key: 'outfit', label: 'Outfit', family: '\"Outfit\", sans-serif'},
+                                    {key: 'nunito', label: 'Nunito', family: '\"Nunito\", sans-serif'},
+                                    {key: 'jetbrains', label: 'JetBrains Mono', family: '\"JetBrains Mono\", monospace'}
+                                ]" :key="f.key">
+                                    <button @click="setFont(f.key, f.family, f.label)"
+                                            :class="fontFamily === f.key ? 'border-[var(--accent-color)] bg-[var(--bg-tertiary)]' : 'border-[var(--border-color)] hover:bg-[var(--bg-tertiary)]'"
+                                            class="border rounded-xl px-4 py-3 text-left transition">
+                                        <span class="text-sm font-bold text-[var(--text-primary)]" x-text="f.label"></span>
+                                        <div class="text-xs text-[var(--text-secondary)] mt-1" :style="'font-family:' + f.family">The quick brown fox</div>
+                                    </button>
+                                </template>
+                            </div>
+                        </div>
+
+                        <!-- Font Size -->
+                        <div class="mb-8">
+                            <h3 class="text-lg font-bold text-[var(--text-primary)] mb-2">Font Size</h3>
+                            <div class="flex items-center gap-3 bg-[var(--bg-secondary)] rounded-xl p-1">
+                                <template x-for="s in [
+                                    {key: 'small', label: 'Small', px: '14px'},
+                                    {key: 'default', label: 'Default', px: '15px'},
+                                    {key: 'large', label: 'Large', px: '16px'},
+                                    {key: 'xl', label: 'Extra Large', px: '18px'}
+                                ]" :key="s.key">
+                                    <button @click="setFontSize(s.key, s.px)"
+                                            :class="fontSize === s.key ? 'bg-[var(--accent-color)] text-white shadow-sm' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'"
+                                            class="flex-1 py-2 px-3 rounded-lg text-sm font-bold transition" x-text="s.label">
+                                    </button>
+                                </template>
+                            </div>
+                        </div>
+
+                        <!-- Tweet Density -->
+                        <div class="mb-8">
+                            <h3 class="text-lg font-bold text-[var(--text-primary)] mb-2">Tweet Density</h3>
+                            <div class="flex items-center gap-3 bg-[var(--bg-secondary)] rounded-xl p-1">
+                                <template x-for="d in [
+                                    {key: 'compact', label: 'Compact', px: '8px'},
+                                    {key: 'default', label: 'Default', px: '12px'},
+                                    {key: 'comfortable', label: 'Comfortable', px: '20px'}
+                                ]" :key="d.key">
+                                    <button @click="setTweetDensity(d.key, d.px)"
+                                            :class="tweetDensity === d.key ? 'bg-[var(--accent-color)] text-white shadow-sm' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'"
+                                            class="flex-1 py-2 px-3 rounded-lg text-sm font-bold transition" x-text="d.label">
+                                    </button>
+                                </template>
+                            </div>
+                        </div>
+
+                    </div>
+
+                </div>
+            </div>
+        </div>
+
         <!-- Scroll to top button -->
         <button 
             x-show="showScrollTop" 
             x-transition.opacity.duration.300ms
             @click="scrollToTop()"
-            class="fixed bottom-6 right-6 bg-[#1d9bf0] text-white p-3 rounded-full shadow-lg hover:bg-[#1a8cd8] transition z-40"
+            class="fixed bottom-6 right-6 bg-[var(--accent-color)] text-white p-3 rounded-full shadow-lg hover:bg-[var(--accent-hover)] transition z-40"
             aria-label="Scroll to top"
         >
             <svg viewBox="0 0 24 24" class="w-6 h-6 fill-current"><path d="M12 4l-8 8h6v8h4v-8h6l-8-8z"></path></svg>
@@ -654,6 +1047,218 @@
     </div>
 
     <script>
+        const THEMES = {
+            'classic-dark': {
+                _name: 'Classic Dark',
+                '--bg-primary': '#000000', '--bg-secondary': '#202327', '--bg-tertiary': 'rgba(239,243,244,0.1)',
+                '--bg-header': 'rgba(0,0,0,0.8)', '--text-primary': '#e7e9ea', '--text-secondary': '#71767b',
+                '--border-color': '#2f3336', '--hover-bg': 'rgba(255,255,255,0.03)', '--scrollbar-bg': '#000000',
+                '--scrollbar-thumb': '#3e4144', '--scrollbar-thumb-hover': '#55585b', '--thread-line': '#333639',
+                '--input-border': '#2f3336', '--white-icon': '#ffffff', '--dropdown-bg': '#000000',
+                '--gray-700': '#374151', '--accent-color': '#1d9bf0', '--accent-hover': '#1a8cd8',
+                '--danger-color': '#f91880', '--danger-hover': '#e01673'
+            },
+            'classic-light': {
+                _name: 'Classic Light',
+                '--bg-primary': '#ffffff', '--bg-secondary': '#eff3f4', '--bg-tertiary': 'rgba(15,20,25,0.1)',
+                '--bg-header': 'rgba(255,255,255,0.85)', '--text-primary': '#0f1419', '--text-secondary': '#536471',
+                '--border-color': '#eff3f4', '--hover-bg': 'rgba(0,0,0,0.03)', '--scrollbar-bg': '#ffffff',
+                '--scrollbar-thumb': '#c1c8cd', '--scrollbar-thumb-hover': '#aab8c2', '--thread-line': '#cfd9de',
+                '--input-border': '#cfd9de', '--white-icon': '#0f1419', '--dropdown-bg': '#ffffff',
+                '--gray-700': '#536471', '--accent-color': '#1d9bf0', '--accent-hover': '#1a8cd8',
+                '--danger-color': '#f91880', '--danger-hover': '#e01673'
+            },
+            'dracula': {
+                _name: 'Dracula',
+                '--bg-primary': '#282a36', '--bg-secondary': '#44475a', '--bg-tertiary': 'rgba(248,248,242,0.08)',
+                '--bg-header': 'rgba(40,42,54,0.9)', '--text-primary': '#f8f8f2', '--text-secondary': '#6272a4',
+                '--border-color': '#44475a', '--hover-bg': 'rgba(248,248,242,0.03)', '--scrollbar-bg': '#282a36',
+                '--scrollbar-thumb': '#44475a', '--scrollbar-thumb-hover': '#6272a4', '--thread-line': '#44475a',
+                '--input-border': '#44475a', '--white-icon': '#f8f8f2', '--dropdown-bg': '#282a36',
+                '--gray-700': '#6272a4', '--accent-color': '#bd93f9', '--accent-hover': '#a87bf5',
+                '--danger-color': '#ff5555', '--danger-hover': '#ff6e6e'
+            },
+            'nord': {
+                _name: 'Nord',
+                '--bg-primary': '#2e3440', '--bg-secondary': '#3b4252', '--bg-tertiary': 'rgba(236,239,244,0.08)',
+                '--bg-header': 'rgba(46,52,64,0.9)', '--text-primary': '#eceff4', '--text-secondary': '#81a1c1',
+                '--border-color': '#3b4252', '--hover-bg': 'rgba(236,239,244,0.03)', '--scrollbar-bg': '#2e3440',
+                '--scrollbar-thumb': '#434c5e', '--scrollbar-thumb-hover': '#4c566a', '--thread-line': '#434c5e',
+                '--input-border': '#3b4252', '--white-icon': '#eceff4', '--dropdown-bg': '#2e3440',
+                '--gray-700': '#4c566a', '--accent-color': '#88c0d0', '--accent-hover': '#7ab4c4',
+                '--danger-color': '#bf616a', '--danger-hover': '#d08770'
+            },
+            'solarized-dark': {
+                _name: 'Solarized Dark',
+                '--bg-primary': '#002b36', '--bg-secondary': '#073642', '--bg-tertiary': 'rgba(131,148,150,0.1)',
+                '--bg-header': 'rgba(0,43,54,0.9)', '--text-primary': '#839496', '--text-secondary': '#586e75',
+                '--border-color': '#073642', '--hover-bg': 'rgba(131,148,150,0.05)', '--scrollbar-bg': '#002b36',
+                '--scrollbar-thumb': '#073642', '--scrollbar-thumb-hover': '#586e75', '--thread-line': '#073642',
+                '--input-border': '#073642', '--white-icon': '#839496', '--dropdown-bg': '#002b36',
+                '--gray-700': '#586e75', '--accent-color': '#b58900', '--accent-hover': '#a37b00',
+                '--danger-color': '#dc322f', '--danger-hover': '#cb4b16'
+            },
+            'solarized-light': {
+                _name: 'Solarized Light',
+                '--bg-primary': '#fdf6e3', '--bg-secondary': '#eee8d5', '--bg-tertiary': 'rgba(101,123,131,0.08)',
+                '--bg-header': 'rgba(253,246,227,0.9)', '--text-primary': '#657b83', '--text-secondary': '#93a1a1',
+                '--border-color': '#eee8d5', '--hover-bg': 'rgba(101,123,131,0.03)', '--scrollbar-bg': '#fdf6e3',
+                '--scrollbar-thumb': '#eee8d5', '--scrollbar-thumb-hover': '#93a1a1', '--thread-line': '#eee8d5',
+                '--input-border': '#eee8d5', '--white-icon': '#657b83', '--dropdown-bg': '#fdf6e3',
+                '--gray-700': '#93a1a1', '--accent-color': '#268bd2', '--accent-hover': '#1f7abc',
+                '--danger-color': '#dc322f', '--danger-hover': '#cb4b16'
+            },
+            'gruvbox': {
+                _name: 'Gruvbox Dark',
+                '--bg-primary': '#282828', '--bg-secondary': '#3c3836', '--bg-tertiary': 'rgba(235,219,178,0.08)',
+                '--bg-header': 'rgba(40,40,40,0.9)', '--text-primary': '#ebdbb2', '--text-secondary': '#a89984',
+                '--border-color': '#3c3836', '--hover-bg': 'rgba(235,219,178,0.03)', '--scrollbar-bg': '#282828',
+                '--scrollbar-thumb': '#504945', '--scrollbar-thumb-hover': '#665c54', '--thread-line': '#504945',
+                '--input-border': '#3c3836', '--white-icon': '#ebdbb2', '--dropdown-bg': '#282828',
+                '--gray-700': '#665c54', '--accent-color': '#fe8019', '--accent-hover': '#e57312',
+                '--danger-color': '#fb4934', '--danger-hover': '#cc241d'
+            },
+            'catppuccin': {
+                _name: 'Catppuccin Mocha',
+                '--bg-primary': '#1e1e2e', '--bg-secondary': '#313244', '--bg-tertiary': 'rgba(205,214,244,0.08)',
+                '--bg-header': 'rgba(30,30,46,0.9)', '--text-primary': '#cdd6f4', '--text-secondary': '#a6adc8',
+                '--border-color': '#313244', '--hover-bg': 'rgba(205,214,244,0.03)', '--scrollbar-bg': '#1e1e2e',
+                '--scrollbar-thumb': '#45475a', '--scrollbar-thumb-hover': '#585b70', '--thread-line': '#45475a',
+                '--input-border': '#313244', '--white-icon': '#cdd6f4', '--dropdown-bg': '#1e1e2e',
+                '--gray-700': '#585b70', '--accent-color': '#cba6f7', '--accent-hover': '#b48def',
+                '--danger-color': '#f38ba8', '--danger-hover': '#eba0ac'
+            },
+            'tokyo-night': {
+                _name: 'Tokyo Night',
+                '--bg-primary': '#1a1b26', '--bg-secondary': '#24283b', '--bg-tertiary': 'rgba(169,177,214,0.08)',
+                '--bg-header': 'rgba(26,27,38,0.9)', '--text-primary': '#a9b1d6', '--text-secondary': '#565f89',
+                '--border-color': '#24283b', '--hover-bg': 'rgba(169,177,214,0.03)', '--scrollbar-bg': '#1a1b26',
+                '--scrollbar-thumb': '#292e42', '--scrollbar-thumb-hover': '#3b4261', '--thread-line': '#292e42',
+                '--input-border': '#24283b', '--white-icon': '#a9b1d6', '--dropdown-bg': '#1a1b26',
+                '--gray-700': '#3b4261', '--accent-color': '#7aa2f7', '--accent-hover': '#6690e6',
+                '--danger-color': '#f7768e', '--danger-hover': '#ff899d'
+            },
+            'rose-pine': {
+                _name: 'Rosé Pine',
+                '--bg-primary': '#191724', '--bg-secondary': '#1f1d2e', '--bg-tertiary': 'rgba(224,222,244,0.08)',
+                '--bg-header': 'rgba(25,23,36,0.9)', '--text-primary': '#e0def4', '--text-secondary': '#908caa',
+                '--border-color': '#26233a', '--hover-bg': 'rgba(224,222,244,0.03)', '--scrollbar-bg': '#191724',
+                '--scrollbar-thumb': '#26233a', '--scrollbar-thumb-hover': '#393552', '--thread-line': '#26233a',
+                '--input-border': '#26233a', '--white-icon': '#e0def4', '--dropdown-bg': '#191724',
+                '--gray-700': '#393552', '--accent-color': '#c4a7e7', '--accent-hover': '#b392d9',
+                '--danger-color': '#eb6f92', '--danger-hover': '#b4637a'
+            },
+            'one-dark': {
+                _name: 'One Dark',
+                '--bg-primary': '#282c34', '--bg-secondary': '#21252b', '--bg-tertiary': 'rgba(171,178,191,0.08)',
+                '--bg-header': 'rgba(40,44,52,0.9)', '--text-primary': '#abb2bf', '--text-secondary': '#5c6370',
+                '--border-color': '#3e4451', '--hover-bg': 'rgba(171,178,191,0.03)', '--scrollbar-bg': '#282c34',
+                '--scrollbar-thumb': '#3e4451', '--scrollbar-thumb-hover': '#4b5263', '--thread-line': '#3e4451',
+                '--input-border': '#3e4451', '--white-icon': '#abb2bf', '--dropdown-bg': '#282c34',
+                '--gray-700': '#4b5263', '--accent-color': '#61afef', '--accent-hover': '#519fdf',
+                '--danger-color': '#e06c75', '--danger-hover': '#be5046'
+            },
+            'monokai': {
+                _name: 'Monokai',
+                '--bg-primary': '#272822', '--bg-secondary': '#3e3d32', '--bg-tertiary': 'rgba(248,248,242,0.08)',
+                '--bg-header': 'rgba(39,40,34,0.9)', '--text-primary': '#f8f8f2', '--text-secondary': '#75715e',
+                '--border-color': '#3e3d32', '--hover-bg': 'rgba(248,248,242,0.03)', '--scrollbar-bg': '#272822',
+                '--scrollbar-thumb': '#49483e', '--scrollbar-thumb-hover': '#75715e', '--thread-line': '#49483e',
+                '--input-border': '#3e3d32', '--white-icon': '#f8f8f2', '--dropdown-bg': '#272822',
+                '--gray-700': '#75715e', '--accent-color': '#a6e22e', '--accent-hover': '#94cc29',
+                '--danger-color': '#f92672', '--danger-hover': '#ff4d88'
+            },
+            'github-dark': {
+                _name: 'GitHub Dark',
+                '--bg-primary': '#0d1117', '--bg-secondary': '#161b22', '--bg-tertiary': 'rgba(201,209,217,0.08)',
+                '--bg-header': 'rgba(13,17,23,0.9)', '--text-primary': '#c9d1d9', '--text-secondary': '#8b949e',
+                '--border-color': '#30363d', '--hover-bg': 'rgba(177,186,196,0.12)', '--scrollbar-bg': '#0d1117',
+                '--scrollbar-thumb': '#484f58', '--scrollbar-thumb-hover': '#6e7681', '--thread-line': '#30363d',
+                '--input-border': '#30363d', '--white-icon': '#c9d1d9', '--dropdown-bg': '#0d1117',
+                '--gray-700': '#484f58', '--accent-color': '#58a6ff', '--accent-hover': '#79c0ff',
+                '--danger-color': '#f85149', '--danger-hover': '#da3633'
+            },
+            'github-light': {
+                _name: 'GitHub Light',
+                '--bg-primary': '#ffffff', '--bg-secondary': '#f6f8fa', '--bg-tertiary': 'rgba(36,41,47,0.05)',
+                '--bg-header': 'rgba(255,255,255,0.9)', '--text-primary': '#24292f', '--text-secondary': '#57606a',
+                '--border-color': '#d0d7de', '--hover-bg': 'rgba(208,215,222,0.32)', '--scrollbar-bg': '#ffffff',
+                '--scrollbar-thumb': '#afb8c1', '--scrollbar-thumb-hover': '#8c959f', '--thread-line': '#d0d7de',
+                '--input-border': '#d0d7de', '--white-icon': '#24292f', '--dropdown-bg': '#ffffff',
+                '--gray-700': '#57606a', '--accent-color': '#0969da', '--accent-hover': '#0349b4',
+                '--danger-color': '#cf222e', '--danger-hover': '#a40e26'
+            },
+            'cyberpunk': {
+                _name: 'Cyberpunk',
+                '--bg-primary': '#0e0b16', '--bg-secondary': '#1a1025', '--bg-tertiary': 'rgba(240,240,240,0.05)',
+                '--bg-header': 'rgba(14,11,22,0.9)', '--text-primary': '#e0e0e0', '--text-secondary': '#a0a0a0',
+                '--border-color': '#4717f6', '--hover-bg': 'rgba(231,223,221,0.08)', '--scrollbar-bg': '#0e0b16',
+                '--scrollbar-thumb': '#4717f6', '--scrollbar-thumb-hover': '#a239ca', '--thread-line': '#4717f6',
+                '--input-border': '#4717f6', '--white-icon': '#e0e0e0', '--dropdown-bg': '#0e0b16',
+                '--gray-700': '#a0a0a0', '--accent-color': '#00ffcc', '--accent-hover': '#00cc99',
+                '--danger-color': '#ff003c', '--danger-hover': '#d90033'
+            },
+            'synthwave': {
+                _name: 'Synthwave \'84',
+                '--bg-primary': '#262335', '--bg-secondary': '#241b2f', '--bg-tertiary': 'rgba(255,255,255,0.05)',
+                '--bg-header': 'rgba(38,35,53,0.9)', '--text-primary': '#ffffff', '--text-secondary': '#8b8b99',
+                '--border-color': '#362f4b', '--hover-bg': 'rgba(255,255,255,0.03)', '--scrollbar-bg': '#262335',
+                '--scrollbar-thumb': '#362f4b', '--scrollbar-thumb-hover': '#8b8b99', '--thread-line': '#362f4b',
+                '--input-border': '#362f4b', '--white-icon': '#ffffff', '--dropdown-bg': '#262335',
+                '--gray-700': '#8b8b99', '--accent-color': '#f92aad', '--accent-hover': '#e2259b',
+                '--danger-color': '#ff3366', '--danger-hover': '#ff0044'
+            },
+            'aura-dark': {
+                _name: 'Aura Dark',
+                '--bg-primary': '#15141b', '--bg-secondary': '#21202e', '--bg-tertiary': 'rgba(237,224,212,0.08)',
+                '--bg-header': 'rgba(21,20,27,0.9)', '--text-primary': '#ede0d4', '--text-secondary': '#a2a2a2',
+                '--border-color': '#21202e', '--hover-bg': 'rgba(237,224,212,0.03)', '--scrollbar-bg': '#15141b',
+                '--scrollbar-thumb': '#3c3b4a', '--scrollbar-thumb-hover': '#6b6a7a', '--thread-line': '#3c3b4a',
+                '--input-border': '#3c3b4a', '--white-icon': '#ede0d4', '--dropdown-bg': '#15141b',
+                '--gray-700': '#6b6a7a', '--accent-color': '#82e2ff', '--accent-hover': '#5eccff',
+                '--danger-color': '#ff7373', '--danger-hover': '#ff5c5c'
+            },
+            'vesper': {
+                _name: 'Vesper',
+                '--bg-primary': '#101010', '--bg-secondary': '#161616', '--bg-tertiary': 'rgba(255,255,255,0.05)',
+                '--bg-header': 'rgba(16,16,16,0.9)', '--text-primary': '#cccccc', '--text-secondary': '#777777',
+                '--border-color': '#222222', '--hover-bg': 'rgba(255,255,255,0.03)', '--scrollbar-bg': '#101010',
+                '--scrollbar-thumb': '#333333', '--scrollbar-thumb-hover': '#555555', '--thread-line': '#222222',
+                '--input-border': '#222222', '--white-icon': '#cccccc', '--dropdown-bg': '#101010',
+                '--gray-700': '#555555', '--accent-color': '#ffc799', '--accent-hover': '#ffb073',
+                '--danger-color': '#ff5f5f', '--danger-hover': '#ff4d4d'
+            },
+            'material-ocean': {
+                _name: 'Material Ocean',
+                '--bg-primary': '#0f111a', '--bg-secondary': '#1a1c29', '--bg-tertiary': 'rgba(255,255,255,0.05)',
+                '--bg-header': 'rgba(15,17,26,0.9)', '--text-primary': '#8f93a2', '--text-secondary': '#4a4d5d',
+                '--border-color': '#1f2233', '--hover-bg': 'rgba(255,255,255,0.03)', '--scrollbar-bg': '#0f111a',
+                '--scrollbar-thumb': '#1f2233', '--scrollbar-thumb-hover': '#4a4d5d', '--thread-line': '#1f2233',
+                '--input-border': '#1f2233', '--white-icon': '#8f93a2', '--dropdown-bg': '#0f111a',
+                '--gray-700': '#4a4d5d', '--accent-color': '#80cbc4', '--accent-hover': '#5fbcb3',
+                '--danger-color': '#ff5370', '--danger-hover': '#f07178'
+            },
+            'gruvbox-light': {
+                _name: 'Gruvbox Light',
+                '--bg-primary': '#fbf1c7', '--bg-secondary': '#ebdbb2', '--bg-tertiary': 'rgba(0,0,0,0.05)',
+                '--bg-header': 'rgba(251,241,199,0.9)', '--text-primary': '#3c3836', '--text-secondary': '#7c6f64',
+                '--border-color': '#d5c4a1', '--hover-bg': 'rgba(0,0,0,0.03)', '--scrollbar-bg': '#fbf1c7',
+                '--scrollbar-thumb': '#bdae93', '--scrollbar-thumb-hover': '#a89984', '--thread-line': '#d5c4a1',
+                '--input-border': '#d5c4a1', '--white-icon': '#3c3836', '--dropdown-bg': '#fbf1c7',
+                '--gray-700': '#7c6f64', '--accent-color': '#d65d0e', '--accent-hover': '#af3a03',
+                '--danger-color': '#9d0006', '--danger-hover': '#cc241d'
+            }
+        };
+
+        const FONT_URLS = {
+            inter: 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap',
+            roboto: 'https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap',
+            jakarta: 'https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;700&display=swap',
+            outfit: 'https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;700&display=swap',
+            nunito: 'https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700&display=swap',
+            jetbrains: 'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap',
+        };
+
         function tweetApp() {
             return {
                 viewMode: 'list',
@@ -687,20 +1292,77 @@
                 tagModalData: null,
                 tagModalTweetId: null,
                 
+                isEditingTags: false,
+                editableTags: [],
+                tagSearchQuery: '',
+                tagAutocompleteOptions: [],
+                tagSearchDropdown: false,
+                
+                showSettingsModal: false,
+                settingsTab: 'tags',
+                globalTags: [],
+                globalTagsLoading: false,
+                tagSearchTerm: '',
+                
+                configSchema: null,
+                configData: null,
+                configSaving: false,
+                showAdvancedConfig: false,
+                
+                mergePrimaryTag: '',
+                mergeTagsList: [],
+                mergeSearchTerm: '',
+                mergePrimarySearchTerm: '',
+                mergePrimaryDropdown: false,
+                mergeTagsDropdown: false,
+                mergeSelectedIndex: 0,
+                primarySelectedIndex: 0,
+                
                 showScrollTop: false,
                 lastSyncAt: null,
                 lastSyncFormatted: '',
                 darkMode: true,
+                
+                THEMES: THEMES,
+                currentTheme: 'classic-dark',
+
+                fontFamily: 'system',
+                fontSize: 'default',
+                tweetDensity: 'default',
 
                 initApp() {
                     if ('scrollRestoration' in history) {
                         history.scrollRestoration = 'manual';
                     }
                     
-                    const savedTheme = localStorage.getItem('theme');
-                    if (savedTheme === 'light') {
-                        this.darkMode = false;
-                        document.documentElement.classList.add('light');
+
+                    const savedTheme = localStorage.getItem('tvx-theme') || localStorage.getItem('theme');
+                    if (savedTheme && THEMES[savedTheme]) {
+                        this.applyTheme(savedTheme);
+                    } else if (savedTheme === 'light') {
+                        this.applyTheme('classic-light');
+                    }
+                    
+                    const savedFont = localStorage.getItem('tvx-font');
+                    const savedFontFamily = localStorage.getItem('tvx-font-family');
+                    if (savedFont && savedFontFamily) {
+                        this.fontFamily = savedFont;
+                        this.loadFont(savedFont);
+                        document.body.style.fontFamily = savedFontFamily;
+                    }
+                    
+                    const savedFontSize = localStorage.getItem('tvx-font-size');
+                    const savedFontSizePx = localStorage.getItem('tvx-font-size-px');
+                    if (savedFontSize && savedFontSizePx) {
+                        this.fontSize = savedFontSize;
+                        document.documentElement.style.setProperty('--font-size-base', savedFontSizePx);
+                    }
+                    
+                    const savedDensity = localStorage.getItem('tvx-density');
+                    const savedDensityPx = localStorage.getItem('tvx-density-px');
+                    if (savedDensity && savedDensityPx) {
+                        this.tweetDensity = savedDensity;
+                        document.documentElement.style.setProperty('--tweet-padding', savedDensityPx);
                     }
                     
                     window.addEventListener('scroll', () => {
@@ -708,6 +1370,13 @@
                     });
                     
                     this.fetchStats();
+                    
+                    this.$watch('showSettingsModal', val => {
+                        if (val) {
+                            this.fetchGlobalTags();
+                            this.fetchConfig();
+                        }
+                    });
                     
                     window.addEventListener('open-lightbox', (e) => {
                         this.lightboxMedia = e.detail.media;
@@ -820,14 +1489,57 @@
                 },
                 
                 toggleTheme() {
-                    this.darkMode = !this.darkMode;
-                    if (this.darkMode) {
-                        document.documentElement.classList.remove('light');
-                        localStorage.setItem('theme', 'dark');
-                    } else {
-                        document.documentElement.classList.add('light');
-                        localStorage.setItem('theme', 'light');
+                    // Legacy — now handled by applyTheme
+                },
+
+                applyTheme(key) {
+                    const theme = THEMES[key];
+                    if (!theme) return;
+                    this.currentTheme = key;
+                    const root = document.documentElement;
+                    for (const [prop, val] of Object.entries(theme)) {
+                        if (prop.startsWith('--')) root.style.setProperty(prop, val);
                     }
+                    // Sync darkMode for any legacy checks
+                    const bgHex = theme['--bg-primary'] || '#000000';
+                    const r = parseInt(bgHex.slice(1,3),16), g = parseInt(bgHex.slice(3,5),16), b = parseInt(bgHex.slice(5,7),16);
+                    this.darkMode = (r*0.299 + g*0.587 + b*0.114) < 128;
+                    if (this.darkMode) { root.classList.remove('light'); } else { root.classList.add('light'); }
+                    localStorage.setItem('tvx-theme', key);
+                },
+
+
+                loadFont(key) {
+                    if (key === 'system' || document.querySelector(`link[data-font="${key}"]`)) return;
+                    const url = FONT_URLS[key];
+                    if (!url) return;
+                    const link = document.createElement('link');
+                    link.rel = 'stylesheet';
+                    link.href = url;
+                    link.dataset.font = key;
+                    document.head.appendChild(link);
+                },
+
+                setFont(key, family) {
+                    this.fontFamily = key;
+                    this.loadFont(key);
+                    document.body.style.fontFamily = family;
+                    localStorage.setItem('tvx-font', key);
+                    localStorage.setItem('tvx-font-family', family);
+                },
+
+                setFontSize(key, px) {
+                    this.fontSize = key;
+                    document.documentElement.style.setProperty('--font-size-base', px);
+                    localStorage.setItem('tvx-font-size', key);
+                    localStorage.setItem('tvx-font-size-px', px);
+                },
+
+                setTweetDensity(key, px) {
+                    this.tweetDensity = key;
+                    document.documentElement.style.setProperty('--tweet-padding', px);
+                    localStorage.setItem('tvx-density', key);
+                    localStorage.setItem('tvx-density-px', px);
                 },
                 
                 loadMore() {
@@ -970,7 +1682,7 @@
                 },
                 
                 async deleteTags() {
-                    if (!this.tagModalTweetId || !confirm("Are you sure you want to delete the AI tags for this tweet?")) return;
+                    if (!this.tagModalTweetId || !confirm("Are you sure you want to delete the tags for this tweet?")) return;
                     try {
                         const res = await fetch(`/api/tags/${this.tagModalTweetId}`, { method: 'DELETE' });
                         if (res.ok) {
@@ -983,6 +1695,181 @@
                         }
                     } catch (e) {
                         alert("Error: " + e.message);
+                    }
+                },
+                
+                // --- Tweet Tag Editing ---
+                startEditingTags() {
+                    this.isEditingTags = true;
+                    this.editableTags = [...(this.tagModalData?.tags || [])];
+                },
+                async fetchTagAutocomplete(query) {
+                    try {
+                        const res = await fetch(`/api/tags/autocomplete?q=${encodeURIComponent(query)}`);
+                        if(res.ok) {
+                            const data = await res.json();
+                            this.tagAutocompleteOptions = data.tags;
+                        }
+                    } catch(e) {}
+                },
+                addEditableTag(tag) {
+                    const trimmed = tag.trim();
+                    if(trimmed && !this.editableTags.find(t => t.toLowerCase() === trimmed.toLowerCase())) {
+                        this.editableTags.push(trimmed);
+                    }
+                    this.tagSearchQuery = '';
+                },
+                async saveTags() {
+                    try {
+                        const res = await fetch(`/api/tags/${this.tagModalTweetId}`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ tags: this.editableTags })
+                        });
+                        if (res.ok) {
+                            const tweet = this.tweets.find(t => t.tweet_id === this.tagModalTweetId);
+                            if (tweet) {
+                                if(!tweet.media_tags) tweet.media_tags = {};
+                                tweet.media_tags.tags = [...this.editableTags];
+                            }
+                            if (this.threadData?.main?.tweet_id === this.tagModalTweetId) {
+                                if(!this.threadData.main.media_tags) this.threadData.main.media_tags = {};
+                                this.threadData.main.media_tags.tags = [...this.editableTags];
+                            }
+                            if (this.tagModalData) {
+                                this.tagModalData.tags = [...this.editableTags];
+                            }
+                            this.isEditingTags = false;
+                        } else {
+                            alert("Failed to save tags.");
+                        }
+                    } catch(e) {
+                        alert("Error saving tags: " + e.message);
+                    }
+                },
+                
+                // --- Global Tag Management ---
+                async fetchGlobalTags() {
+                    this.globalTagsLoading = true;
+                    try {
+                        const res = await fetch('/api/tags/stats');
+                        if (res.ok) {
+                            const data = await res.json();
+                            this.globalTags = data.tags;
+                        }
+                    } catch(e) { console.error(e); }
+                    finally { this.globalTagsLoading = false; }
+                },
+                
+                get filteredGlobalTags() {
+                    if(!this.tagSearchTerm) return this.globalTags;
+                    const term = this.tagSearchTerm.toLowerCase();
+                    return this.globalTags.filter(t => t.tag.toLowerCase().includes(term));
+                },
+                
+                async deleteGlobalTag(tag) {
+                    if(!confirm(`Are you sure you want to permanently delete the tag "${tag}" from all posts?`)) return;
+                    try {
+                        const res = await fetch(`/api/tags/global/${encodeURIComponent(tag)}`, { method: 'DELETE' });
+                        if(res.ok) {
+                            this.globalTags = this.globalTags.filter(t => t.tag !== tag);
+                        } else {
+                            alert("Failed to delete global tag");
+                        }
+                    } catch(e) {
+                        alert("Error: " + e.message);
+                    }
+                },
+                
+                // --- Merge logic ---
+                get filteredMergeOptions() {
+                    let opts = this.globalTags.filter(t => !this.mergeTagsList.includes(t.tag) && t.tag !== this.mergePrimaryTag);
+                    if(this.mergeSearchTerm) {
+                        const q = this.mergeSearchTerm.toLowerCase();
+                        opts = opts.filter(t => t.tag.toLowerCase().includes(q));
+                    }
+                    return opts.slice(0, 10);
+                },
+                
+                get filteredPrimaryOptions() {
+                    let opts = this.globalTags.filter(t => !this.mergeTagsList.includes(t.tag));
+                    if(this.mergePrimarySearchTerm) {
+                        const q = this.mergePrimarySearchTerm.toLowerCase();
+                        opts = opts.filter(t => t.tag.toLowerCase().includes(q));
+                    }
+                    return opts.slice(0, 10);
+                },
+                
+                mergeMoveUp() {
+                    if (this.mergeSelectedIndex > 0) this.mergeSelectedIndex--;
+                },
+                
+                mergeMoveDown() {
+                    if (this.mergeSelectedIndex < this.filteredMergeOptions.length - 1) this.mergeSelectedIndex++;
+                },
+                
+                primaryMoveUp() {
+                    if (this.primarySelectedIndex > 0) this.primarySelectedIndex--;
+                },
+                
+                primaryMoveDown() {
+                    if (this.primarySelectedIndex < this.filteredPrimaryOptions.length - 1) this.primarySelectedIndex++;
+                },
+
+                addMergeTag(tag) {
+                    if(!this.mergeTagsList.includes(tag)) {
+                        this.mergeTagsList.push(tag);
+                    }
+                    this.$nextTick(() => { this.mergeTagsDropdown = true; });
+                },
+                
+                addMergeTagFromInput() {
+                    if(!this.mergeSearchTerm || this.filteredMergeOptions.length === 0) return;
+                    const tag = this.filteredMergeOptions[this.mergeSelectedIndex]?.tag || this.filteredMergeOptions[0].tag;
+                    this.addMergeTag(tag);
+                    this.mergeTagsDropdown = true;
+                    this.mergeSelectedIndex = 0;
+                },
+                
+                setPrimaryTagFromInput() {
+                    if(!this.mergePrimarySearchTerm || this.filteredPrimaryOptions.length === 0) return;
+                    const tag = this.filteredPrimaryOptions[this.primarySelectedIndex]?.tag || this.filteredPrimaryOptions[0].tag;
+                    this.mergePrimaryTag = tag;
+                    this.mergePrimarySearchTerm = '';
+                    this.mergePrimaryDropdown = false;
+                },
+                
+                removeMergeTag(tag) {
+                    this.mergeTagsList = this.mergeTagsList.filter(t => t !== tag);
+                },
+                
+                getMergePath(index, total) {
+                    if (total === 1) return 'M 0 50 L 100 50';
+                    const startY = ((index + 0.5) / total) * 100;
+                    return `M 0 ${startY} C 35 ${startY}, 35 50, 75 50 L 100 50`;
+                },
+                
+                async submitMerge() {
+                    if(!this.mergePrimaryTag || this.mergeTagsList.length === 0) return;
+                    if(!confirm(`Merge ${this.mergeTagsList.length} tags into "${this.mergePrimaryTag}"? This cannot be undone.`)) return;
+                    
+                    try {
+                        const res = await fetch('/api/tags/merge', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ primary_tag: this.mergePrimaryTag, merge_tags: this.mergeTagsList })
+                        });
+                        if (res.ok) {
+                            alert("Tags merged successfully!");
+                            this.mergeTagsList = [];
+                            this.mergePrimaryTag = '';
+                            this.mergePrimarySearchTerm = '';
+                            this.fetchGlobalTags();
+                        } else {
+                            alert("Failed to merge tags.");
+                        }
+                    } catch(e) {
+                        alert("Error merging tags: " + e.message);
                     }
                 },
 
@@ -1008,6 +1895,109 @@
                     const options = { month: 'short', day: 'numeric' };
                     if (d.getFullYear() !== now.getFullYear()) options.year = 'numeric';
                     return d.toLocaleDateString('en-US', options);
+                },
+                
+                async fetchConfig() {
+                    try {
+                        const [resSchema, resConfig] = await Promise.all([
+                            fetch('/api/config/schema'),
+                            fetch('/api/config')
+                        ]);
+                        if (resSchema.ok && resConfig.ok) {
+                            this.configSchema = await resSchema.json();
+                            this.configData = await resConfig.json();
+                        }
+                    } catch (e) {
+                        console.error("Error fetching config", e);
+                    }
+                },
+                
+                isFieldVisible(section, key) {
+                    const fullKey = `${section}.${key}`;
+                    if (!this.configSchema || !this.configData) return false;
+                    if (this.configSchema.blacklist.includes(fullKey)) return false;
+                    if (this.configSchema.whitelist.includes(fullKey)) return true;
+                    return this.showAdvancedConfig;
+                },
+                
+                hasVisibleFields(section) {
+                    if (!this.configSchema || !this.configData || !this.configData[section]) return false;
+                    return Object.keys(this.configData[section]).some(k => this.isFieldVisible(section, k));
+                },
+                
+                getFieldType(section, key) {
+                    if (!this.configSchema || !this.configData) return 'text';
+                    const fullKey = `${section}.${key}`;
+                    if (this.configSchema.types && this.configSchema.types[fullKey]) return this.configSchema.types[fullKey];
+                    
+                    const val = this.configData[section][key];
+                    if (typeof val === 'boolean') return 'boolean';
+                    if (typeof val === 'number') return 'number';
+                    return 'text';
+                },
+                
+                isFieldFullWidth(section, key) {
+                    const fullKey = `${section}.${key}`;
+                    if (this.configSchema && this.configSchema.full_width && this.configSchema.full_width.includes(fullKey)) return true;
+                    return false;
+                },
+                
+                async saveConfig() {
+                    this.configSaving = true;
+                    try {
+                        const res = await fetch('/api/config', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(this.configData)
+                        });
+                        if (res.ok) {
+                            const btn = document.getElementById('save-config-btn');
+                            if (btn) {
+                                const old = btn.innerHTML;
+                                btn.innerHTML = "Saved!";
+                                btn.classList.replace('bg-[var(--accent-color)]', 'bg-green-600');
+                                setTimeout(() => {
+                                    btn.innerHTML = old;
+                                    btn.classList.replace('bg-green-600', 'bg-[var(--accent-color)]');
+                                }, 2000);
+                            }
+                        } else {
+                            alert("Failed to save config: " + await res.text());
+                        }
+                            } catch (e) {
+                        console.error("Error saving config", e);
+                        alert("Error saving config.");
+                    } finally {
+                        this.configSaving = false;
+                    }
+                },
+                
+                async restoreConfigDefaults() {
+                    if(!confirm("Are you sure you want to restore default configuration settings? This will overwrite your current settings, but your passwords and keys will be preserved.")) return;
+                    
+                    try {
+                        const res = await fetch('/api/config/defaults');
+                        if (res.ok) {
+                            const defaults = await res.json();
+                            // Keep user's auth token, ct0, api key, and web host/port intact
+                            if (this.configData.auth) {
+                                defaults.auth.auth_token = this.configData.auth.auth_token;
+                                defaults.auth.ct0 = this.configData.auth.ct0;
+                                defaults.auth.user_id = this.configData.auth.user_id;
+                            }
+                            if (this.configData.tagging) {
+                                defaults.tagging.api_key = this.configData.tagging.api_key;
+                            }
+                            if (this.configData.web) {
+                                defaults.web.host = this.configData.web.host;
+                                defaults.web.port = this.configData.web.port;
+                            }
+                            this.configData = defaults;
+                        }
+                    } catch (e) {
+                        console.error("Error fetching defaults", e);
+                        alert("Error fetching default config.");
+                    }
                 },
 
                 formatSyncDate(tweet) {
@@ -1106,14 +2096,14 @@
                         if (raw.legacy.entities?.urls) {
                             raw.legacy.entities.urls.forEach(u => {
                                 if (!urlsToRemove.includes(u.url)) {
-                                    urlMap[u.url] = `<a href="${u.expanded_url}" target="_blank" class="text-[#1d9bf0] hover:underline" @click.stop>${u.display_url}</a>`;
+                                    urlMap[u.url] = `<a href="${u.expanded_url}" target="_blank" class="text-[var(--accent-color)] hover:underline" @click.stop>${u.display_url}</a>`;
                                 }
                             });
                         }
                     }
                     
                     text = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                    text = text.replace(/@(\w+)/g, '<span class="mention text-[#1d9bf0] hover:underline cursor-pointer" data-user="$1">@$1</span>');
+                    text = text.replace(/@(\w+)/g, '<span class="mention text-[var(--accent-color)] hover:underline cursor-pointer" data-user="$1">@$1</span>');
                     
                     Object.keys(urlMap).forEach(u => {
                         text = text.split(u).join(urlMap[u]);
@@ -1172,7 +2162,7 @@
                                 const pct = Math.round((c.count / total) * 100);
                                 const isWinner = c.count === maxCount && maxCount > 0;
                                 const weightClass = isWinner ? 'font-bold' : 'font-normal';
-                                const barColor = isWinner ? 'bg-[#1d9bf0] opacity-[0.4]' : 'bg-[var(--border-color)] opacity-[0.6]';
+                                const barColor = isWinner ? 'bg-[var(--accent-color)] opacity-[0.4]' : 'bg-[var(--border-color)] opacity-[0.6]';
                                 
                                 html += `<div class="relative w-full h-[32px] rounded flex items-center overflow-hidden">
                                             <div class="absolute left-0 top-0 bottom-0 ${barColor} rounded" style="width: ${pct}%"></div>
@@ -1315,7 +2305,7 @@
                             html += this.escapeHTML(text.substring(lastIndex, ent.fromIndex));
                             const linkText = this.escapeHTML(text.substring(ent.fromIndex, ent.toIndex));
                             const href = this.escapeHTML(ent.ref.url);
-                            html += `<a href="${href}" target="_blank" class="text-[#1d9bf0] hover:underline" @click.stop>${linkText}</a>`;
+                            html += `<a href="${href}" target="_blank" class="text-[var(--accent-color)] hover:underline" @click.stop>${linkText}</a>`;
                             lastIndex = ent.toIndex;
                         }
                     }
@@ -1333,7 +2323,7 @@
                         ? "-mx-3 -mb-3 p-3 bg-[var(--bg-secondary)] border-t border-[var(--border-color)] rounded-b-xl text-left" 
                         : "mt-3 border border-[var(--border-color)] rounded-xl p-3 bg-[var(--bg-secondary)] hover-bg transition cursor-pointer text-left";
 
-                    const iconSvg = `<svg viewBox="0 0 24 24" fill="#1d9bf0" class="w-[18px] h-[18px]"><path fill-rule="evenodd" d="M8.25 6.75a3.75 3.75 0 117.5 0 3.75 3.75 0 01-7.5 0zM15.75 9.75a3 3 0 116 0 3 3 0 01-6 0zM2.25 9.75a3 3 0 116 0 3 3 0 01-6 0zM6.31 15.117A6.745 6.745 0 0112 12a6.745 6.745 0 016.709 7.498.75.75 0 01-.372.568A12.696 12.696 0 0112 21.75c-2.305 0-4.47-.612-6.337-1.684a.75.75 0 01-.372-.568 6.787 6.787 0 011.019-4.38z" clip-rule="evenodd" /><path d="M5.082 14.254a8.287 8.287 0 00-1.308 5.135 9.687 9.687 0 01-1.764-.44l-.115-.04a.563.563 0 01-.373-.487l-.01-.121a3.75 3.75 0 016.576-3.036c.32.338.608.708.857 1.103a6.732 6.732 0 00-3.863 1.341 6.772 6.772 0 01-.004-3.456z" /><path d="M18.918 14.254a8.287 8.287 0 011.308 5.135 9.687 9.687 0 001.764-.44l.115-.04a.563.563 0 00.373-.487l.01-.121a3.75 3.75 0 00-6.576-3.036c-.32.338-.608.708-.857 1.103a6.732 6.732 0 013.863 1.341 6.772 6.772 0 00.004-3.456z" /></svg>`;
+                    const iconSvg = `<svg viewBox="0 0 24 24" fill="var(--accent-color)" class="w-[18px] h-[18px]"><path fill-rule="evenodd" d="M8.25 6.75a3.75 3.75 0 117.5 0 3.75 3.75 0 01-7.5 0zM15.75 9.75a3 3 0 116 0 3 3 0 01-6 0zM2.25 9.75a3 3 0 116 0 3 3 0 01-6 0zM6.31 15.117A6.745 6.745 0 0112 12a6.745 6.745 0 016.709 7.498.75.75 0 01-.372.568A12.696 12.696 0 0112 21.75c-2.305 0-4.47-.612-6.337-1.684a.75.75 0 01-.372-.568 6.787 6.787 0 011.019-4.38z" clip-rule="evenodd" /><path d="M5.082 14.254a8.287 8.287 0 00-1.308 5.135 9.687 9.687 0 01-1.764-.44l-.115-.04a.563.563 0 01-.373-.487l-.01-.121a3.75 3.75 0 016.576-3.036c.32.338.608.708.857 1.103a6.732 6.732 0 00-3.863 1.341 6.772 6.772 0 01-.004-3.456z" /><path d="M18.918 14.254a8.287 8.287 0 011.308 5.135 9.687 9.687 0 001.764-.44l.115-.04a.563.563 0 00.373-.487l-.01-.121a3.75 3.75 0 00-6.576-3.036c-.32.338-.608.708-.857 1.103a6.732 6.732 0 013.863 1.341 6.772 6.772 0 00.004-3.456z" /></svg>`;
                     
                     return `
                     <div class="${containerClass}" ${!isQuote ? 'onclick="event.stopPropagation()"' : ''}>
@@ -1361,11 +2351,11 @@
                     const isBookmarked = collections.includes('bookmark');
                     
                     const likeIcon = isLiked ? 
-                        `<svg viewBox="0 0 24 24" class="w-[18.5px] h-[18.5px] fill-[#f91880]"><path d="M20.884 13.19c-1.351 2.48-4.001 5.12-8.379 7.67l-.503.3-.504-.3C7.121 18.31 4.471 15.67 3.119 13.19 1.928 10.99 1.898 8.48 2.921 6.45 3.864 4.56 5.8 3.32 8.016 3.42c1.474.07 2.812.8 3.486 2.08l.498.94.498-.94c.674-1.28 2.012-2.01 3.486-2.08 2.216-.1 4.152 1.14 5.095 3.03 1.023 2.03.993 4.54-.195 6.74z"></path></svg>` : 
-                        `<svg viewBox="0 0 24 24" class="w-[18.5px] h-[18.5px] fill-current"><path d="M16.697 5.5c-1.222-.06-2.679.51-3.89 2.16l-.805 1.09-.806-1.09C9.984 6.01 8.526 5.44 7.304 5.5c-1.243.07-2.349.78-2.91 1.91-.552 1.12-.633 2.78.479 4.82 1.074 1.97 3.257 4.27 7.129 6.61 3.87-2.34 6.052-4.64 7.126-6.61 1.111-2.04 1.03-3.7.477-4.82-.561-1.13-1.666-1.84-2.908-1.91zm4.187 7.69c-1.351 2.48-4.001 5.12-8.379 7.67l-.503.3-.504-.3c-4.379-2.55-7.029-5.19-8.382-7.67-1.36-2.5-1.41-4.86-.514-6.67.887-1.79 2.647-2.91 4.601-3.01 1.651-.09 3.368.56 4.798 2.01 1.429-1.45 3.146-2.1 4.796-2.01 1.954.1 3.714 1.22 4.601 3.01.896 1.81.846 4.17-.514 6.67z"></path></svg>`;
+                        `<svg viewBox="0 0 24 24" class="w-[18.5px] h-[18.5px]" style="fill: var(--danger-color)"><path d="M20.884 13.19c-1.351 2.48-4.001 5.12-8.379 7.67l-.503.3-.504-.3C7.121 18.31 4.471 15.67 3.119 13.19 1.928 10.99 1.898 8.48 2.921 6.45 3.864 4.56 5.8 3.32 8.016 3.42c1.474.07 2.812.8 3.486 2.08l.498.94.498-.94c.674-1.28 2.012-2.01 3.486-2.08 2.216-.1 4.152 1.14 5.095 3.03 1.023 2.03.993 4.54-.195 6.74z"></path></svg>` : 
+                        `<svg viewBox="0 0 24 24" class="w-[18.5px] h-[18.5px] fill-current group-hover:fill-[var(--danger-color)]"><path d="M16.697 5.5c-1.222-.06-2.679.51-3.89 2.16l-.805 1.09-.806-1.09C9.984 6.01 8.526 5.44 7.304 5.5c-1.243.07-2.349.78-2.91 1.91-.552 1.12-.633 2.78.479 4.82 1.074 1.97 3.257 4.27 7.129 6.61 3.87-2.34 6.052-4.64 7.126-6.61 1.111-2.04 1.03-3.7.477-4.82-.561-1.13-1.666-1.84-2.908-1.91zm4.187 7.69c-1.351 2.48-4.001 5.12-8.379 7.67l-.503.3-.504-.3c-4.379-2.55-7.029-5.19-8.382-7.67-1.36-2.5-1.41-4.86-.514-6.67.887-1.79 2.647-2.91 4.601-3.01 1.651-.09 3.368.56 4.798 2.01 1.429-1.45 3.146-2.1 4.796-2.01 1.954.1 3.714 1.22 4.601 3.01.896 1.81.846 4.17-.514 6.67z"></path></svg>`;
 
                     const bmkIcon = isBookmarked ? 
-                        `<svg viewBox="0 0 24 24" class="w-[18.5px] h-[18.5px] fill-[#1d9bf0]"><path d="M4 4.5C4 3.12 5.119 2 6.5 2h11C18.881 2 20 3.12 20 4.5v18.44l-8-5.71-8 5.71V4.5z"></path></svg>` : 
+                        `<svg viewBox="0 0 24 24" class="w-[18.5px] h-[18.5px] fill-[var(--accent-color)]"><path d="M4 4.5C4 3.12 5.119 2 6.5 2h11C18.881 2 20 3.12 20 4.5v18.44l-8-5.71-8 5.71V4.5z"></path></svg>` : 
                         `<svg viewBox="0 0 24 24" class="w-[18.5px] h-[18.5px] fill-current"><path d="M4 4.5C4 3.12 5.119 2 6.5 2h11C18.881 2 20 3.12 20 4.5v18.44l-8-5.71-8 5.71V4.5zM6.5 4c-.276 0-.5.22-.5.5v14.56l6-4.29 6 4.29V4.5c0-.28-.224-.5-.5-.5H6.5z"></path></svg>`;
 
                     const margin = isMain ? 'py-3 mt-4 border-y border-[var(--border-color)] w-full' : 'mt-3 mb-1 w-full';
@@ -1380,11 +2370,11 @@
                             <svg viewBox="0 0 24 24" class="w-[18.5px] h-[18.5px] fill-current"><path d="M4.5 3.88l4.432 4.14-1.364 1.46L5.5 7.55V16c0 1.1.896 2 2 2H13v2H7.5c-2.209 0-4-1.79-4-4V7.55L1.432 9.48.068 8.02 4.5 3.88zM16.5 6H11V4h5.5c2.209 0 4 1.79 4 4v8.45l2.068-1.93 1.364 1.46-4.432 4.14-4.432-4.14 1.364-1.46 2.068 1.93V8c0-1.1-.896-2-2-2z"></path></svg>
                             <span class="text-[13px] ml-2 font-medium">${formatNum(retweetCount)}</span>
                         </div>
-                        <div class="flex items-center ${isLiked ? 'text-[#f91880]' : ''}">
+                        <div class="flex items-center group cursor-pointer ${isLiked ? 'text-[var(--danger-color)]' : 'hover:text-[var(--danger-color)]'}">
                             ${likeIcon}
                             <span class="text-[13px] ml-2 font-medium">${formatNum(likeCount)}</span>
                         </div>
-                        <div class="flex items-center ${isBookmarked ? 'text-[#1d9bf0]' : ''}">
+                        <div class="flex items-center group cursor-pointer ${isBookmarked ? 'text-[var(--accent-color)]' : 'hover:text-[var(--accent-color)]'}">
                             ${bmkIcon}
                             <span class="text-[13px] ml-2 font-medium">${formatNum(bmkCount)}</span>
                         </div>
@@ -1392,14 +2382,16 @@
                             <svg viewBox="0 0 24 24" class="w-[18.5px] h-[18.5px] fill-current"><path d="M8.75 21V3h2v18h-2zM18 21V8.5h2V21h-2zM4 21l.004-10h2L6 21H4zm9.248 0v-7h2v7h-2z"></path></svg>
                             <span class="text-[13px] ml-2 font-medium">${formatNum(viewCount)}</span>
                         </div>
-                        ${tweet.media_tags ? `
-                        <div class="flex items-center text-[#1d9bf0] cursor-pointer hover:text-[#1a8cd8] transition" @click.stop="openTagModal('${tweet.tweet_id}', ${JSON.stringify(tweet.media_tags).replace(/"/g, '&quot;')})" title="View AI Tags">
-                            <svg viewBox="0 0 24 24" class="w-[18.5px] h-[18.5px] fill-current"><path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10-4.477 10-10 10zm-1-11v6h2v-6h-2zm0-4v2h2V7h-2z"></path></svg>
+                        <div class="flex items-center space-x-5">
+                            ${tweet.media_tags ? `
+                            <div class="flex items-center text-[var(--text-secondary)] cursor-pointer hover:text-[var(--text-primary)] transition" @click.stop="openTagModal('${tweet.tweet_id}', ${JSON.stringify(tweet.media_tags).replace(/"/g, '&quot;')})" title="View Tags">
+                                <svg viewBox="0 0 24 24" class="w-[18.5px] h-[18.5px] fill-current"><path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10-4.477 10-10 10zm-1-11v6h2v-6h-2zm0-4v2h2V7h-2z"></path></svg>
+                            </div>
+                            ` : ''}
+                            <a href="https://x.com/${tweet.author?.username || 'i'}/status/${tweet.tweet_id}" target="_blank" @click.stop class="flex items-center" title="Open on Twitter">
+                                <svg viewBox="0 0 24 24" class="w-[18.5px] h-[18.5px] fill-current hover:text-[#e7e9ea] transition"><path d="M18 19H6c-.55 0-1-.45-1-1V6c0-.55.45-1 1-1h5c.55 0 1-.45 1-1s-.45-1-1-1H6c-1.65 0-3 1.35-3 3v12c0 1.65 1.35 3 3 3h12c1.65 0 3-1.35 3-3v-5c0-.55-.45-1-1-1s-1 .45-1 1v5c0 .55-.45 1-1 1zM14 4c0 .55.45 1 1 1h2.59l-9.13 9.13c-.39.39-.39 1.02 0 1.41.19.19.45.29.71.29s.51-.1.71-.29L19 6.41V9c0 .55.45 1 1 1s1-.45 1-1V4c0-.55-.45-1-1-1h-5c-.55 0-1 .45-1 1z"></path></svg>
+                            </a>
                         </div>
-                        ` : ''}
-                        <a href="https://x.com/${tweet.author?.username || 'i'}/status/${tweet.tweet_id}" target="_blank" @click.stop class="flex items-center" title="Open on Twitter">
-                            <svg viewBox="0 0 24 24" class="w-[18.5px] h-[18.5px] fill-current hover:text-[#e7e9ea] transition"><path d="M18 19H6c-.55 0-1-.45-1-1V6c0-.55.45-1 1-1h5c.55 0 1-.45 1-1s-.45-1-1-1H6c-1.65 0-3 1.35-3 3v12c0 1.65 1.35 3 3 3h12c1.65 0 3-1.35 3-3v-5c0-.55-.45-1-1-1s-1 .45-1 1v5c0 .55-.45 1-1 1zM14 4c0 .55.45 1 1 1h2.59l-9.13 9.13c-.39.39-.39 1.02 0 1.41.19.19.45.29.71.29s.51-.1.71-.29L19 6.41V9c0 .55.45 1 1 1s1-.45 1-1V4c0-.55-.45-1-1-1h-5c-.55 0-1 .45-1 1z"></path></svg>
-                        </a>
                     </div>`;
                 }
             }
@@ -1422,7 +2414,7 @@
                     { prefix: 'since:', desc: 'After a specific date (YYYY-MM-DD)' },
                     { prefix: 'until:', desc: 'Before a specific date (YYYY-MM-DD)' },
                     { prefix: 'url:', desc: 'Contains a specific URL' },
-                    { prefix: 'tag:', desc: 'Matches AI-generated media tag' }
+                    { prefix: 'tag:', desc: 'Matches media tag' }
                 ],
                 
                 hasOptions: [
@@ -1466,9 +2458,10 @@
                             this.options = this.filterOptions.filter(o => o.value.startsWith(val));
                         } else if (prefix === 'tag:') {
                             fetch(`/api/tags/autocomplete?q=${encodeURIComponent(val)}`)
-                                .then(res => res.json())
+                                .then(res => res.ok ? res.json() : { tags: [] })
                                 .then(data => {
-                                    this.options = data.tags.map(t => ({
+                                    const tagsList = data && data.tags ? data.tags : [];
+                                    this.options = tagsList.map(t => ({
                                         isTag: true,
                                         prefix: 'tag:',
                                         value: t.tag,
@@ -1478,7 +2471,11 @@
                                         this.showDropdown = false;
                                     }
                                 })
-                                .catch(err => console.error(err));
+                                .catch(err => {
+                                    console.error(err);
+                                    this.options = [];
+                                    this.showDropdown = false;
+                                });
                         } else {
                             this.options = [];
                             this.showDropdown = false;

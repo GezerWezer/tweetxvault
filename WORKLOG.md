@@ -83,6 +83,16 @@
 
 # WORKLOG
 
+## 2026-07-21
+
+- Expanded the Web UI Theme Engine:
+  - Added 8 new themes (GitHub Dark, GitHub Light, Cyberpunk, Synthwave '84, Aura Dark, Vesper, Material Ocean, Gruvbox Light) for a total of 20 hand-crafted options.
+  - Removed the "Custom" theme option and the associated color-picker UI/state entirely to simplify maintenance and standardize the aesthetic.
+  - Replaced hardcoded `text-red-500` and `#f91880` Tailwind classes with dynamic `--danger-color` and `--danger-hover` semantic variables in the theme engine.
+  - "Delete Tag", "Like" buttons, and Network Error banners now adapt to the active theme's semantic danger color (e.g. neon red in Cyberpunk, muted frost red in Nord).
+  - Fixed a UI bug in the Tags Modal where non-edit mode tag backgrounds were not rendering due to invalid Tailwind parsing of hex variables. Corrected this by using CSS `color-mix()` for robust dynamic opacity.
+  - Styled Tag Modal action buttons into "capsules" with background fills for clearer UX.
+
 ## 2026-06-12
 
 - Optimized Web UI performance for large databases (e.g. 10GB archives):

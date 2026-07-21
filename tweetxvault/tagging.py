@@ -21,7 +21,9 @@ TAGGING_SYSTEM_PROMPT = """You will be provided with a tweet (including its auth
 2. **Franchise Identification (Primary Tag):** If the content refers to, depicts, or originates from a specific video game, movie, TV show, anime, or pop culture entity, identify and include the exact name of that franchise as a tag (e.g., "Deadlock"). Use implicit visual clues—such as UI elements, art styles, settings, or meme formats—to deduce the correct source material. Utilize search extensively to verify this.
 3. **Specific Entity Formatting:** When tagging specific characters, items, abilities, or locations, you MUST append the franchise name in parentheses to disambiguate the tag (e.g., "character name (franchise)"). 
 4. **NO Generic Tags:** Do NOT include broad, categorical, or meta-tags. Exclude terms like "Video Game", "Gameplay", "Hero Shooter", "MOBA", "Gaming Fail", "Screenshot", or "Funny". Focus entirely on specific proper nouns, franchises, characters, and distinct subjects.
-5. **Tag Limit:** Provide a concise list of exactly 2 to 5 of the most highly relevant tags. Quality and specificity are more important than quantity.
+5. **No Redundant Suffixes:** Do NOT append suffixes like "(Franchise)" or "(Video Game)" to the main franchise tag (e.g., use "Fortnite" instead of "Fortnite (Franchise)").
+6. **Existing Tags Preference:** If an intended tag matches or is semantically identical to one of the user's existing tags, prefer using the exact existing tag to maintain consistency. You may still create new highly specific tags if no existing tag is appropriate. Existing tags: {existing_tags}
+7. **Tag Limit:** Provide a concise list of exactly 2 to 5 of the most highly relevant tags. Quality and specificity are more important than quantity.
 
 Ensure that your automated tagging results are clear, relevant, and make the data easily searchable."""
 
@@ -71,7 +73,11 @@ async def tag_media_tweets(
         if tweet_row:
             tweet_objs[tid] = dict(tweet_row)
 
-    generation_parts = [TAGGING_SYSTEM_PROMPT, "\n\n--- TWEETS TO TAG ---\n\n"]
+    top_tags_list = store.get_tag_counts(limit=50)
+    existing_tags_str = ", ".join(f'"{t["tag"]}"' for t in top_tags_list) if top_tags_list else "None yet (create new tags as needed)."
+    system_prompt = TAGGING_SYSTEM_PROMPT.format(existing_tags=existing_tags_str)
+
+    generation_parts = [system_prompt, "\n\n--- TWEETS TO TAG ---\n\n"]
     
     uploaded_videos: list[types.File] = []
     has_media = False
@@ -106,6 +112,11 @@ async def tag_media_tweets(
             if not abs_path.exists():
                 continue
                 
+            file_size_mb = abs_path.stat().st_size / (1024 * 1024)
+            if file_size_mb > tag_config.max_media_size_mb:
+                console.print(f"[yellow]Skipping media {abs_path.name}: size ({file_size_mb:.1f}MB) exceeds limit ({tag_config.max_media_size_mb}MB)[/yellow]")
+                continue
+                
             m_type = m.get("media_type")
             if m_type == "video" or m_type == "animated_gif":
                 try:
@@ -129,7 +140,7 @@ async def tag_media_tweets(
         generation_parts.append("\n\n")
 
     if not has_media:
-        console.print("[yellow]No loadable media found for the selected tweets.[/yellow]")
+        console.print("[yellow]No loadable media found on disk for the selected tweets.[/yellow]")
         return 0
 
     if uploaded_videos:
@@ -179,6 +190,16 @@ async def tag_media_tweets(
                     reason = "429" if "429" in err_str else "503"
                     console.print(f"[yellow]Gemini API busy ({reason}). Retrying in {delay} seconds (Attempt {attempt + 1}/5)...[/yellow]")
                     await asyncio.sleep(delay)
+                elif "400" in err_str or "INVALID_ARGUMENT" in err_str:
+                    console.print(f"[red]Gemini rejected the payload (400 INVALID_ARGUMENT). The media may exceed processing limits. Marking batch as skipped.[/red]")
+                    for tid in tweet_ids:
+                        store.conn.execute(
+                            "INSERT OR REPLACE INTO archive (row_key, record_type, tweet_id, raw_json, enrichment_state, updated_at) "
+                            "VALUES (?, ?, ?, ?, ?, ?)",
+                            (f"media_tag:{tid}", "media_tag", tid, "{}", "failed", str(time.time()))
+                        )
+                    store.conn.commit()
+                    return len(tweet_ids)
                 else:
                     raise e
         
@@ -186,6 +207,9 @@ async def tag_media_tweets(
             return 0
             
         res_json = response.text
+        console.print("\n[bold cyan]Gemini API Response:[/bold cyan]")
+        console.print(res_json)
+        console.print()
         results = json.loads(res_json)
         
         tagged_count = 0

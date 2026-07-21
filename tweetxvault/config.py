@@ -84,6 +84,7 @@ class TaggingConfig(BaseModel):
     limit: int = Field(default=20, ge=1)
     google_search: bool = True
     rpd: int | None = None
+    max_media_size_mb: int = 100
 
 
 class AppConfig(BaseModel):
@@ -226,30 +227,148 @@ def load_config(env: Mapping[str, str] | None = None) -> tuple[AppConfig, XDGPat
     return config, paths
 
 
-def update_web_config(paths: XDGPaths, web_config: WebConfig) -> None:
-    """Update the [web] section in config.toml directly."""
-    config_path = paths.config_file
-    content = ""
-    if config_path.exists():
-        content = config_path.read_text(encoding="utf-8")
+def save_app_config(paths: XDGPaths, config: AppConfig) -> None:
+    lines = []
     
-    # Very simple replacement strategy: strip out any existing [web] section
-    # and append the new one at the end. This assumes [web] is the last section
-    # or we just remove lines starting from [web] until the next [ section.
-    import re
-    # Remove existing [web] section if present
-    content = re.sub(r'\[web\].*?(?=\n\[|$)', '', content, flags=re.DOTALL)
+    def format_value(v: Any) -> str:
+        if isinstance(v, bool):
+            return "true" if v else "false"
+        elif isinstance(v, (int, float)):
+            return str(v)
+        elif v is None:
+            return '""'
+        else:
+            s = str(v).replace("\\", "\\\\").replace('"', '\\"')
+            return f'"{s}"'
+
+    config_dict = config.model_dump(exclude_unset=True)
     
-    content = content.rstrip() + "\n\n[web]\n"
-    if web_config.password_hash:
-        content += f'password_hash = "{web_config.password_hash}"\n'
-    if web_config.auto_start:
-        content += 'auto_start = true\n'
-    else:
-        content += 'auto_start = false\n'
-    if web_config.host:
-        content += f'host = "{web_config.host}"\n'
-    if web_config.port:
-        content += f'port = {web_config.port}\n'
-        
-    config_path.write_text(content.lstrip(), encoding="utf-8")
+    for section, fields in config_dict.items():
+        if isinstance(fields, dict):
+            lines.append(f"[{section}]")
+            for k, v in fields.items():
+                if v is not None:
+                    lines.append(f"{k} = {format_value(v)}")
+            lines.append("")
+
+    content = "\n".join(lines).strip() + "\n"
+    paths.config_file.parent.mkdir(parents=True, exist_ok=True)
+    paths.config_file.write_text(content, encoding="utf-8")
+
+def get_config_ui_schema() -> dict[str, Any]:
+    return {
+        "whitelist": [
+            "auth.auth_token",
+            "auth.ct0",
+            "auth.user_id",
+            "web.auto_start",
+            "web.fetch_avatars",
+            "web.host",
+            "web.port",
+            "tagging.enabled",
+            "tagging.api_key",
+            "tagging.model",
+            "tagging.thinking_level",
+            "tagging.batch",
+            "tagging.limit",
+            "tagging.google_search",
+            "tagging.rpd",
+            "tagging.max_media_size_mb",
+        ],
+        "blacklist": [
+            "web.password_hash"
+        ],
+        "types": {
+            "auth.auth_token": "password",
+            "auth.ct0": "password",
+            "tagging.api_key": "password",
+            "tagging.thinking_level": "select",
+        },
+        "full_width": [
+            "auth.browser_profile_path",
+            "auth.firefox_profile_path",
+            "tagging.api_key"
+        ],
+        "select_options": {
+            "tagging.thinking_level": [
+                {"value": "high", "label": "High"},
+                {"value": "medium", "label": "Medium"},
+                {"value": "low", "label": "Low"},
+                {"value": "none", "label": "None"}
+            ]
+        },
+        "labels": {
+            "auth": "Authentication",
+            "sync": "Sync & Delays",
+            "web": "Web Server",
+            "database": "Database",
+            "tagging": "Media Tagging",
+            "auth.auth_token": "Auth Token",
+            "auth.ct0": "CT0 (CSRF Token)",
+            "auth.user_id": "User ID",
+            "auth.browser": "Browser",
+            "auth.browser_profile": "Browser Profile",
+            "auth.browser_profile_path": "Browser Profile Path",
+            "auth.firefox_profile_path": "Firefox Profile Path",
+            "sync.page_delay": "Page Delay (s)",
+            "sync.detail_delay": "Detail Delay (s)",
+            "sync.max_retries": "Max Retries",
+            "sync.backoff_base": "Backoff Base (s)",
+            "sync.detail_max_retries": "Detail Max Retries",
+            "sync.detail_backoff_base": "Detail Backoff Base (s)",
+            "sync.cooldown_threshold": "Cooldown Threshold",
+            "sync.cooldown_duration": "Cooldown Duration (s)",
+            "sync.timeout": "Timeout (s)",
+            "sync.max_linked_depth": "Max Linked Depth",
+            "web.auto_start": "Auto-Start Server",
+            "web.host": "Host",
+            "web.port": "Port",
+            "web.fetch_avatars": "Fetch Avatars locally",
+            "database.cache_size_kb": "Cache Size (KB)",
+            "database.mmap_size_bytes": "MMap Size (Bytes)",
+            "tagging.enabled": "Enable Tagging",
+            "tagging.api_key": "Gemini API Key",
+            "tagging.model": "Model",
+            "tagging.thinking_level": "Thinking Level",
+            "tagging.batch": "Batch Processing",
+            "tagging.limit": "Max Tweets Per Batch",
+            "tagging.google_search": "Google Search Grounding",
+            "tagging.rpd": "API Requests Per Day",
+            "tagging.max_media_size_mb": "Max Media Size (MB)",
+        },
+        "descriptions": {
+            "auth.auth_token": "Your Twitter authentication token. See README",
+            "auth.ct0": "Your CSRF token. See README",
+            "auth.user_id": "Your numerical X user ID.",
+            "auth.browser": "Select a browser to automatically extract cookies from.",
+            "auth.browser_profile": "Name of the browser profile to extract cookies from.",
+            "auth.browser_profile_path": "Absolute path to a specific browser profile.",
+            "auth.firefox_profile_path": "Absolute path to a Firefox profile.",
+            "database.cache_size_kb": "How much RAM to allocate for faster database queries.",
+            "database.mmap_size_bytes": "How much of the database file to map directly into memory for faster searching.",
+            "sync.page_delay": "How many seconds to wait between fetching pages of tweets.",
+            "sync.detail_delay": "How many seconds to wait between fetching individual tweet details.",
+            "sync.max_retries": "How many times to retry fetching a timeline if Twitter rate-limits you.",
+            "sync.backoff_base": "How much to multiply the wait time by after each failed timeline request.",
+            "sync.detail_max_retries": "How many times to retry fetching a single tweet if Twitter rate-limits you.",
+            "sync.detail_backoff_base": "How much to multiply the wait time by after each failed single tweet request.",
+            "sync.cooldown_threshold": "How many consecutive rate-limit errors trigger a long cooldown pause.",
+            "sync.cooldown_duration": "How many seconds to pause when a long cooldown is triggered.",
+            "sync.timeout": "How many seconds to wait before giving up on a slow network request.",
+            "sync.max_linked_depth": "How deep to go when fetching nested tweet replies or quoted links.",
+            "web.auto_start": "Automatically start the Web UI running in the background after running sync commands.",
+            "web.fetch_avatars": "Automatically download and cache user profile pictures.",
+            "web.host": "The IP address the Web UI runs on (default is 127.0.0.1 for local only).",
+            "web.port": "The port the Web UI runs on.",
+            "tagging.enabled": "Turn automated AI tagging on or off.",
+            "tagging.api_key": "Your Google Gemini API key.",
+            "tagging.model": "Which Gemini AI model to use for tagging media.",
+            "tagging.thinking_level": "How much reasoning effort the AI should use.",
+            "tagging.batch": "Group multiple tweets together in one API call to save time.",
+            "tagging.google_search": "Allow the AI to search Google to more effectively identify characters, franchises, or people in images.",
+            "tagging.limit": "How many tweets to fetch and tag per batch.",
+            "tagging.rpd": "Daily limit on how many API requests the app can make to Gemini.",
+            "tagging.max_media_size_mb": "Skip uploading media files larger than this size.",
+        },
+        }
+    

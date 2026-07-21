@@ -11,7 +11,7 @@ from typing import Annotated
 import typer
 from rich.console import Console
 
-from tweetxvault.config import WebConfig, load_config, update_web_config
+from tweetxvault.config import WebConfig, load_config, save_app_config
 
 web_app = typer.Typer(no_args_is_help=True, help="Manage the background web UI server.")
 
@@ -24,6 +24,23 @@ def _is_running(pid: int) -> bool:
         return True
     except OSError:
         return False
+
+def _find_pid_by_port(port: int) -> int | None:
+    try:
+        out = subprocess.check_output(["lsof", "-t", f"-i:{port}"], text=True, stderr=subprocess.DEVNULL)
+        pids = [int(p) for p in out.strip().split() if p.isdigit()]
+        if pids:
+            return pids[0]
+    except Exception:
+        pass
+    try:
+        out = subprocess.check_output(["fuser", f"{port}/tcp"], text=True, stderr=subprocess.DEVNULL)
+        pids = [int(p) for p in out.strip().split() if p.isdigit()]
+        if pids:
+            return pids[0]
+    except Exception:
+        pass
+    return None
 
 @web_app.command("start", help="Start the background web server.")
 def start_web() -> None:
@@ -52,7 +69,8 @@ def start_web() -> None:
 
     if not web_config.password_hash:
         web_config.password_hash = hashlib.sha256(default_password.encode("utf-8")).hexdigest()
-        update_web_config(paths, web_config)
+        config.web = web_config
+        save_app_config(paths, config)
         console.print(f"[red]WARNING: Starting with default password '{default_password}'.[/red]")
         console.print("[yellow]Please change it using: tweetxvault web set-password[/yellow]")
     elif web_config.password_hash == hashlib.sha256(default_password.encode("utf-8")).hexdigest():
@@ -80,34 +98,40 @@ def start_web() -> None:
 @web_app.command("stop", help="Stop the background web server.")
 def stop_web() -> None:
     console = Console()
-    _, paths = load_config()
+    config, paths = load_config()
     pid_file = _get_pid_file(paths.data_dir)
     
-    if not pid_file.exists():
-        console.print("[yellow]Web server is not running (no PID file found).[/yellow]")
+    pid = None
+    if pid_file.exists():
+        try:
+            pid = int(pid_file.read_text().strip())
+        except ValueError:
+            pass
+
+    if not pid or not _is_running(pid):
+        pid = _find_pid_by_port(config.web.port)
+        
+    if not pid or not _is_running(pid):
+        console.print("[yellow]Web server is not running.[/yellow]")
+        if pid_file.exists():
+            pid_file.unlink()
         return
         
     try:
-        pid = int(pid_file.read_text().strip())
-        if _is_running(pid):
-            console.print(f"Stopping web server (PID: {pid})...")
-            os.kill(pid, signal.SIGTERM)
-            import time
-            for _ in range(50):
-                if not _is_running(pid):
-                    break
-                time.sleep(0.1)
-            else:
-                try:
-                    os.kill(pid, signal.SIGKILL)
-                    time.sleep(0.5)
-                except OSError:
-                    pass
-            console.print("[green]Server stopped.[/green]")
+        console.print(f"Stopping web server (PID: {pid})...")
+        os.kill(pid, signal.SIGTERM)
+        import time
+        for _ in range(50):
+            if not _is_running(pid):
+                break
+            time.sleep(0.1)
         else:
-            console.print("[yellow]Server is not running (stale PID file).[/yellow]")
-    except ValueError:
-        console.print("[red]Invalid PID file.[/red]")
+            try:
+                os.kill(pid, signal.SIGKILL)
+                time.sleep(0.5)
+            except OSError:
+                pass
+        console.print("[green]Server stopped.[/green]")
     except ProcessLookupError:
         console.print("[yellow]Server is not running.[/yellow]")
     except Exception as e:
@@ -125,23 +149,24 @@ def status_web() -> None:
     web_config = config.web
     url = f"http://{web_config.host}:{web_config.port}"
     
-    if not pid_file.exists():
+    pid = None
+    if pid_file.exists():
+        try:
+            pid = int(pid_file.read_text().strip())
+        except ValueError:
+            pass
+
+    if not pid or not _is_running(pid):
+        pid = _find_pid_by_port(web_config.port)
+        
+    if pid and _is_running(pid):
+        console.print(f"Web server is [green]running[/green] (PID: {pid}).")
+        console.print(f"URL: {url}")
+    else:
         console.print(f"Web server is [red]stopped[/red].")
         console.print(f"Configured URL: {url}")
-        return
-        
-    try:
-        pid = int(pid_file.read_text().strip())
-        if _is_running(pid):
-            console.print(f"Web server is [green]running[/green] (PID: {pid}).")
-            console.print(f"URL: {url}")
-        else:
-            console.print(f"Web server is [red]stopped[/red] (stale PID file).")
-            console.print(f"Configured URL: {url}")
+        if pid_file.exists():
             pid_file.unlink()
-    except ValueError:
-        console.print(f"Web server is [red]stopped[/red] (invalid PID file).")
-        pid_file.unlink()
 
 @web_app.command("set-password", help="Set the password for the web server.")
 def set_password() -> None:
@@ -155,7 +180,8 @@ def set_password() -> None:
         
     web_config = config.web
     web_config.password_hash = hashlib.sha256(password.encode("utf-8")).hexdigest()
-    update_web_config(paths, web_config)
+    config.web = web_config
+    save_app_config(paths, config)
     console.print("[green]Password updated in config.toml.[/green]")
     console.print("Note: If the server is currently running, you must restart it for the new password to take effect.")
     console.print("Run `tweetxvault web stop` and `tweetxvault web start`.")

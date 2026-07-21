@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from pydantic import BaseModel
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.responses import HTMLResponse, FileResponse, Response
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
@@ -455,6 +456,56 @@ def api_delete_tag(
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+class TagUpdateRequest(BaseModel):
+    tags: list[str]
+
+@app.put("/api/tags/{tweet_id}")
+def api_update_tag(
+    tweet_id: str,
+    req: TagUpdateRequest,
+    store = Depends(get_store),
+    _auth: bool = Depends(verify_credentials)
+):
+    try:
+        store.update_media_tags(tweet_id, req.tags)
+        return {"success": True}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/tags/global/{tag}")
+def api_delete_global_tag(
+    tag: str,
+    store = Depends(get_store),
+    _auth: bool = Depends(verify_credentials)
+):
+    try:
+        store.delete_global_tag(tag)
+        return {"success": True}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+class TagMergeRequest(BaseModel):
+    primary_tag: str
+    merge_tags: list[str]
+
+@app.post("/api/tags/merge")
+def api_merge_tags(
+    req: TagMergeRequest,
+    store = Depends(get_store),
+    _auth: bool = Depends(verify_credentials)
+):
+    try:
+        store.merge_global_tags(req.primary_tag, req.merge_tags)
+        return {"success": True}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/tweets/{tweet_id}")
 def api_tweet_thread(
     tweet_id: str, 
@@ -499,10 +550,13 @@ def api_tweet_thread(
         objs = store._query(expr=f"record_type = 'tweet_object' AND tweet_id IN ({id_list})", limit=100)
         media = store._query(expr=f"record_type = 'media' AND tweet_id IN ({id_list})", limit=100)
         col_rows = store._query(expr=f"record_type = 'tweet' AND tweet_id IN ({id_list})", limit=100)
+        tag_rows = store._query(expr=f"record_type = 'media_tag' AND tweet_id IN ({id_list})", limit=100)
         
         col_dict = {}
         for c in col_rows:
             col_dict.setdefault(c["tweet_id"], []).append(c["collection_type"])
+            
+        tags_dict = {row["tweet_id"]: json.loads(row["raw_json"]) for row in tag_rows if row.get("raw_json")}
 
         # Batch QT Media lookup
         qt_ids = set()
@@ -573,7 +627,8 @@ def api_tweet_thread(
                     } for m in t_media
                 ],
                 "raw_json": raw_json,
-                "qt_media": qt_media_formatted
+                "qt_media": qt_media_formatted,
+                "media_tags": tags_dict.get(tid)
             }
             
         main_tweet = formatted.get(tweet_id)
@@ -698,6 +753,77 @@ def api_tags_autocomplete(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/tags/stats")
+def api_tags_stats(
+    store = Depends(get_store),
+    _auth: bool = Depends(verify_credentials)
+):
+    try:
+        # Returns list of dicts: [{"tag": "tag1", "count": 5}, ...]
+        results = store.get_tag_counts()
+        return {"tags": results}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+class ConfigUpdateRequest(BaseModel):
+    auth: dict
+    sync: dict
+    web: dict
+    database: dict
+    tagging: dict
+
+@app.get("/api/config")
+def api_get_config(_auth: bool = Depends(verify_credentials)):
+    try:
+        from tweetxvault.config import load_config
+        config, _ = load_config()
+        data = config.model_dump()
+        if data.get("web") and "password_hash" in data["web"]:
+            data["web"]["password_hash"] = "********"
+        return data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/config/defaults")
+def api_get_config_defaults(_auth: bool = Depends(verify_credentials)):
+    try:
+        from tweetxvault.config import AppConfig
+        return AppConfig().model_dump()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/config/schema")
+def api_get_config_schema(_auth: bool = Depends(verify_credentials)):
+    try:
+        from tweetxvault.config import get_config_ui_schema
+        return get_config_ui_schema()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/config")
+def api_post_config(
+    req: ConfigUpdateRequest,
+    _auth: bool = Depends(verify_credentials)
+):
+    try:
+        from tweetxvault.config import load_config, save_app_config, AppConfig
+        config, paths = load_config()
+        req_data = req.model_dump()
+        
+        # Restore the password hash since it shouldn't be edited via this UI
+        if req_data.get("web") and req_data["web"].get("password_hash") == "********":
+            req_data["web"]["password_hash"] = config.web.password_hash
+
+        new_config = AppConfig.model_validate(req_data)
+        save_app_config(paths, new_config)
+        return {"status": "ok"}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=400, detail=str(e))
 
 @app.get("/api/stats")
 def api_stats(
