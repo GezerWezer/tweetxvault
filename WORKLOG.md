@@ -92,6 +92,7 @@
   - "Delete Tag", "Like" buttons, and Network Error banners now adapt to the active theme's semantic danger color (e.g. neon red in Cyberpunk, muted frost red in Nord).
   - Fixed a UI bug in the Tags Modal where non-edit mode tag backgrounds were not rendering due to invalid Tailwind parsing of hex variables. Corrected this by using CSS `color-mix()` for robust dynamic opacity.
   - Styled Tag Modal action buttons into "capsules" with background fills for clearer UX.
+  - Fixed a bug where `/api/tags/stats` capped at 50 tags by default, preventing the Web UI's Global Tags and Merge Tag menus from finding older tags.
 
 ## 2026-06-12
 

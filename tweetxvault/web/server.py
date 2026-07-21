@@ -761,7 +761,7 @@ def api_tags_stats(
 ):
     try:
         # Returns list of dicts: [{"tag": "tag1", "count": 5}, ...]
-        results = store.get_tag_counts()
+        results = store.get_tag_counts(limit=-1)
         return {"tags": results}
     except Exception as e:
         import traceback
