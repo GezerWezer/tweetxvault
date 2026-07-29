@@ -1,3 +1,24 @@
+- 2026-07-29 (Theme Updates)
+  - Replaced 'Nord' and 'Material Ocean' themes with 'Flexoki Light' and 'Flexoki Dark' respectively in `tweetxvault/web/static/js/themes.js`.
+  - Adapted Flexoki color scheme (by Steph Ango) values for background, text, muted, accent, and danger colors, along with 8 accent color options.
+
+- 2026-07-22 (Web UI Modular Refactoring)
+  - Refactored monolithic `server.py` into modular FastAPI `APIRouter` files in `tweetxvault/web/`:
+    - `deps.py`: Shared dependencies (`verify_credentials`, `get_store`, `get_server_state`).
+    - `routes/tweets.py`: `/api/tweets`, `/api/tweets/{tweet_id}`, `/api/tweets/{tweet_id}/quotes`.
+    - `routes/tags.py`: Tag CRUD, global deletion, merge, autocomplete, and stats endpoints.
+    - `routes/config.py`: Configuration GET, POST, defaults, and schema endpoints.
+    - `routes/stats.py`: `/api/stats` endpoint.
+    - `routes/avatars.py`: `/api/avatar/{user_id}` proxy endpoint.
+  - Extracted 1,800+ lines of inline CSS and JavaScript from `index.html` into static web assets:
+    - `static/css/styles.css`: CSS variables, design system tokens, custom utilities (`.tag-capsule`, `.danger-capsule`, `.roll-wrapper`).
+    - `static/js/themes.js`: 20-theme catalog (`THEMES`) and Google Font definitions (`FONT_URLS`).
+    - `static/js/autocomplete.js`: Search autocomplete Alpine component (`searchAutocomplete()`).
+    - `static/js/app.js`: Main Alpine application state and event handlers (`tweetApp()`).
+  - Added `.tag-capsule` and `.danger-capsule` styles utilizing `color-mix()` for dynamic opacity and proper background rendering in tag management modals.
+  - Fixed reply card layout and padding: Adjusted reply card container padding to 16px horizontal (`px-4`) and 12px vertical (`py-3`), removed duplicate 12px padding from `.tweet-border` in `styles.css` while preserving bottom border lines, aligned avatar left edges to 16px from frame, re-calculated thread connecting lines to `top-[52px]` / `top-[40px]`, and themed OP reply elements with CSS design tokens.
+  - Verified full test suite with `pytest` (189/189 tests passing).
+
 - 2026-07-14 (SQLite Performance Investigation & Fix)
   - SSHed into production server (Intel N95, 4GB RAM, 8.3GB DB) and ran `EXPLAIN QUERY PLAN` + timing benchmarks.
   - Root cause: default page load (`collection=all`) triggers full table scan of 2.5M rows because no index starts with `record_type`. COUNT took 22s, pagination took 21s — 43s total per page load.
@@ -1209,3 +1230,7 @@
   - Removed all automatic `.optimize()` calls that were being run at the end of every sync/import command.
   - This was leftover logic from LanceDB where compacting versions frequently was necessary. In SQLite, `VACUUM` is incredibly slow and expensive (it rebuilds the entire file from scratch) and is not needed after standard inserts or updates.
   - Users can still manually run `tweetxvault optimize` if they delete massive amounts of data and want to reclaim disk space, but it won't happen automatically anymore.
+- **2026-07-29**:
+  - Implemented strict hashtag search. Clicking or typing `#hashtag` now searches specifically for official hashtags attached to a tweet instead of doing a loose text search.
+  - Redesigned the autocomplete dropdown for author searches (`from:` and `to:`) to render as "mini profile cards" (avatar, stacked display name and handle, highlighted search terms) instead of plain text rows.
+  - Cleaned up root directory by deleting 17 unused, abandoned, or one-off python test scripts and diff files left over from the SQLite migration.

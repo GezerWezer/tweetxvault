@@ -1,0 +1,188 @@
+:root {
+    --bg-primary: #000000;
+    --bg-secondary: #202327;
+    --bg-tertiary: rgba(239, 243, 244, 0.1);
+    --bg-header: rgba(0, 0, 0, 0.8);
+    --text-primary: #e7e9ea;
+    --text-secondary: #71767b;
+    --border-color: #2f3336;
+    --hover-bg: rgba(255, 255, 255, 0.03);
+    --scrollbar-bg: #000000;
+    --scrollbar-thumb: #3e4144;
+    --scrollbar-thumb-hover: #55585b;
+    --thread-line: #333639;
+    --input-border: #2f3336;
+    --white-icon: #ffffff;
+    --dropdown-bg: #000000;
+    --gray-700: #374151;
+    --accent-color: #1d9bf0;
+    --accent-hover: #1a8cd8;
+    --accent-text: #ffffff;
+    --danger-color: #f91880;
+    --danger-hover: #e01472;
+    --danger-text: #ffffff;
+    --font-size-base: 15px;
+    --tweet-padding: 12px;
+}
+
+body {
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: var(--font-size-base);
+    transition: background-color 0.2s, color 0.2s;
+}
+
+.tweet-border {
+    border-bottom: 1px solid var(--border-color);
+}
+
+.hover-bg:hover {
+    background-color: var(--hover-bg);
+}
+
+.blue-hover:hover {
+    color: var(--accent-color);
+}
+
+[x-cloak] {
+    display: none !important;
+}
+
+::-webkit-scrollbar {
+    width: 8px;
+}
+::-webkit-scrollbar-track {
+    background: var(--scrollbar-bg);
+}
+::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-thumb-hover);
+}
+
+.tag-capsule {
+    background-color: color-mix(in srgb, var(--accent-color) 10%, transparent);
+}
+.tag-capsule:hover {
+    background-color: color-mix(in srgb, var(--accent-color) 20%, transparent);
+}
+
+.danger-capsule {
+    background-color: color-mix(in srgb, var(--danger-color) 10%, transparent);
+    color: var(--danger-color);
+}
+.danger-capsule:hover {
+    background-color: color-mix(in srgb, var(--danger-color) 20%, transparent);
+}
+
+.roll-wrapper {
+    position: relative;
+    display: inline-block;
+    height: 1.25em;
+    overflow: hidden;
+    vertical-align: bottom;
+    cursor: pointer;
+}
+
+.roll-inner {
+    display: flex;
+    flex-direction: column;
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.roll-wrapper:hover .roll-inner {
+    transform: translateY(-50%);
+}
+
+.roll-item {
+    height: 1.25em;
+    display: flex;
+    align-items: center;
+    white-space: nowrap;
+}
+
+/* ── Twitter Analytics-style stats modal ────────────────────────────── */
+
+.stats-modal-header {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--bg-primary);
+    flex-shrink: 0;
+}
+@media (min-width: 768px) {
+    .stats-modal-header { padding: 12px 24px; }
+}
+
+.stats-modal-title {
+    font-size: 20px;
+    font-weight: 800;
+    color: var(--text-primary);
+    letter-spacing: -0.02em;
+}
+
+.stats-section-title {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text-primary);
+    letter-spacing: -0.01em;
+}
+
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+}
+@media (max-width: 768px) {
+    .stats-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+.stats-card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
+    padding: 16px 20px;
+    transition: border-color 0.15s ease;
+}
+.stats-card:hover {
+    border-color: color-mix(in srgb, var(--text-secondary) 50%, var(--border-color));
+}
+
+.stats-label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    line-height: 1.3;
+}
+
+.stats-info-icon {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    opacity: 0.4;
+    transition: opacity 0.15s;
+}
+.stats-card:hover .stats-info-icon { opacity: 0.7; }
+
+.stats-value {
+    font-size: 28px;
+    font-weight: 800;
+    color: var(--text-primary);
+    letter-spacing: -0.02em;
+    margin-top: 4px;
+    line-height: 1.1;
+}
+
+.stats-subtitle {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-top: 4px;
+}

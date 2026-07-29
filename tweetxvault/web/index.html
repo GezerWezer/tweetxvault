@@ -6,73 +6,19 @@
     <title>tweetxvault</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/intersect@3.x.x/dist/cdn.min.js"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
-    <style>
-        :root {
-            --bg-primary: #000000;
-            --bg-secondary: #202327;
-            --bg-tertiary: rgba(239, 243, 244, 0.1);
-            --bg-header: rgba(0, 0, 0, 0.8);
-            --text-primary: #e7e9ea;
-            --text-secondary: #71767b;
-            --border-color: #2f3336;
-            --hover-bg: rgba(255, 255, 255, 0.03);
-            --scrollbar-bg: #000000;
-            --scrollbar-thumb: #3e4144;
-            --scrollbar-thumb-hover: #55585b;
-            --thread-line: #333639;
-            --input-border: #2f3336;
-            --white-icon: #ffffff;
-            --dropdown-bg: #000000;
-            --gray-700: #374151;
-            --accent-color: #1d9bf0;
-            --accent-hover: #1a8cd8;
-            --font-size-base: 15px;
-            --tweet-padding: 12px;
-        }
-
-        body { background-color: var(--bg-primary); color: var(--text-primary); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: var(--font-size-base); transition: background-color 0.2s, color 0.2s; }
-        .tweet-border { border-bottom: 1px solid var(--border-color); padding-top: var(--tweet-padding); padding-bottom: var(--tweet-padding); }
-        .hover-bg:hover { background-color: var(--hover-bg); }
-        .blue-hover:hover { color: var(--accent-color); }
-        [x-cloak] { display: none !important; }
-        
-        ::-webkit-scrollbar { width: 8px; }
-        ::-webkit-scrollbar-track { background: var(--scrollbar-bg); }
-        ::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 4px; }
-        ::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
-        .tag-capsule { background-color: color-mix(in srgb, var(--accent-color) 10%, transparent); }
-        .tag-capsule:hover { background-color: color-mix(in srgb, var(--accent-color) 20%, transparent); }
-        .danger-capsule { background-color: color-mix(in srgb, var(--danger-color) 10%, transparent); color: var(--danger-color); }
-        .danger-capsule:hover { background-color: color-mix(in srgb, var(--danger-color) 20%, transparent); }
-
-        .roll-wrapper {
-            position: relative;
-            display: inline-block;
-            height: 1.25em;
-            overflow: hidden;
-            vertical-align: bottom;
-            cursor: pointer;
-        }
-        .roll-inner {
-            display: flex;
-            flex-direction: column;
-            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        }
-        .roll-wrapper:hover .roll-inner {
-            transform: translateY(-50%);
-        }
-        .roll-item {
-            height: 1.25em;
-            display: flex;
-            align-items: center;
-            white-space: nowrap;
-        }
-    </style>
+    <script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/collapse@3.13.3/dist/cdn.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.3/dist/cdn.min.js"></script>
+    <link rel="stylesheet" href="/static/css/styles.css">
+    <script src="/static/js/themes.js"></script>
+    <script src="/static/js/autocomplete.js"></script>
+    <script src="/static/js/app.js"></script>
+</head>
 </head>
 <body class="antialiased min-h-screen flex justify-center">
 
-    <div x-data="tweetApp()" x-init="initApp()" class="w-full max-w-[600px] border-x border-[var(--border-color)] min-h-screen relative bg-[var(--bg-primary)]">
+    <div x-data="tweetApp()" x-init="initApp()" class="flex justify-center w-full">
+    <!-- LEFT COLUMN (Main Feed) -->
+    <div :class="splitPanel && panelStack.length > 0 ? 'border-l border-[var(--border-color)]' : 'border-x border-[var(--border-color)]'" class="w-full max-w-[600px] min-h-screen relative bg-[var(--bg-primary)] flex-shrink-0">
         
         <!-- HEADER -->
         <div class="sticky top-0 z-20 bg-[var(--bg-header)] backdrop-blur-md p-4 border-b border-[var(--border-color)] flex items-center justify-between">
@@ -87,7 +33,10 @@
             </div>
             
             <div x-show="viewMode === 'list'" class="flex items-center space-x-2">
-                <button @click="showSettingsModal = true" class="p-2 rounded-full hover-bg transition text-[var(--text-primary)]" aria-label="Settings">
+                <button @click="openStatsModal()" class="p-2 rounded-full hover-bg transition text-[var(--text-primary)]" aria-label="Stats" title="Archive Stats">
+                    <svg viewBox="0 0 24 24" fill="currentColor" class="w-5 h-5"><path d="M3 13h4v8H3v-8zm6-5h4v13H9V8zm6-5h4v18h-4V3z"/></svg>
+                </button>
+                <button @click="showSettingsModal = true" class="p-2 rounded-full hover-bg transition text-[var(--text-primary)]" aria-label="Settings" title="Settings">
                     <svg viewBox="0 0 24 24" fill="currentColor" class="w-5 h-5"><path fill-rule="evenodd" d="M11.078 2.25c-.917 0-1.699.663-1.85 1.567L9.05 4.889c-.02.12-.115.26-.297.348a7.493 7.493 0 0 0-.986.57c-.166.115-.334.126-.45.083L6.3 5.508a1.875 1.875 0 0 0-2.282.819l-.922 1.597a1.875 1.875 0 0 0 .432 2.385l.84.692c.095.078.17.229.154.43a7.598 7.598 0 0 0 0 1.139c.015.2-.059.352-.153.43l-.841.692a1.875 1.875 0 0 0-.432 2.385l.922 1.597a1.875 1.875 0 0 0 2.282.818l1.019-.382c.115-.043.283-.031.45.082.312.214.641.405.985.57.182.088.277.228.297.35l.178 1.071c.151.904.933 1.567 1.85 1.567h1.844c.916 0 1.699-.663 1.85-1.567l.178-1.072c.02-.12.114-.26.297-.349.344-.165.673-.356.985-.57.167-.114.335-.125.45-.082l1.02.382a1.875 1.875 0 0 0 2.28-.819l.923-1.597a1.875 1.875 0 0 0-.432-2.385l-.84-.692c-.095-.078-.17-.229-.154-.43a7.614 7.614 0 0 0 0-1.139c-.016-.2.059-.352.153-.43l.84-.692c.708-.582.891-1.59.433-2.385l-.922-1.597a1.875 1.875 0 0 0-2.282-.818l-1.02.382c-.114.043-.282.031-.449-.083a7.49 7.49 0 0 0-.985-.57c-.183-.087-.277-.227-.297-.348l-.179-1.072a1.875 1.875 0 0 0-1.85-1.567h-1.843ZM12 15.75a3.75 3.75 0 1 0 0-7.5 3.75 3.75 0 0 0 0 7.5Z" clip-rule="evenodd" /></svg>
                 </button>
                 <select x-model="sortOrder" @change="search()" class="bg-transparent text-[var(--text-primary)] font-bold text-sm outline-none cursor-pointer border border-[var(--border-color)] rounded-full px-3 py-1 hover-bg transition appearance-none">
@@ -123,7 +72,19 @@
                 <div x-show="showDropdown && options.length > 0" x-transition.opacity.duration.100ms class="absolute top-full left-4 right-4 mt-1 bg-[var(--dropdown-bg)] border border-[var(--border-color)] rounded-xl shadow-[0_0_15px_rgba(255,255,255,0.1)] overflow-y-auto max-h-[50vh] z-50 py-2">
                     <template x-for="(opt, index) in options" :key="index">
                         <div @click="selectOptionIndex(index)" @mouseenter="selectedIndex = index" :class="{'bg-[var(--bg-tertiary)]': selectedIndex === index}" class="px-4 py-3 cursor-pointer flex transition justify-between items-center">
-                            <template x-if="!opt.isTag">
+                            <template x-if="opt.isAuthor">
+                                <div class="flex items-center space-x-3 w-full py-1">
+                                    <div class="w-10 h-10 rounded-full flex-shrink-0 relative bg-[var(--gray-700)] flex items-center justify-center font-bold text-[var(--white-icon)] uppercase overflow-hidden">
+                                        <span x-text="(opt.desc || opt.value || '?').charAt(0)"></span>
+                                        <img :src="'/api/avatar/' + (opt.id || 'unknown')" @error="$el.style.display='none'" class="absolute inset-0 w-full h-full object-cover z-10" loading="lazy">
+                                    </div>
+                                    <div class="flex flex-col min-w-0 flex-1">
+                                        <span class="font-bold text-[15px] text-[var(--text-primary)] leading-tight truncate" x-html="highlightMatch(opt.desc || opt.value, opt.query)"></span>
+                                        <span class="text-[14px] text-[var(--text-secondary)] truncate" x-html="highlightMatch('@' + opt.value, opt.query)"></span>
+                                    </div>
+                                </div>
+                            </template>
+                            <template x-if="!opt.isAuthor && !opt.isTag">
                                 <div class="flex flex-col justify-center">
                                     <div class="flex items-center space-x-2">
                                         <span class="text-[var(--text-primary)] font-bold" x-text="opt.prefix"></span>
@@ -161,7 +122,7 @@
                 <div x-data="{ 
                     isRt: !!getRetweet(tweetObj), 
                     tweet: getRetweet(tweetObj) ? formatRetweetToTweet(tweetObj, getRetweet(tweetObj)) : tweetObj 
-                }" class="px-4 pt-3 pb-2 tweet-border hover-bg transition duration-200 cursor-pointer" @click="openThread(tweet.tweet_id)">
+                }" class="px-4 pt-3 pb-3 tweet-border hover-bg transition duration-200 cursor-pointer" @click="openThread(tweet.tweet_id)">
                     
                     <template x-if="isRt">
                         <div class="text-[13px] text-[var(--text-secondary)] font-bold mb-1 flex items-center space-x-2 ml-8">
@@ -170,15 +131,15 @@
                         </div>
                     </template>
 
-                    <div class="flex space-x-3">
-                        <div class="w-10 h-10 rounded-full flex-shrink-0 relative bg-[var(--gray-700)] flex items-center justify-center font-bold text-[var(--white-icon)] uppercase overflow-hidden" @click.stop="searchFrom(tweet.author.username)">
+                    <div class="flex space-x-2">
+                        <div class="w-10 h-10 rounded-full flex-shrink-0 relative bg-[var(--gray-700)] flex items-center justify-center font-bold text-[var(--white-icon)] uppercase overflow-hidden" @click.stop="openProfileCard($event, tweet)">
                             <span x-text="getInitial(tweet)"></span>
                             <img :src="'/api/avatar/' + (tweet.author.id || 'unknown')" @error="$el.style.display='none'" class="absolute inset-0 w-full h-full object-cover z-10" loading="lazy">
                         </div>
 
                         <div class="flex-1 min-w-0">
                             <div class="flex items-center space-x-1 text-[15px]">
-                                <span class="font-bold text-[var(--text-primary)] truncate hover:underline" x-text="tweet.author.display_name || 'Unknown'" @click.stop="searchFrom(tweet.author.username)"></span>
+                                <span class="font-bold text-[var(--text-primary)] truncate hover:underline" x-text="tweet.author.display_name || 'Unknown'" @click.stop="openProfileCard($event, tweet)"></span>
                                 <span class="text-[var(--text-secondary)] truncate" x-text="'@' + (tweet.author.username || 'unknown')"></span>
                                 <span class="text-[var(--text-secondary)]">·</span>
                                 <div class="roll-wrapper text-[var(--text-secondary)]" @click.stop>
@@ -198,7 +159,7 @@
                             <div class="text-[15px] mt-1 whitespace-pre-wrap leading-normal break-words" x-html="formatText(tweet)" @click="handleTextClick($event)"></div>
                             
                             <!-- Media -->
-                            <div x-html="renderMediaGrid(tweet.media)" class="mt-3"></div>
+                            <div x-html="renderMediaGrid(tweet.media)"></div>
                             
                             <!-- Card (Polls / Articles) -->
                             <div x-html="renderCard(tweet)" @click.stop></div>
@@ -229,7 +190,7 @@
                                             </template>
 
                                             <div class="text-[15px] whitespace-pre-wrap leading-normal break-words" x-html="formatText({text: getQuoteText(getQuoteTweet(tweet)), raw_json: getQuoteTweet(tweet)})" @click="handleTextClick($event)"></div>
-                                            <div x-html="renderMediaGrid(tweet.qt_media)" class="mt-2" @click.stop></div>
+                                            <div x-html="renderMediaGrid(tweet.qt_media)" @click.stop></div>
                                             <div x-html="renderCard({raw_json: getQuoteTweet(tweet)})" @click.stop></div>
                                             <div x-html="renderCommunityNote(getQuoteTweet(tweet), true)" @click.stop></div>
                                         </div>
@@ -238,7 +199,7 @@
                             </template>
 
                             <div x-html="renderCommunityNote(tweet.raw_json)" @click.stop></div>
-                            <div x-html="renderActionBar(tweet)" class="mt-1"></div>
+                            <div x-html="renderActionBar(tweet)"></div>
                         </div>
                     </div>
                 </div>
@@ -253,8 +214,8 @@
             </div>
         </div>
 
-        <!-- THREAD VIEW -->
-        <div x-show="viewMode === 'thread'" x-cloak class="pb-20">
+        <!-- THREAD VIEW (single-column only) -->
+        <div x-show="viewMode === 'thread' && !(splitPanel && panelMode)" x-cloak class="pb-20">
             <template x-if="loadingThread"><div class="p-8 text-center text-gray-500">Loading thread...</div></template>
             
             <template x-if="!loadingThread && threadData">
@@ -269,14 +230,14 @@
                             
                             <div class="w-0.5 bg-[var(--thread-line)] absolute top-[52px] bottom-0 left-[36px] -translate-x-1/2 z-0"></div>
                             
-                            <div class="w-10 h-10 rounded-full flex-shrink-0 relative bg-[var(--gray-700)] flex items-center justify-center font-bold text-[var(--white-icon)] uppercase overflow-hidden z-10 mr-3" @click.stop="searchFrom(parent.author.username)">
+                            <div class="w-10 h-10 rounded-full flex-shrink-0 relative bg-[var(--gray-700)] flex items-center justify-center font-bold text-[var(--white-icon)] uppercase overflow-hidden z-10 mr-2" @click.stop="openProfileCard($event, parent)">
                                 <span x-text="getInitial(parent)"></span>
                                 <img :src="'/api/avatar/' + (parent.author.id || 'unknown')" @error="$el.style.display='none'" class="absolute inset-0 w-full h-full object-cover z-10" loading="lazy">
                             </div>
 
-                            <div class="flex-1 min-w-0 pb-2 z-10">
+                            <div class="flex-1 min-w-0 z-10">
                                 <div class="flex items-center space-x-1 text-[15px]">
-                                    <span class="font-bold text-[var(--text-primary)] truncate hover:underline" @click.stop="searchFrom(parent.author.username)" x-text="parent.author.display_name || 'Unknown'"></span>
+                                    <span class="font-bold text-[var(--text-primary)] truncate hover:underline" @click.stop="openProfileCard($event, parent)" x-text="parent.author.display_name || 'Unknown'"></span>
                                     <span class="text-[var(--text-secondary)] truncate" x-text="'@' + (parent.author.username || 'unknown')"></span>
                                     <span class="text-[var(--text-secondary)]">·</span>
                                     <div class="roll-wrapper text-[var(--text-secondary)]" @click.stop>
@@ -294,26 +255,26 @@
                                 </template>
 
                                 <div class="text-[15px] mt-1 whitespace-pre-wrap leading-normal break-words" x-html="formatText(parent)" @click="handleTextClick($event)"></div>
-                                <div x-html="renderMediaGrid(parent.media)" class="mt-3" @click.stop></div>
+                                <div x-html="renderMediaGrid(parent.media)" @click.stop></div>
                                 <div x-html="renderCommunityNote(parent.raw_json)" @click.stop></div>
-                                <div x-html="renderActionBar(parent)" class="mt-2"></div>
+                                <div x-html="renderActionBar(parent)"></div>
                             </div>
                         </div>
                     </template>
 
                     <!-- MAIN TWEET -->
-                    <div class="px-4 pt-3 pb-2 tweet-border relative">
+                    <div class="px-4 pt-3 pb-3 tweet-border relative">
                         <template x-if="threadData.parents.length > 0">
                             <div class="absolute w-0.5 bg-[var(--thread-line)] top-0 h-[12px] left-[36px] -translate-x-1/2 z-0"></div>
                         </template>
 
-                        <div class="flex space-x-3 mb-3 relative z-10">
-                            <div class="w-10 h-10 rounded-full flex-shrink-0 relative bg-[var(--gray-700)] flex items-center justify-center font-bold text-[var(--white-icon)] uppercase overflow-hidden cursor-pointer" @click.stop="searchFrom(threadData.main.author.username)">
+                        <div class="flex space-x-2 mb-3 relative z-10">
+                            <div class="w-10 h-10 rounded-full flex-shrink-0 relative bg-[var(--gray-700)] flex items-center justify-center font-bold text-[var(--white-icon)] uppercase overflow-hidden cursor-pointer" @click.stop="openProfileCard($event, threadData.main)">
                                 <span x-text="getInitial(threadData.main)"></span>
                                 <img :src="'/api/avatar/' + (threadData.main.author.id || 'unknown')" @error="$el.style.display='none'" class="absolute inset-0 w-full h-full object-cover z-10" loading="lazy">
                             </div>
 
-                            <div class="cursor-pointer flex-1" @click.stop="searchFrom(threadData.main.author.username)">
+                            <div class="cursor-pointer flex-1" @click.stop="openProfileCard($event, threadData.main)">
                                 <div class="font-bold text-[var(--text-primary)] hover:underline" x-text="threadData.main.author.display_name || 'Unknown'"></div>
                                 <div class="text-[var(--text-secondary)]" x-text="'@' + (threadData.main.author.username || 'unknown')"></div>
                             </div>
@@ -327,7 +288,7 @@
 
                         <div class="text-[17px] whitespace-pre-wrap leading-normal break-words" x-html="formatText(threadData.main)" @click="handleTextClick($event)"></div>
                         <div x-html="renderCard(threadData.main)" @click.stop></div>
-                        <div x-html="renderMediaGrid(threadData.main.media)" class="mt-3" @click.stop></div>
+                        <div x-html="renderMediaGrid(threadData.main.media)" @click.stop></div>
 
                         <!-- Quote Tweet -->
                         <template x-if="getQuoteTweet(threadData.main)">
@@ -356,14 +317,14 @@
 
                                         <div class="text-[15px] whitespace-pre-wrap leading-normal break-words" x-html="formatText({text: getQuoteText(getQuoteTweet(threadData.main)), raw_json: getQuoteTweet(threadData.main)})" @click="handleTextClick($event)"></div>
                                         <div x-html="renderCard({raw_json: getQuoteTweet(threadData.main)})" @click.stop></div>
-                                        <div x-html="renderMediaGrid(threadData.main.qt_media)" class="mt-2" @click.stop></div>
+                                        <div x-html="renderMediaGrid(threadData.main.qt_media)" @click.stop></div>
                                         <div x-html="renderCommunityNote(getQuoteTweet(threadData.main), true)" @click.stop></div>
                                     </div>
                                 </template>
                             </div>
                         </template>
 
-                        <div class="mt-4 text-[var(--text-secondary)] border-b border-[var(--border-color)] pb-4 flex items-center justify-between">
+                        <div class="py-3 text-[var(--text-secondary)] flex items-center justify-between">
                             <div class="roll-wrapper cursor-default">
                                 <div class="roll-inner">
                                     <span class="roll-item" x-text="formatDate(threadData.main.created_at, true)"></span>
@@ -378,27 +339,27 @@
                         </div>
                         
                         <div x-html="renderCommunityNote(threadData.main.raw_json)" @click.stop></div>
-                        <div x-html="renderActionBar(threadData.main, true)" class="mt-1 pb-3"></div>
+                        <div x-html="renderActionBar(threadData.main, true)"></div>
                     </div>
 
                     <!-- CHILDREN / REPLIES -->
                     <template x-for="child in threadData.children" :key="child.tweet_id">
                         <div class="tweet-border">
                             <!-- Direct Reply Card -->
-                            <div class="p-4 flex space-x-3 relative cursor-pointer hover-bg" @click="openThread(child.tweet_id)">
+                            <div class="px-4 py-3 flex relative cursor-pointer hover-bg" @click="openThread(child.tweet_id)">
                                 <!-- Connecting Line down to OP Reply (only if op_replies exists) -->
                                 <template x-if="child.op_replies && child.op_replies.length > 0">
-                                    <div class="w-0.5 bg-[var(--thread-line)] absolute top-[56px] bottom-0 left-[36px] -translate-x-1/2 z-0"></div>
+                                    <div class="w-0.5 bg-[var(--thread-line)] absolute top-[52px] bottom-0 left-[36px] -translate-x-1/2 z-0"></div>
                                 </template>
                                 
-                                <div class="w-10 h-10 rounded-full flex-shrink-0 relative bg-[var(--gray-700)] flex items-center justify-center font-bold text-[var(--white-icon)] uppercase overflow-hidden z-10" @click.stop="searchFrom(child.author.username)">
+                                <div class="w-10 h-10 rounded-full flex-shrink-0 relative bg-[var(--gray-700)] flex items-center justify-center font-bold text-[var(--white-icon)] uppercase overflow-hidden z-10 mr-2" @click.stop="openProfileCard($event, child)">
                                     <span x-text="getInitial(child)"></span>
                                     <img :src="'/api/avatar/' + (child.author.id || 'unknown')" @error="$el.style.display='none'" class="absolute inset-0 w-full h-full object-cover z-10" loading="lazy">
                                 </div>
 
                                 <div class="flex-1 min-w-0 z-10">
                                     <div class="flex items-center space-x-1 text-[15px]">
-                                        <span class="font-bold text-[var(--text-primary)] truncate hover:underline" @click.stop="searchFrom(child.author.username)" x-text="child.author.display_name || 'Unknown'"></span>
+                                        <span class="font-bold text-[var(--text-primary)] truncate hover:underline" @click.stop="openProfileCard($event, child)" x-text="child.author.display_name || 'Unknown'"></span>
                                         <span class="text-[var(--text-secondary)] truncate" x-text="'@' + (child.author.username || 'unknown')"></span>
                                         <span class="text-[var(--text-secondary)]">·</span>
                                         <div class="roll-wrapper text-[#71767b]" @click.stop>
@@ -417,9 +378,9 @@
 
                                     <div class="text-[15px] mt-1 whitespace-pre-wrap leading-normal break-words" x-html="formatText(child)" @click="handleTextClick($event)"></div>
                                     <div x-html="renderCard(child)" @click.stop></div>
-                                    <div x-html="renderMediaGrid(child.media)" class="mt-3" @click.stop></div>
+                                    <div x-html="renderMediaGrid(child.media)" @click.stop></div>
                                     <div x-html="renderCommunityNote(child.raw_json)" @click.stop></div>
-                                    <div x-html="renderActionBar(child)" class="mt-2"></div>
+                                    <div x-html="renderActionBar(child)"></div>
                                 </div>
                             </div>
 
@@ -427,7 +388,7 @@
                             <template x-if="child.op_replies && child.op_replies.length > 0">
                                 <div>
                                     <template x-for="(reply, rIdx) in child.op_replies" :key="reply.tweet_id">
-                                        <div class="p-4 pt-0 flex space-x-3 relative cursor-pointer hover-bg" @click="openThread(reply.tweet_id)">
+                                        <div class="px-4 pb-3 pt-0 flex relative cursor-pointer hover-bg" @click="openThread(reply.tweet_id)">
                                             
                                             <!-- Top Line Bridge from Child -->
                                             <div class="w-0.5 bg-[#333639] absolute top-0 h-[16px] left-[36px] -translate-x-1/2 z-0"></div>
@@ -438,14 +399,14 @@
                                             </template>
                                             
                                             <!-- Avatar -->
-                                            <div class="w-10 h-10 rounded-full flex-shrink-0 relative bg-gray-700 flex items-center justify-center font-bold text-white uppercase overflow-hidden z-10" @click.stop="searchFrom(reply.author.username)">
+                                            <div class="w-10 h-10 rounded-full flex-shrink-0 relative bg-gray-700 flex items-center justify-center font-bold text-white uppercase overflow-hidden z-10 mr-2" @click.stop="openProfileCard($event, reply)">
                                                 <span x-text="getInitial(reply)"></span>
                                                 <img :src="'/api/avatar/' + (reply.author.id || 'unknown')" @error="$el.style.display='none'" class="absolute inset-0 w-full h-full object-cover z-10" loading="lazy">
                                             </div>
 
-                                            <div class="flex-1 min-w-0 pb-2 z-10">
+                                            <div class="flex-1 min-w-0 z-10">
                                                 <div class="flex items-center space-x-1 text-[15px]">
-                                                    <span class="font-bold text-[#e7e9ea] truncate hover:underline" @click.stop="searchFrom(reply.author.username)" x-text="reply.author.display_name || 'Unknown'"></span>
+                                                    <span class="font-bold text-[#e7e9ea] truncate hover:underline" @click.stop="openProfileCard($event, reply)" x-text="reply.author.display_name || 'Unknown'"></span>
                                                     <span class="text-[#71767b] truncate" x-text="'@' + (reply.author.username || 'unknown')"></span>
                                                     <span class="text-[#71767b]">·</span>
                                                     <div class="roll-wrapper text-[#71767b]" @click.stop>
@@ -464,9 +425,9 @@
 
                                                 <div class="text-[15px] mt-1 whitespace-pre-wrap leading-normal break-words" x-html="formatText(reply)" @click="handleTextClick($event)"></div>
                                                 <div x-html="renderCard(reply)" @click.stop></div>
-                                                <div x-html="renderMediaGrid(reply.media)" class="mt-3" @click.stop></div>
+                                                <div x-html="renderMediaGrid(reply.media)" @click.stop></div>
                                                 <div x-html="renderCommunityNote(reply.raw_json)" @click.stop></div>
-                                                <div x-html="renderActionBar(reply)" class="mt-2"></div>
+                                                <div x-html="renderActionBar(reply)"></div>
                                             </div>
                                         </div>
                                     </template>
@@ -477,8 +438,8 @@
                 </div>
             </template>
         </div>
-        <!-- QUOTES VIEW -->
-        <div x-show="viewMode === 'quotes'" x-cloak class="pb-20">
+        <!-- QUOTES VIEW (single-column only) -->
+        <div x-show="viewMode === 'quotes' && !(splitPanel && panelMode)" x-cloak class="pb-20">
             <template x-if="quotesLoading && quotesList.length === 0">
                 <div class="p-8 text-center text-[var(--text-secondary)]">Loading...</div>
             </template>
@@ -490,7 +451,7 @@
             <template x-if="threadData && threadData.main">
                 <div class="cursor-pointer transition border-b border-[var(--border-color)] pb-3 p-4">
                     <div class="flex flex-col relative">
-                        <div class="flex space-x-3">
+                        <div class="flex space-x-2">
                             <div class="flex-shrink-0 relative z-10 w-10">
                                 <img :src="'/api/avatar/' + threadData.main.author.id" class="w-10 h-10 rounded-full bg-[var(--bg-secondary)]" loading="lazy">
                             </div>
@@ -504,7 +465,7 @@
                                     </div>
                                 </div>
                                 <div class="text-[15px] mt-1 whitespace-pre-wrap leading-normal break-words" x-html="formatText(threadData.main)" @click="handleTextClick($event)"></div>
-                                <div x-html="renderMediaGrid(threadData.main.media)" class="mt-3" @click.stop></div>
+                                <div x-html="renderMediaGrid(threadData.main.media)" @click.stop></div>
                             </div>
                         </div>
                     </div>
@@ -513,7 +474,7 @@
             
             <template x-for="tweet in quotesList" :key="tweet.tweet_id">
                 <div class="tweet-border cursor-pointer hover-bg transition p-4" @click="openThread(tweet.tweet_id)">
-                    <div class="flex space-x-3">
+                    <div class="flex space-x-2">
                         <img :src="'/api/avatar/' + tweet.author.id" class="w-10 h-10 rounded-full flex-shrink-0 bg-[var(--bg-secondary)]" loading="lazy">
                         <div class="flex-1 min-w-0">
                             <div class="flex items-center justify-between">
@@ -533,9 +494,9 @@
 
                             <div class="text-[15px] mt-1 whitespace-pre-wrap leading-normal break-words" x-html="formatText(tweet)" @click="handleTextClick($event)"></div>
                             <div x-html="renderCard(tweet)" @click.stop></div>
-                            <div x-html="renderMediaGrid(tweet.media)" class="mt-3" @click.stop></div>
+                            <div x-html="renderMediaGrid(tweet.media)" @click.stop></div>
                             <div x-html="renderCommunityNote(tweet.raw_json)" @click.stop></div>
-                            <div x-html="renderActionBar(tweet)" class="mt-3"></div>
+                            <div x-html="renderActionBar(tweet)"></div>
                         </div>
                     </div>
                 </div>
@@ -547,6 +508,286 @@
             </template>
         </div>
         
+    </div><!-- /LEFT COLUMN -->
+
+    <!-- RIGHT DETAIL PANEL (split mode only, hidden on mobile via CSS) -->
+    <div x-show="splitPanel && panelStack.length > 0" x-cloak x-ref="detailPanel"
+         class="hidden lg:flex lg:flex-col w-[600px] flex-shrink-0 border-x border-[var(--border-color)] bg-[var(--bg-primary)] h-screen sticky top-0 overflow-y-auto">
+        
+        <!-- Panel Header -->
+        <div class="sticky top-0 z-20 bg-[var(--bg-header)] backdrop-blur-md p-4 border-b border-[var(--border-color)] flex items-center justify-between">
+            <div class="flex items-center space-x-4">
+                <button x-show="panelStack.length > 1" @click="panelGoBack()" class="p-2 -ml-2 rounded-full hover-bg transition">
+                    <svg viewBox="0 0 24 24" class="w-5 h-5 fill-[var(--white-icon)]"><path d="M7.414 13l5.043 5.04-1.414 1.42L3.586 12l7.457-7.46 1.414 1.42L7.414 11H21v2H7.414z"></path></svg>
+                </button>
+                <h2 class="text-xl font-bold text-[var(--text-primary)]" x-text="panelMode === 'quotes' ? 'Quote Tweets' : 'Post'"></h2>
+            </div>
+            <button @click="closePanel()" class="p-2 rounded-full hover-bg transition text-[var(--text-secondary)] hover:text-[var(--text-primary)]">
+                <svg viewBox="0 0 24 24" class="w-5 h-5 fill-current"><path d="M13.414 12l5.793-5.793c.39-.39.39-1.023 0-1.414s-1.024-.39-1.414 0L12 10.586 6.207 4.793c-.39-.39-1.023-.39-1.414 0s-.39 1.024 0 1.414L10.586 12l-5.793 5.793c-.39.39-.39 1.023 0 1.414.195.195.45.293.707.293s.512-.098.707-.293L12 13.414l5.793 5.793c.195.195.45.293.707.293s.512-.098.707-.293c.39-.39.39-1.023 0-1.414L13.414 12z"></path></svg>
+            </button>
+        </div>
+
+        <!-- Panel Thread View -->
+        <div x-show="panelMode === 'thread'" class="pb-20">
+            <template x-if="panelLoadingThread"><div class="p-8 text-center text-gray-500">Loading thread...</div></template>
+            
+            <template x-if="!panelLoadingThread && panelThreadData">
+                <div>
+                    <!-- PARENTS -->
+                    <template x-for="(parent, index) in panelThreadData.parents" :key="parent.tweet_id">
+                        <div class="px-4 pt-3 flex relative cursor-pointer hover-bg" @click="openThread(parent.tweet_id, false, true)">
+                            <template x-if="index > 0">
+                                <div class="w-0.5 bg-[var(--thread-line)] absolute top-0 h-[12px] left-[36px] -translate-x-1/2 z-0"></div>
+                            </template>
+                            <div class="w-0.5 bg-[var(--thread-line)] absolute top-[52px] bottom-0 left-[36px] -translate-x-1/2 z-0"></div>
+                            <div class="w-10 h-10 rounded-full flex-shrink-0 relative bg-[var(--gray-700)] flex items-center justify-center font-bold text-[var(--white-icon)] uppercase overflow-hidden z-10 mr-2" @click.stop="openProfileCard($event, parent)">
+                                <span x-text="getInitial(parent)"></span>
+                                <img :src="'/api/avatar/' + (parent.author.id || 'unknown')" @error="$el.style.display='none'" class="absolute inset-0 w-full h-full object-cover z-10" loading="lazy">
+                            </div>
+                            <div class="flex-1 min-w-0 z-10">
+                                <div class="flex items-center space-x-1 text-[15px]">
+                                    <span class="font-bold text-[var(--text-primary)] truncate hover:underline" @click.stop="openProfileCard($event, parent)" x-text="parent.author.display_name || 'Unknown'"></span>
+                                    <span class="text-[var(--text-secondary)] truncate" x-text="'@' + (parent.author.username || 'unknown')"></span>
+                                    <span class="text-[var(--text-secondary)]">·</span>
+                                    <div class="roll-wrapper text-[var(--text-secondary)]" @click.stop>
+                                        <div class="roll-inner">
+                                            <span class="roll-item hover:underline" x-text="formatDate(parent.created_at)"></span>
+                                            <span class="roll-item text-[var(--accent-color)] text-[13px] font-medium" x-text="formatSyncDate(parent)"></span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <template x-if="getReplyTo(parent)">
+                                    <div class="text-[15px] text-[var(--text-secondary)] mb-1">
+                                        Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo(parent))" x-text="'@' + getReplyTo(parent)"></span>
+                                    </div>
+                                </template>
+                                <div class="text-[15px] mt-1 whitespace-pre-wrap leading-normal break-words" x-html="formatText(parent)" @click="handleTextClick($event)"></div>
+                                <div x-html="renderMediaGrid(parent.media)" @click.stop></div>
+                                <div x-html="renderCommunityNote(parent.raw_json)" @click.stop></div>
+                                <div x-html="renderActionBar(parent)"></div>
+                            </div>
+                        </div>
+                    </template>
+
+                    <!-- MAIN TWEET -->
+                    <div class="px-4 pt-3 pb-3 tweet-border relative">
+                        <template x-if="panelThreadData.parents.length > 0">
+                            <div class="absolute w-0.5 bg-[var(--thread-line)] top-0 h-[12px] left-[36px] -translate-x-1/2 z-0"></div>
+                        </template>
+                        <div class="flex space-x-2 mb-3 relative z-10">
+                            <div class="w-10 h-10 rounded-full flex-shrink-0 relative bg-[var(--gray-700)] flex items-center justify-center font-bold text-[var(--white-icon)] uppercase overflow-hidden cursor-pointer" @click.stop="openProfileCard($event, panelThreadData.main)">
+                                <span x-text="getInitial(panelThreadData.main)"></span>
+                                <img :src="'/api/avatar/' + (panelThreadData.main.author.id || 'unknown')" @error="$el.style.display='none'" class="absolute inset-0 w-full h-full object-cover z-10" loading="lazy">
+                            </div>
+                            <div class="cursor-pointer flex-1" @click.stop="openProfileCard($event, panelThreadData.main)">
+                                <div class="font-bold text-[var(--text-primary)] hover:underline" x-text="panelThreadData.main.author.display_name || 'Unknown'"></div>
+                                <div class="text-[var(--text-secondary)]" x-text="'@' + (panelThreadData.main.author.username || 'unknown')"></div>
+                            </div>
+                        </div>
+                        <template x-if="getReplyTo(panelThreadData.main) && panelThreadData.parents.length === 0">
+                            <div class="text-[15px] text-[var(--text-secondary)] mb-2">
+                                Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo(panelThreadData.main))" x-text="'@' + getReplyTo(panelThreadData.main)"></span>
+                            </div>
+                        </template>
+                        <div class="text-[17px] whitespace-pre-wrap leading-normal break-words" x-html="formatText(panelThreadData.main)" @click="handleTextClick($event)"></div>
+                        <div x-html="renderCard(panelThreadData.main)" @click.stop></div>
+                        <div x-html="renderMediaGrid(panelThreadData.main.media)" @click.stop></div>
+
+                        <!-- Quote Tweet -->
+                        <template x-if="getQuoteTweet(panelThreadData.main)">
+                            <div>
+                                <template x-if="isTombstone(getQuoteTweet(panelThreadData.main))">
+                                    <div class="mt-3 bg-[var(--bg-secondary)] rounded-xl p-4 text-[15px] text-[var(--text-secondary)]" x-text="getQuoteText(getQuoteTweet(panelThreadData.main))"></div>
+                                </template>
+                                <template x-if="!isTombstone(getQuoteTweet(panelThreadData.main))">
+                                    <div class="mt-3 border border-[var(--border-color)] rounded-xl p-3 hover-bg transition cursor-pointer" @click.stop="openThread(getQuoteTweet(panelThreadData.main).rest_id || getQuoteTweet(panelThreadData.main).id_str, false, true)">
+                                        <div class="flex items-center space-x-1 text-[15px] mb-1">
+                                            <div class="w-5 h-5 rounded-full flex-shrink-0 relative bg-[var(--gray-700)] flex items-center justify-center font-bold text-[var(--white-icon)] uppercase text-xs overflow-hidden">
+                                                <span x-text="getQuoteAuthor(getQuoteTweet(panelThreadData.main)).initial"></span>
+                                                <img :src="'/api/avatar/' + getQuoteAuthor(getQuoteTweet(panelThreadData.main)).id" @error="$el.style.display='none'" class="absolute inset-0 w-full h-full object-cover z-10" loading="lazy">
+                                            </div>
+                                            <span class="font-bold text-[var(--text-primary)] truncate" x-text="getQuoteAuthor(getQuoteTweet(panelThreadData.main)).name"></span>
+                                            <span class="text-[var(--text-secondary)] truncate" x-text="'@' + getQuoteAuthor(getQuoteTweet(panelThreadData.main)).screen_name"></span>
+                                            <span class="text-[var(--text-secondary)]">·</span>
+                                            <span class="text-[var(--text-secondary)]" x-text="formatDate(getQuoteTweet(panelThreadData.main).legacy?.created_at || getQuoteTweet(panelThreadData.main).created_at)"></span>
+                                        </div>
+                                        <template x-if="getReplyTo({raw_json: getQuoteTweet(panelThreadData.main)})">
+                                            <div class="text-[15px] text-[var(--text-secondary)] mb-1">
+                                                Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo({raw_json: getQuoteTweet(panelThreadData.main)}))" x-text="'@' + getReplyTo({raw_json: getQuoteTweet(panelThreadData.main)})"></span>
+                                            </div>
+                                        </template>
+                                        <div class="text-[15px] whitespace-pre-wrap leading-normal break-words" x-html="formatText({text: getQuoteText(getQuoteTweet(panelThreadData.main)), raw_json: getQuoteTweet(panelThreadData.main)})" @click="handleTextClick($event)"></div>
+                                        <div x-html="renderCard({raw_json: getQuoteTweet(panelThreadData.main)})" @click.stop></div>
+                                        <div x-html="renderMediaGrid(panelThreadData.main.qt_media)" @click.stop></div>
+                                        <div x-html="renderCommunityNote(getQuoteTweet(panelThreadData.main), true)" @click.stop></div>
+                                    </div>
+                                </template>
+                            </div>
+                        </template>
+
+                        <div class="py-3 text-[var(--text-secondary)] flex items-center justify-between">
+                            <div class="roll-wrapper cursor-default">
+                                <div class="roll-inner">
+                                    <span class="roll-item" x-text="formatDate(panelThreadData.main.created_at, true)"></span>
+                                    <span class="roll-item text-[var(--accent-color)] font-medium" x-text="formatSyncDate(panelThreadData.main)"></span>
+                                </div>
+                            </div>
+                            <template x-if="panelThreadData.main.local_quote_count > 0">
+                                <button @click="openQuotes(panelThreadData.main.tweet_id, true)" class="text-[var(--accent-color)] hover:underline text-[15px] font-medium transition ml-auto">
+                                    Browse <span x-text="panelThreadData.main.local_quote_count"></span> Quote Tweets
+                                </button>
+                            </template>
+                        </div>
+                        <div x-html="renderCommunityNote(panelThreadData.main.raw_json)" @click.stop></div>
+                        <div x-html="renderActionBar(panelThreadData.main, true)"></div>
+                    </div>
+
+                    <!-- CHILDREN / REPLIES -->
+                    <template x-for="child in panelThreadData.children" :key="child.tweet_id">
+                        <div class="tweet-border">
+                            <div class="px-4 py-3 flex relative cursor-pointer hover-bg" @click="openThread(child.tweet_id, false, true)">
+                                <template x-if="child.op_replies && child.op_replies.length > 0">
+                                    <div class="w-0.5 bg-[var(--thread-line)] absolute top-[52px] bottom-0 left-[36px] -translate-x-1/2 z-0"></div>
+                                </template>
+                                <div class="w-10 h-10 rounded-full flex-shrink-0 relative bg-[var(--gray-700)] flex items-center justify-center font-bold text-[var(--white-icon)] uppercase overflow-hidden z-10 mr-2" @click.stop="openProfileCard($event, child)">
+                                    <span x-text="getInitial(child)"></span>
+                                    <img :src="'/api/avatar/' + (child.author.id || 'unknown')" @error="$el.style.display='none'" class="absolute inset-0 w-full h-full object-cover z-10" loading="lazy">
+                                </div>
+                                <div class="flex-1 min-w-0 z-10">
+                                    <div class="flex items-center space-x-1 text-[15px]">
+                                        <span class="font-bold text-[var(--text-primary)] truncate hover:underline" @click.stop="openProfileCard($event, child)" x-text="child.author.display_name || 'Unknown'"></span>
+                                        <span class="text-[var(--text-secondary)] truncate" x-text="'@' + (child.author.username || 'unknown')"></span>
+                                        <span class="text-[var(--text-secondary)]">·</span>
+                                        <div class="roll-wrapper text-[var(--text-secondary)]" @click.stop>
+                                            <div class="roll-inner">
+                                                <span class="roll-item hover:underline" x-text="formatDate(child.created_at)"></span>
+                                                <span class="roll-item text-[var(--accent-color)] text-[13px] font-medium" x-text="formatSyncDate(child)"></span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <template x-if="getReplyTo(child) && getReplyTo(child) !== (panelThreadData.main.author.username)">
+                                        <div class="text-[15px] text-[var(--text-secondary)] mb-1">
+                                            Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo(child))" x-text="'@' + getReplyTo(child)"></span>
+                                        </div>
+                                    </template>
+                                    <div class="text-[15px] mt-1 whitespace-pre-wrap leading-normal break-words" x-html="formatText(child)" @click="handleTextClick($event)"></div>
+                                    <div x-html="renderCard(child)" @click.stop></div>
+                                    <div x-html="renderMediaGrid(child.media)" @click.stop></div>
+                                    <div x-html="renderCommunityNote(child.raw_json)" @click.stop></div>
+                                    <div x-html="renderActionBar(child)"></div>
+                                </div>
+                            </div>
+                            <!-- OP Replies -->
+                            <template x-if="child.op_replies && child.op_replies.length > 0">
+                                <div>
+                                    <template x-for="(reply, rIdx) in child.op_replies" :key="reply.tweet_id">
+                                        <div class="px-4 pb-3 pt-0 flex relative cursor-pointer hover-bg" @click="openThread(reply.tweet_id, false, true)">
+                                            <div class="w-0.5 bg-[var(--thread-line)] absolute top-0 h-[16px] left-[36px] -translate-x-1/2 z-0"></div>
+                                            <template x-if="rIdx < child.op_replies.length - 1">
+                                                <div class="w-0.5 bg-[var(--thread-line)] absolute top-[40px] bottom-0 left-[36px] -translate-x-1/2 z-0"></div>
+                                            </template>
+                                            <div class="w-10 h-10 rounded-full flex-shrink-0 relative bg-[var(--gray-700)] flex items-center justify-center font-bold text-[var(--white-icon)] uppercase overflow-hidden z-10 mr-2" @click.stop="openProfileCard($event, reply)">
+                                                <span x-text="getInitial(reply)"></span>
+                                                <img :src="'/api/avatar/' + (reply.author.id || 'unknown')" @error="$el.style.display='none'" class="absolute inset-0 w-full h-full object-cover z-10" loading="lazy">
+                                            </div>
+                                            <div class="flex-1 min-w-0 z-10">
+                                                <div class="flex items-center space-x-1 text-[15px]">
+                                                    <span class="font-bold text-[var(--text-primary)] truncate hover:underline" @click.stop="openProfileCard($event, reply)" x-text="reply.author.display_name || 'Unknown'"></span>
+                                                    <span class="text-[var(--text-secondary)] truncate" x-text="'@' + (reply.author.username || 'unknown')"></span>
+                                                    <span class="text-[var(--text-secondary)]">·</span>
+                                                    <div class="roll-wrapper text-[var(--text-secondary)]" @click.stop>
+                                                        <div class="roll-inner">
+                                                            <span class="roll-item hover:underline" x-text="formatDate(reply.created_at)"></span>
+                                                            <span class="roll-item text-[var(--accent-color)] text-[13px] font-medium" x-text="formatSyncDate(reply)"></span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <template x-if="getReplyTo(reply)">
+                                                    <div class="text-[15px] text-[var(--text-secondary)] mb-1">
+                                                        Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo(reply))" x-text="'@' + getReplyTo(reply)"></span>
+                                                    </div>
+                                                </template>
+                                                <div class="text-[15px] mt-1 whitespace-pre-wrap leading-normal break-words" x-html="formatText(reply)" @click="handleTextClick($event)"></div>
+                                                <div x-html="renderCard(reply)" @click.stop></div>
+                                                <div x-html="renderMediaGrid(reply.media)" @click.stop></div>
+                                                <div x-html="renderCommunityNote(reply.raw_json)" @click.stop></div>
+                                                <div x-html="renderActionBar(reply)"></div>
+                                            </div>
+                                        </div>
+                                    </template>
+                                </div>
+                            </template>
+                        </div>
+                    </template>
+                </div>
+            </template>
+        </div>
+
+        <!-- Panel Quotes View -->
+        <div x-show="panelMode === 'quotes'" class="pb-20">
+            <template x-if="panelQuotesLoading && panelQuotesList.length === 0">
+                <div class="p-8 text-center text-[var(--text-secondary)]">Loading...</div>
+            </template>
+            <template x-if="!panelQuotesLoading && panelQuotesList.length === 0">
+                <div class="p-8 text-center text-[var(--text-secondary)]">No quote tweets found.</div>
+            </template>
+            <template x-if="panelThreadData && panelThreadData.main">
+                <div class="cursor-pointer transition border-b border-[var(--border-color)] pb-3 p-4">
+                    <div class="flex flex-col relative">
+                        <div class="flex space-x-2">
+                            <div class="flex-shrink-0 relative z-10 w-10">
+                                <img :src="'/api/avatar/' + panelThreadData.main.author.id" class="w-10 h-10 rounded-full bg-[var(--bg-secondary)]" loading="lazy">
+                            </div>
+                            <div class="flex-1 min-w-0 pb-1">
+                                <div class="flex items-center justify-between">
+                                    <div class="flex items-center space-x-1 overflow-hidden">
+                                        <span class="font-bold text-[15px] truncate text-[var(--text-primary)] hover:underline" x-text="panelThreadData.main.author.display_name" @click.stop="searchAuthor(panelThreadData.main.author.username)"></span>
+                                        <span class="text-[15px] text-[var(--text-secondary)] truncate" x-text="'@' + panelThreadData.main.author.username"></span>
+                                        <span class="text-[var(--text-secondary)] px-1">·</span>
+                                        <span class="text-[var(--text-secondary)] hover:underline" x-text="formatDate(panelThreadData.main.created_at)"></span>
+                                    </div>
+                                </div>
+                                <div class="text-[15px] mt-1 whitespace-pre-wrap leading-normal break-words" x-html="formatText(panelThreadData.main)" @click="handleTextClick($event)"></div>
+                                <div x-html="renderMediaGrid(panelThreadData.main.media)" @click.stop></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </template>
+            <template x-for="tweet in panelQuotesList" :key="tweet.tweet_id">
+                <div class="tweet-border cursor-pointer hover-bg transition p-4" @click="openThread(tweet.tweet_id, false, true)">
+                    <div class="flex space-x-2">
+                        <img :src="'/api/avatar/' + tweet.author.id" class="w-10 h-10 rounded-full flex-shrink-0 bg-[var(--bg-secondary)]" loading="lazy">
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center justify-between">
+                                <div class="flex items-center space-x-1 overflow-hidden">
+                                    <span class="font-bold text-[15px] truncate text-[var(--text-primary)] hover:underline" x-text="tweet.author.display_name" @click.stop="searchAuthor(tweet.author.username)"></span>
+                                    <span class="text-[15px] text-[var(--text-secondary)] truncate" x-text="'@' + tweet.author.username"></span>
+                                    <span class="text-[var(--text-secondary)] px-1">·</span>
+                                    <span class="text-[var(--text-secondary)] hover:underline" x-text="formatDate(tweet.created_at)"></span>
+                                </div>
+                            </div>
+                            <template x-if="getReplyTo(tweet)">
+                                <div class="text-[15px] text-[var(--text-secondary)] mb-1">
+                                    Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo(tweet))" x-text="'@' + getReplyTo(tweet)"></span>
+                                </div>
+                            </template>
+                            <div class="text-[15px] mt-1 whitespace-pre-wrap leading-normal break-words" x-html="formatText(tweet)" @click="handleTextClick($event)"></div>
+                            <div x-html="renderCard(tweet)" @click.stop></div>
+                            <div x-html="renderMediaGrid(tweet.media)" @click.stop></div>
+                            <div x-html="renderCommunityNote(tweet.raw_json)" @click.stop></div>
+                            <div x-html="renderActionBar(tweet)"></div>
+                        </div>
+                    </div>
+                </div>
+            </template>
+            <div x-intersect="if(!panelQuotesLoadingMore && panelQuotesPage < panelQuotesTotalPages) { panelQuotesPage++; fetchPanelQuotes(true); }" class="h-10"></div>
+            <template x-if="panelQuotesLoadingMore">
+                <div class="p-4 text-center text-[var(--text-secondary)]">Loading more...</div>
+            </template>
+        </div>
+    </div><!-- /RIGHT PANEL -->
+
         <!-- Lightbox Modal -->
         <div x-show="lightboxOpen" 
              @keydown.window.escape="lightboxOpen = false" 
@@ -661,7 +902,7 @@
                     </button>
                     <button @click="isEditingTags ? saveTags() : startEditingTags()" 
                             class="text-sm font-bold px-4 py-2 rounded-full transition"
-                            :class="isEditingTags ? 'bg-[var(--accent-color)] text-white hover:bg-[var(--accent-hover)]' : 'text-[var(--text-primary)] bg-[var(--bg-tertiary)] hover:bg-[var(--hover-bg)]'"
+                            :class="isEditingTags ? 'bg-[var(--accent-color)] text-[var(--accent-text)] hover:bg-[var(--accent-hover)]' : 'text-[var(--text-primary)] bg-[var(--bg-tertiary)] hover:bg-[var(--hover-bg)]'"
                             x-text="isEditingTags ? 'Save Changes' : 'Edit Tags'">
                     </button>
                 </div>
@@ -674,7 +915,7 @@
              class="fixed inset-0 z-[100] bg-black/60 flex justify-center items-center p-4 md:p-0" 
              x-cloak 
              @click.self="showSettingsModal = false">
-            <div class="bg-[var(--bg-primary)] md:rounded-2xl w-full h-full md:h-auto md:max-h-[85vh] md:max-w-3xl flex flex-col md:flex-row overflow-hidden shadow-2xl relative">
+            <div class="bg-[var(--bg-primary)] md:rounded-2xl w-full h-full md:h-[85vh] md:max-w-3xl flex flex-col md:flex-row overflow-hidden shadow-2xl relative">
                 
                 <!-- Sidebar -->
                 <div class="w-full md:w-64 border-b md:border-b-0 md:border-r border-[var(--border-color)] flex flex-col">
@@ -798,7 +1039,7 @@
                                 </div>
                                 
                                 <div class="mt-6 flex justify-end">
-                                    <button @click="submitMerge()" :disabled="!mergePrimaryTag || mergeTagsList.length === 0" class="bg-[var(--accent-color)] text-white font-bold py-2 px-6 rounded-full hover:bg-[var(--accent-hover)] transition disabled:opacity-50 disabled:cursor-not-allowed">
+                                    <button @click="submitMerge()" :disabled="!mergePrimaryTag || mergeTagsList.length === 0" class="bg-[var(--accent-color)] text-[var(--accent-text)] font-bold py-2 px-6 rounded-full hover:bg-[var(--accent-hover)] transition disabled:opacity-50 disabled:cursor-not-allowed">
                                         Merge Tags
                                     </button>
                                 </div>
@@ -861,7 +1102,7 @@
                                     <button @click="restoreConfigDefaults()" class="border border-[var(--border-color)] text-[var(--text-primary)] px-4 py-2 rounded-full font-bold hover:bg-[var(--bg-tertiary)] transition" :disabled="configSaving || !configData">
                                         Restore Defaults
                                     </button>
-                                    <button @click="saveConfig()" id="save-config-btn" class="bg-[var(--accent-color)] text-white px-4 py-2 rounded-full font-bold hover:bg-[var(--accent-hover)] transition" :disabled="configSaving || !configData">
+                                    <button @click="saveConfig()" id="save-config-btn" class="bg-[var(--accent-color)] text-[var(--accent-text)] px-4 py-2 rounded-full font-bold hover:bg-[var(--accent-hover)] transition" :disabled="configSaving || !configData">
                                         Save Config
                                     </button>
                                 </div>
@@ -938,7 +1179,7 @@
                         <div class="mb-8">
                             <h3 class="text-lg font-bold text-[var(--text-primary)] mb-2">Theme</h3>
                             <p class="text-sm text-[var(--text-secondary)] mb-4">Choose a theme for the interface.</p>
-                            <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
                                 <template x-for="(theme, key) in THEMES" :key="key">
                                     <button @click="applyTheme(key)" 
                                             :class="currentTheme === key ? 'ring-2 ring-[var(--accent-color)] ring-offset-2 ring-offset-[var(--bg-primary)]' : 'hover:opacity-80'"
@@ -967,6 +1208,29 @@
                             </div>
                         </div>
 
+
+                        <!-- Accent Color Picker (only for themes with selectable accents) -->
+                        <template x-if="THEMES[currentTheme]?._accents">
+                            <div class="mb-8">
+                                <h3 class="text-lg font-bold text-[var(--text-primary)] mb-2">Accent Color</h3>
+                                <p class="text-sm text-[var(--text-secondary)] mb-4">Choose an accent color for this theme.</p>
+                                <div class="flex flex-wrap gap-3">
+                                    <template x-for="a in THEMES[currentTheme]._accents" :key="currentTheme + '-' + a.color">
+                                        <button @click="setAccent(a)"
+                                                class="w-10 h-10 rounded-full transition-all duration-200 cursor-pointer hover:scale-110 flex items-center justify-center"
+                                                :class="currentAccent === a.color ? 'ring-2 ring-offset-2 ring-offset-[var(--bg-primary)]' : 'hover:opacity-80'"
+                                                :style="'background-color:' + a.color + (currentAccent === a.color ? ';--tw-ring-color:' + a.color : '')"
+                                                :title="a.name">
+                                            <template x-if="currentAccent === a.color">
+                                                <svg viewBox="0 0 24 24" class="w-5 h-5" :style="'fill:' + a.text">
+                                                    <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"></path>
+                                                </svg>
+                                            </template>
+                                        </button>
+                                    </template>
+                                </div>
+                            </div>
+                        </template>
 
                         <!-- Font Family -->
                         <div class="mb-8">
@@ -1003,7 +1267,7 @@
                                     {key: 'xl', label: 'Extra Large', px: '18px'}
                                 ]" :key="s.key">
                                     <button @click="setFontSize(s.key, s.px)"
-                                            :class="fontSize === s.key ? 'bg-[var(--accent-color)] text-white shadow-sm' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'"
+                                            :class="fontSize === s.key ? 'bg-[var(--accent-color)] text-[var(--accent-text)] shadow-sm' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'"
                                             class="flex-1 py-2 px-3 rounded-lg text-sm font-bold transition" x-text="s.label">
                                     </button>
                                 </template>
@@ -1020,12 +1284,422 @@
                                     {key: 'comfortable', label: 'Comfortable', px: '20px'}
                                 ]" :key="d.key">
                                     <button @click="setTweetDensity(d.key, d.px)"
-                                            :class="tweetDensity === d.key ? 'bg-[var(--accent-color)] text-white shadow-sm' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'"
+                                            :class="tweetDensity === d.key ? 'bg-[var(--accent-color)] text-[var(--accent-text)] shadow-sm' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'"
                                             class="flex-1 py-2 px-3 rounded-lg text-sm font-bold transition" x-text="d.label">
                                     </button>
                                 </template>
                             </div>
                         </div>
+
+                        <!-- Layout Mode -->
+                        <div class="mb-8">
+                            <h3 class="text-lg font-bold text-[var(--text-primary)] mb-2">Layout</h3>
+                            <p class="text-sm text-[var(--text-secondary)] mb-4">Choose how tweet details are displayed on desktop.</p>
+                            <div class="flex bg-[var(--bg-secondary)] rounded-xl p-1 gap-1">
+                                <button @click="toggleSplitPanel(false)"
+                                        :class="!splitPanel ? 'bg-[var(--accent-color)] text-[var(--accent-text)] shadow-sm' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'"
+                                        class="flex-1 py-2 px-3 rounded-lg text-sm font-bold transition flex items-center justify-center gap-2">
+                                    <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current"><path d="M3 3h18v18H3V3zm2 2v14h14V5H5z"></path></svg>
+                                    Single Column
+                                </button>
+                                <button @click="toggleSplitPanel(true)"
+                                        :class="splitPanel ? 'bg-[var(--accent-color)] text-[var(--accent-text)] shadow-sm' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'"
+                                        class="flex-1 py-2 px-3 rounded-lg text-sm font-bold transition flex items-center justify-center gap-2">
+                                    <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current"><path d="M3 3h18v18H3V3zm2 2v14h6V5H5zm8 0v14h6V5h-6z"></path></svg>
+                                    Split Panel
+                                </button>
+                            </div>
+                            <p class="text-xs text-[var(--text-secondary)] mt-2">Split Panel opens tweets in a side panel.</p>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+
+        <!-- Stats Modal (Twitter Analytics Style) -->
+        <div x-show="showStatsModal" 
+             @keydown.window.escape="showStatsModal = false" 
+             class="fixed inset-0 z-[100] bg-black/60 flex justify-center items-center p-4 md:p-6" 
+             x-cloak 
+             @click.self="showStatsModal = false">
+            <div class="bg-[var(--bg-primary)] rounded-2xl w-full h-full md:h-[85vh] md:max-w-5xl flex flex-col overflow-hidden shadow-2xl relative border border-[var(--border-color)]">
+                
+                <!-- Modal Header (Twitter-minimal) -->
+                <div class="stats-modal-header">
+                    <h2 class="stats-modal-title">Analytics</h2>
+                    <button @click="showStatsModal = false" class="text-[var(--text-secondary)] hover:text-[var(--text-primary)] p-2 rounded-full hover-bg transition">
+                        <svg viewBox="0 0 24 24" class="w-5 h-5 fill-current"><path d="M13.414 12l5.793-5.793c.39-.39.39-1.023 0-1.414s-1.024-.39-1.414 0L12 10.586 6.207 4.793c-.39-.39-1.023-.39-1.414 0s-.39 1.024 0 1.414L10.586 12l-5.793 5.793c-.39.39-.39 1.023 0 1.414.195.195.45.293.707.293s.512-.098.707-.293L12 13.414l5.793 5.793c.195.195.45.293.707.293s.512-.098.707-.293c.39-.39.39-1.023 0-1.414L13.414 12z"></path></svg>
+                    </button>
+                </div>
+
+                <!-- Scrollable Content -->
+                <div class="flex-1 overflow-y-auto p-4 md:p-6 space-y-8">
+
+                    <!-- ── Archive Overview ─────────────────────────────────── -->
+                    <div>
+                        <div class="flex items-center justify-between mb-4">
+                            <h3 class="stats-section-title">Archive overview</h3>
+                            <span x-show="lastSyncFormatted" class="text-xs text-[var(--text-secondary)]" x-text="lastSyncFormatted"></span>
+                        </div>
+
+                        <!-- Loading skeleton -->
+                        <template x-if="loadingStatsSummary">
+                            <div class="stats-grid">
+                                <template x-for="i in 4">
+                                    <div class="stats-card animate-pulse">
+                                        <div class="h-3 bg-[var(--bg-tertiary)] rounded w-2/3 mb-3"></div>
+                                        <div class="h-7 bg-[var(--bg-tertiary)] rounded w-1/2"></div>
+                                    </div>
+                                </template>
+                            </div>
+                        </template>
+
+                        <template x-if="!loadingStatsSummary && statsSummary">
+                            <div class="space-y-3">
+                                <!-- Owner badge -->
+                                <span class="text-xs font-bold uppercase tracking-wider text-[var(--accent-color)]" x-text="statsSummary.owner_user_id"></span>
+
+                                <!-- Primary 4-col metric grid -->
+                                <div class="stats-grid">
+                                    <div class="stats-card">
+                                        <div class="stats-label">Unique Posts <svg class="stats-info-icon" viewBox="0 0 24 24" fill="currentColor"><title>Deduplicated count of all bookmarked and liked posts</title><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path d="M11 17h2v-6h-2v6zm1-8a1 1 0 100-2 1 1 0 000 2z"/></svg></div>
+                                        <div class="stats-value" x-text="statsSummary.unique_posts.toLocaleString()"></div>
+                                        <div class="stats-subtitle">Bookmarked &amp; Liked</div>
+                                    </div>
+                                    <div class="stats-card">
+                                        <div class="stats-label">Media <svg class="stats-info-icon" viewBox="0 0 24 24" fill="currentColor"><title>Images, videos, and GIFs attached to saved posts</title><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path d="M11 17h2v-6h-2v6zm1-8a1 1 0 100-2 1 1 0 000 2z"/></svg></div>
+                                        <div class="stats-value" x-text="statsSummary.media_rows.toLocaleString()"></div>
+                                        <div class="stats-subtitle">Total rows</div>
+                                    </div>
+                                    <div class="stats-card">
+                                        <div class="stats-label">Articles <svg class="stats-info-icon" viewBox="0 0 24 24" fill="currentColor"><title>Unfurled article links extracted from posts</title><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path d="M11 17h2v-6h-2v6zm1-8a1 1 0 100-2 1 1 0 000 2z"/></svg></div>
+                                        <div class="stats-value" x-text="statsSummary.articles.toLocaleString()"></div>
+                                    </div>
+                                    <div class="stats-card">
+                                        <div class="stats-label">Linked URLs <svg class="stats-info-icon" viewBox="0 0 24 24" fill="currentColor"><title>Total URLs found in saved posts</title><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path d="M11 17h2v-6h-2v6zm1-8a1 1 0 100-2 1 1 0 000 2z"/></svg></div>
+                                        <div class="stats-value" x-text="statsSummary.urls.toLocaleString()"></div>
+                                    </div>
+                                </div>
+
+                                <!-- Secondary row: Authors + Date Range -->
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    <div class="stats-card">
+                                        <div class="stats-label">Authors <svg class="stats-info-icon" viewBox="0 0 24 24" fill="currentColor"><title>Distinct tweet authors in your archive</title><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path d="M11 17h2v-6h-2v6zm1-8a1 1 0 100-2 1 1 0 000 2z"/></svg></div>
+                                        <div class="stats-value" x-text="statsSummary.profiles.toLocaleString()"></div>
+                                        <div class="stats-subtitle">Unique profiles</div>
+                                    </div>
+                                    <div class="stats-card">
+                                        <div class="stats-label">Date range</div>
+                                        <div class="flex items-baseline gap-2 mt-1">
+                                            <span class="text-lg font-extrabold text-[var(--text-primary)]" x-text="statsSummary.oldest_post || 'N/A'"></span>
+                                            <span class="text-sm text-[var(--text-secondary)] font-medium">→</span>
+                                            <span class="text-lg font-extrabold text-[var(--text-primary)]" x-text="statsSummary.newest_post || 'N/A'"></span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+
+                    <!-- ── Collections ──────────────────────────────────────── -->
+                    <div>
+                        <h3 class="stats-section-title mb-4">Collections</h3>
+
+                        <template x-if="loadingStatsCollections">
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <template x-for="i in 2">
+                                    <div class="stats-card animate-pulse">
+                                        <div class="h-3 bg-[var(--bg-tertiary)] rounded w-1/3 mb-3"></div>
+                                        <div class="h-7 bg-[var(--bg-tertiary)] rounded w-1/2"></div>
+                                    </div>
+                                </template>
+                            </div>
+                        </template>
+
+                        <template x-if="!loadingStatsCollections && statsCollections.length">
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <template x-for="c in statsCollections" :key="c.collection">
+                                    <div class="stats-card">
+                                        <div class="flex items-center justify-between">
+                                            <div class="stats-label" x-text="c.collection"></div>
+                                            <span class="text-[11px] font-semibold text-[var(--accent-color)]" x-text="c.backfill_status"></span>
+                                        </div>
+                                        <div class="stats-value" x-text="c.count.toLocaleString()"></div>
+                                        <div class="stats-subtitle" x-text="c.oldest !== '-' ? (c.oldest + ' → ' + c.newest) : 'No posts saved'"></div>
+                                    </div>
+                                </template>
+                            </div>
+                        </template>
+                    </div>
+
+                    <!-- ── Pipeline Health ──────────────────────────────────── -->
+                    <div>
+                        <h3 class="stats-section-title mb-4">Pipeline health</h3>
+
+                        <template x-if="loadingStatsHealth">
+                            <div class="stats-grid">
+                                <template x-for="i in 4">
+                                    <div class="stats-card animate-pulse">
+                                        <div class="h-3 bg-[var(--bg-tertiary)] rounded w-2/3 mb-3"></div>
+                                        <div class="h-7 bg-[var(--bg-tertiary)] rounded w-1/3"></div>
+                                    </div>
+                                </template>
+                            </div>
+                        </template>
+
+                        <template x-if="!loadingStatsHealth && statsHealth">
+                            <div class="stats-grid">
+                                <div class="stats-card">
+                                    <div class="stats-label">Enriched <svg class="stats-info-icon" viewBox="0 0 24 24" fill="currentColor"><title>Posts that have been fully enriched with metadata</title><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path d="M11 17h2v-6h-2v6zm1-8a1 1 0 100-2 1 1 0 000 2z"/></svg></div>
+                                    <div class="stats-value" x-text="statsHealth.enrichment.done.toLocaleString()"></div>
+                                </div>
+                                <div class="stats-card">
+                                    <div class="stats-label">Pending <svg class="stats-info-icon" viewBox="0 0 24 24" fill="currentColor"><title>Posts awaiting enrichment processing</title><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path d="M11 17h2v-6h-2v6zm1-8a1 1 0 100-2 1 1 0 000 2z"/></svg></div>
+                                    <div class="stats-value" x-text="statsHealth.enrichment.pending.toLocaleString()"></div>
+                                </div>
+                                <div class="stats-card">
+                                    <div class="stats-label">Terminal <svg class="stats-info-icon" viewBox="0 0 24 24" fill="currentColor"><title>Posts that could not be enriched (deleted, protected, etc.)</title><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path d="M11 17h2v-6h-2v6zm1-8a1 1 0 100-2 1 1 0 000 2z"/></svg></div>
+                                    <div class="stats-value" x-text="statsHealth.enrichment.terminal.toLocaleString()"></div>
+                                </div>
+                                <div class="stats-card">
+                                    <div class="stats-label">Threads <svg class="stats-info-icon" viewBox="0 0 24 24" fill="currentColor"><title>Conversation threads that have been fully expanded</title><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path d="M11 17h2v-6h-2v6zm1-8a1 1 0 100-2 1 1 0 000 2z"/></svg></div>
+                                    <div class="stats-value" x-text="statsHealth.threads_expanded.toLocaleString()"></div>
+                                    <div class="stats-subtitle">Conversations expanded</div>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+
+                    <!-- ── Storage ──────────────────────────────────────────── -->
+                    <div>
+                        <div class="flex items-center justify-between mb-4">
+                            <h3 class="stats-section-title">Storage</h3>
+                            <!-- Segmented Control Toggle -->
+                            <div class="relative inline-grid grid-cols-2 bg-[var(--bg-tertiary)] p-1 rounded-full border border-[var(--border-color)] cursor-pointer select-none shadow-sm font-bold text-xs" @click="toggleStorageDetailView()">
+                                <div class="absolute top-1 bottom-1 w-[calc(50%-4px)] bg-[var(--accent-color)] rounded-full transition-all duration-300 ease-out shadow-sm"
+                                     :style="storageDetailedView ? 'left: 50%' : 'left: 4px'"></div>
+                                <div class="relative z-10 px-3.5 py-1 text-center transition-colors duration-300"
+                                     :class="!storageDetailedView ? 'text-[var(--accent-text)]' : 'text-[var(--text-secondary)]'">Simplified</div>
+                                <div class="relative z-10 px-3.5 py-1 text-center transition-colors duration-300"
+                                     :class="storageDetailedView ? 'text-[var(--accent-text)]' : 'text-[var(--text-secondary)]'">Detailed</div>
+                            </div>
+                        </div>
+
+                        <template x-if="storageLoading">
+                            <div class="stats-card py-12 text-center animate-pulse text-[var(--text-secondary)]">
+                                Computing disk space and database breakdown...
+                            </div>
+                        </template>
+
+                        <template x-if="!storageLoading && storageData">
+                            <div>
+                                <!-- Total Storage hero card -->
+                                <div class="stats-card mb-3">
+                                    <div class="stats-label">Total <svg class="stats-info-icon" viewBox="0 0 24 24" fill="currentColor"><title>Combined size of database and downloaded media</title><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path d="M11 17h2v-6h-2v6zm1-8a1 1 0 100-2 1 1 0 000 2z"/></svg></div>
+                                    <div class="stats-value" x-text="storageData.formatted_total"></div>
+                                </div>
+
+                                <div class="relative w-full" id="storage-diagram-container">
+                                    <!-- Segmented Bar -->
+                                    <div class="relative z-10 w-full h-10 flex transition-all duration-300 ease-in-out"
+                                     :class="storageGapsCollapsed ? 'gap-0' : 'gap-1'">
+                                    <template x-for="(seg, i) in getActiveStorageSegments()" :key="seg.id">
+                                        <div :style="'width: ' + getSegmentWidth(seg) + '%'" 
+                                             :class="{
+                                                 'bg-[var(--accent-color)] border-[var(--accent-color)] opacity-100 shadow-[0_0_12px_rgba(var(--accent-rgb),0.35)]': hoveredStorageId === seg.id,
+                                                 'bg-[var(--text-secondary)] border-[var(--text-secondary)] opacity-40': hoveredStorageId !== seg.id,
+                                                 'rounded-l-lg': i === 0,
+                                                 'rounded-r-lg': i === getActiveStorageSegments().length - 1
+                                             }"
+                                             class="storage-bar-seg h-full rounded-sm transition-[width] duration-500 ease-out cursor-pointer border shadow-sm"
+                                             @mouseenter="setHoveredStorage(seg.id)" 
+                                             @mouseleave="clearHoveredStorage()"
+                                             @click="toggleExpandStorage(seg.id)">
+                                        </div>
+                                    </template>
+                                </div>
+                                
+                                <!-- SVG Connector Lines -->
+                                <template x-for="(seg, i) in getActiveStorageSegments()" :key="seg.id">
+                                    <svg class="absolute top-0 left-0 w-full h-full pointer-events-none z-0 overflow-visible" style="min-height: 200px;">
+                                        <g stroke-linecap="round" stroke-linejoin="round">
+                                            <path :d="getTracePath(i)" 
+                                                  fill="none" 
+                                                  :stroke="hoveredStorageId === seg.id ? 'var(--accent-color)' : 'var(--text-secondary)'" 
+                                                  :stroke-opacity="hoveredStorageId === seg.id ? 1 : 0.40"
+                                                  :stroke-width="hoveredStorageId === seg.id ? 2.5 : 2" 
+                                                  stroke-dasharray="1000"
+                                                  :stroke-dashoffset="traceLinesDrawn ? 0 : 1000"
+                                                  class="transition-[stroke-dashoffset] duration-500 ease-out" />
+                                        </g>
+                                    </svg>
+                                </template>
+
+                                <!-- Category list inside a single card -->
+                                <div class="relative z-10 pt-12 pr-[45px]" id="storage-list-container">
+                                    <div class="stats-card" style="padding: 0; overflow: hidden;">
+                                        <template x-for="(seg, i) in getActiveStorageSegments()" :key="seg.id">
+                                            <div class="storage-row"
+                                                 :class="hoveredStorageId === seg.id ? 'bg-[var(--bg-tertiary)]' : ''"
+                                                 @mouseenter="setHoveredStorage(seg.id)" 
+                                                 @mouseleave="clearHoveredStorage()">
+                                                
+                                                <!-- Row content -->
+                                                <div class="storage-row-header flex items-center justify-between cursor-pointer px-5 py-3.5"
+                                                     :class="i > 0 ? 'border-t border-[var(--border-color)]' : ''"
+                                                     @click="toggleExpandStorage(seg.id)">
+                                                    <div class="flex items-center gap-3 min-w-0">
+                                                        <div class="min-w-0">
+                                                            <div class="text-[14px] font-semibold text-[var(--text-primary)]" x-text="seg.name"></div>
+                                                            <div class="text-[12px] text-[var(--text-secondary)] mt-0.5" x-text="seg.formatted_count || (seg.count.toLocaleString() + ' ' + seg.unit)"></div>
+                                                        </div>
+                                                    </div>
+                                                    <div class="flex items-center gap-3 flex-shrink-0">
+                                                        <div class="text-right">
+                                                            <div class="text-[14px] font-semibold text-[var(--text-primary)]" x-text="seg.formatted_size"></div>
+                                                            <div class="text-[12px] font-medium text-[var(--text-secondary)]"
+                                                                 :class="hoveredStorageId === seg.id ? 'text-[var(--accent-color)]' : ''"
+                                                                 x-text="seg.percent + '%'"></div>
+                                                        </div>
+                                                        <svg x-show="storageDetailedView" viewBox="0 0 24 24" class="w-4 h-4 fill-current text-[var(--text-secondary)] transition-transform duration-300"
+                                                             :class="expandedStorageId === seg.id ? 'rotate-180' : ''">
+                                                            <path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z"></path>
+                                                        </svg>
+                                                    </div>
+                                                </div>
+
+                                                <!-- Expandable Description -->
+                                                <div x-show="storageDetailedView && expandedStorageId === seg.id" x-collapse>
+                                                    <div class="px-5 pb-3.5">
+                                                        <div class="text-[13px] leading-relaxed text-[var(--text-secondary)]" x-text="seg.description"></div>
+                                                    </div>
+                                                </div>
+
+                                            </div>
+                                        </template>
+                                    </div>
+                                </div>
+                            </div>
+                            </div>
+                        </template>
+                    </div>
+
+                    <!-- ── Tagging & Search ─────────────────────────────────── -->
+                    <div>
+                        <h3 class="stats-section-title mb-4">Tagging &amp; search</h3>
+
+                        <template x-if="loadingStatsTags">
+                            <div class="stats-grid">
+                                <template x-for="i in 3">
+                                    <div class="stats-card animate-pulse">
+                                        <div class="h-3 bg-[var(--bg-tertiary)] rounded w-2/3 mb-3"></div>
+                                        <div class="h-7 bg-[var(--bg-tertiary)] rounded w-1/3"></div>
+                                    </div>
+                                </template>
+                            </div>
+                        </template>
+
+                        <template x-if="!loadingStatsTags && statsTags">
+                            <div class="space-y-3">
+                                <!-- Metric cards row -->
+                                <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                    <div class="stats-card">
+                                        <div class="stats-label">Coverage <svg class="stats-info-icon" viewBox="0 0 24 24" fill="currentColor"><title>Percentage of eligible media posts that have been tagged</title><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path d="M11 17h2v-6h-2v6zm1-8a1 1 0 100-2 1 1 0 000 2z"/></svg></div>
+                                        <div class="stats-value" x-text="statsTags.coverage_pct + '%'"></div>
+                                        <div class="stats-subtitle" x-text="statsTags.tagged_tweets.toLocaleString() + ' / ' + statsTags.eligible_tweets.toLocaleString() + ' eligible'"></div>
+                                    </div>
+                                    <div class="stats-card">
+                                        <div class="stats-label">Unique Tags <svg class="stats-info-icon" viewBox="0 0 24 24" fill="currentColor"><title>Total distinct tags across all tagged posts</title><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path d="M11 17h2v-6h-2v6zm1-8a1 1 0 100-2 1 1 0 000 2z"/></svg></div>
+                                        <div class="stats-value" x-text="statsTags.unique_tags.toLocaleString()"></div>
+                                    </div>
+                                    <div class="stats-card">
+                                        <div class="stats-label">Tagged Posts <svg class="stats-info-icon" viewBox="0 0 24 24" fill="currentColor"><title>Posts that have at least one search tag assigned</title><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path d="M11 17h2v-6h-2v6zm1-8a1 1 0 100-2 1 1 0 000 2z"/></svg></div>
+                                        <div class="stats-value" x-text="statsTags.tagged_tweets.toLocaleString()"></div>
+                                    </div>
+                                </div>
+
+                                <!-- Top tags horizontal scroll -->
+                                <div class="stats-card" x-data="{ canScrollLeft: false, canScrollRight: true }">
+                                    <div class="stats-label mb-3">Frequent topics</div>
+                                    <div class="relative overflow-hidden">
+                                        <!-- Left Fade -->
+                                        <div class="pointer-events-none absolute left-0 top-0 bottom-0 w-8 bg-gradient-to-r from-[var(--bg-secondary)] to-transparent z-10 transition-opacity duration-300"
+                                             :class="canScrollLeft ? 'opacity-100' : 'opacity-0'"></div>
+                                        <!-- Right Fade -->
+                                        <div class="pointer-events-none absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-[var(--bg-secondary)] to-transparent z-10 transition-opacity duration-300"
+                                             :class="canScrollRight ? 'opacity-100' : 'opacity-0'"></div>
+
+                                        <div class="flex items-center gap-2 overflow-x-auto py-0.5 px-1 scroll-smooth [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+                                             x-init="$nextTick(() => { canScrollRight = $el.scrollWidth > $el.clientWidth })"
+                                             @scroll="canScrollLeft = $el.scrollLeft > 4; canScrollRight = $el.scrollLeft < ($el.scrollWidth - $el.clientWidth - 4)">
+                                            <template x-for="t in statsTags.top_tags" :key="t.tag">
+                                                <div class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[var(--bg-primary)] hover:bg-[var(--bg-tertiary)] transition-colors text-xs font-bold text-[var(--text-primary)] whitespace-nowrap flex-shrink-0 cursor-default select-none border border-[var(--border-color)]">
+                                                    <span class="text-[var(--accent-color)] font-extrabold" x-text="'#' + t.tag"></span>
+                                                    <span class="text-[11px] font-medium text-[var(--text-secondary)] ml-0.5" x-text="t.count.toLocaleString() + ' posts'"></span>
+                                                </div>
+                                            </template>
+                                            <template x-if="!statsTags.top_tags || !statsTags.top_tags.length">
+                                                <span class="text-xs text-[var(--text-secondary)] italic">No tags generated yet.</span>
+                                            </template>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+
+                </div>
+            </div>
+        </div>   </template>
+
+        <!-- Mini Profile Card Modal -->
+        <template x-if="profileCard">
+            <div id="profile-card-modal" class="fixed z-[100] bg-[var(--dropdown-bg)] border border-[var(--border-color)] rounded-xl shadow-[0_0_15px_rgba(255,255,255,0.1)] w-[300px]"
+                 :style="`left: ${profileCard?.x}px; top: ${profileCard?.y}px;`"
+                 @click.outside="closeProfileCard()"
+                 @keydown.escape.window="closeProfileCard()"
+                 @scroll.window="closeProfileCard()">
+                <div class="p-4 flex flex-col">
+                    <div class="flex justify-between items-start mb-3">
+                        <div class="w-16 h-16 rounded-full overflow-hidden bg-[var(--gray-700)] flex items-center justify-center font-bold text-2xl text-[var(--white-icon)] relative flex-shrink-0">
+                            <span x-text="profileCard?.initial"></span>
+                            <img :src="'/api/avatar/' + profileCard?.id" @error="$el.style.display='none'" class="absolute inset-0 w-full h-full object-cover z-10" loading="lazy">
+                        </div>
+                        <button class="bg-[var(--text-primary)] text-[var(--bg-primary)] px-4 py-1.5 rounded-full font-bold text-[15px] hover:opacity-90 transition"
+                                @click="searchFrom(profileCard?.username); closeProfileCard()">
+                            Search
+                        </button>
+                    </div>
+                    <div class="flex flex-col mb-3">
+                        <span class="font-bold text-[17px] text-[var(--text-primary)] leading-tight truncate" x-text="profileCard?.name"></span>
+                        <span class="text-[15px] text-[var(--text-secondary)] truncate" x-text="'@' + profileCard?.username"></span>
+                    </div>
+                    <template x-if="profileCard?.description">
+                        <div class="text-[14px] text-[var(--text-primary)] leading-snug mb-3 whitespace-pre-wrap" x-html="formatText({text: profileCard?.description})" @click="handleTextClick($event)"></div>
+                    </template>
+                    <div class="flex items-center justify-between w-full mt-1 mb-1">
+                        <template x-if="profileCard && (profileCard.followingCount > 0 || profileCard.followersCount > 0)">
+                            <div class="flex items-center space-x-4">
+                                <span class="text-[14px] text-[var(--text-secondary)]"><span class="font-bold text-[var(--text-primary)]" x-text="profileCard?.followingCount?.toLocaleString()"></span> Following</span>
+                                <span class="text-[14px] text-[var(--text-secondary)]"><span class="font-bold text-[var(--text-primary)]" x-text="profileCard?.followersCount?.toLocaleString()"></span> Followers</span>
+                            </div>
+                        </template>
+                        
+                        <template x-if="profileCard?.syncDate">
+                            <div class="group relative flex items-center text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors cursor-help shrink-0 ml-auto">
+                                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                </svg>
+                                <div class="absolute bottom-full right-0 mb-1 px-2 py-1 text-[11px] font-bold bg-[var(--text-primary)] text-[var(--bg-primary)] rounded whitespace-nowrap opacity-0 group-hover:opacity-100 z-[101] pointer-events-none">
+                                    Fetched <span x-text="formatRelativeDate(profileCard?.syncDate)"></span> (<span x-text="formatDate(profileCard?.syncDate, true)"></span>)
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+        </template>
 
                     </div>
 
@@ -1038,1506 +1712,12 @@
             x-show="showScrollTop" 
             x-transition.opacity.duration.300ms
             @click="scrollToTop()"
-            class="fixed bottom-6 right-6 bg-[var(--accent-color)] text-white p-3 rounded-full shadow-lg hover:bg-[var(--accent-hover)] transition z-40"
+            class="fixed bottom-6 right-6 bg-[var(--accent-color)] text-[var(--accent-text)] p-3 rounded-full shadow-lg hover:bg-[var(--accent-hover)] transition z-40"
             aria-label="Scroll to top"
         >
             <svg viewBox="0 0 24 24" class="w-6 h-6 fill-current"><path d="M12 4l-8 8h6v8h4v-8h6l-8-8z"></path></svg>
         </button>
 
     </div>
-
-    <script>
-        const THEMES = {
-            'classic-dark': {
-                _name: 'Classic Dark',
-                '--bg-primary': '#000000', '--bg-secondary': '#202327', '--bg-tertiary': 'rgba(239,243,244,0.1)',
-                '--bg-header': 'rgba(0,0,0,0.8)', '--text-primary': '#e7e9ea', '--text-secondary': '#71767b',
-                '--border-color': '#2f3336', '--hover-bg': 'rgba(255,255,255,0.03)', '--scrollbar-bg': '#000000',
-                '--scrollbar-thumb': '#3e4144', '--scrollbar-thumb-hover': '#55585b', '--thread-line': '#333639',
-                '--input-border': '#2f3336', '--white-icon': '#ffffff', '--dropdown-bg': '#000000',
-                '--gray-700': '#374151', '--accent-color': '#1d9bf0', '--accent-hover': '#1a8cd8',
-                '--danger-color': '#f91880', '--danger-hover': '#e01673'
-            },
-            'classic-light': {
-                _name: 'Classic Light',
-                '--bg-primary': '#ffffff', '--bg-secondary': '#eff3f4', '--bg-tertiary': 'rgba(15,20,25,0.1)',
-                '--bg-header': 'rgba(255,255,255,0.85)', '--text-primary': '#0f1419', '--text-secondary': '#536471',
-                '--border-color': '#eff3f4', '--hover-bg': 'rgba(0,0,0,0.03)', '--scrollbar-bg': '#ffffff',
-                '--scrollbar-thumb': '#c1c8cd', '--scrollbar-thumb-hover': '#aab8c2', '--thread-line': '#cfd9de',
-                '--input-border': '#cfd9de', '--white-icon': '#0f1419', '--dropdown-bg': '#ffffff',
-                '--gray-700': '#536471', '--accent-color': '#1d9bf0', '--accent-hover': '#1a8cd8',
-                '--danger-color': '#f91880', '--danger-hover': '#e01673'
-            },
-            'dracula': {
-                _name: 'Dracula',
-                '--bg-primary': '#282a36', '--bg-secondary': '#44475a', '--bg-tertiary': 'rgba(248,248,242,0.08)',
-                '--bg-header': 'rgba(40,42,54,0.9)', '--text-primary': '#f8f8f2', '--text-secondary': '#6272a4',
-                '--border-color': '#44475a', '--hover-bg': 'rgba(248,248,242,0.03)', '--scrollbar-bg': '#282a36',
-                '--scrollbar-thumb': '#44475a', '--scrollbar-thumb-hover': '#6272a4', '--thread-line': '#44475a',
-                '--input-border': '#44475a', '--white-icon': '#f8f8f2', '--dropdown-bg': '#282a36',
-                '--gray-700': '#6272a4', '--accent-color': '#bd93f9', '--accent-hover': '#a87bf5',
-                '--danger-color': '#ff5555', '--danger-hover': '#ff6e6e'
-            },
-            'nord': {
-                _name: 'Nord',
-                '--bg-primary': '#2e3440', '--bg-secondary': '#3b4252', '--bg-tertiary': 'rgba(236,239,244,0.08)',
-                '--bg-header': 'rgba(46,52,64,0.9)', '--text-primary': '#eceff4', '--text-secondary': '#81a1c1',
-                '--border-color': '#3b4252', '--hover-bg': 'rgba(236,239,244,0.03)', '--scrollbar-bg': '#2e3440',
-                '--scrollbar-thumb': '#434c5e', '--scrollbar-thumb-hover': '#4c566a', '--thread-line': '#434c5e',
-                '--input-border': '#3b4252', '--white-icon': '#eceff4', '--dropdown-bg': '#2e3440',
-                '--gray-700': '#4c566a', '--accent-color': '#88c0d0', '--accent-hover': '#7ab4c4',
-                '--danger-color': '#bf616a', '--danger-hover': '#d08770'
-            },
-            'solarized-dark': {
-                _name: 'Solarized Dark',
-                '--bg-primary': '#002b36', '--bg-secondary': '#073642', '--bg-tertiary': 'rgba(131,148,150,0.1)',
-                '--bg-header': 'rgba(0,43,54,0.9)', '--text-primary': '#839496', '--text-secondary': '#586e75',
-                '--border-color': '#073642', '--hover-bg': 'rgba(131,148,150,0.05)', '--scrollbar-bg': '#002b36',
-                '--scrollbar-thumb': '#073642', '--scrollbar-thumb-hover': '#586e75', '--thread-line': '#073642',
-                '--input-border': '#073642', '--white-icon': '#839496', '--dropdown-bg': '#002b36',
-                '--gray-700': '#586e75', '--accent-color': '#b58900', '--accent-hover': '#a37b00',
-                '--danger-color': '#dc322f', '--danger-hover': '#cb4b16'
-            },
-            'solarized-light': {
-                _name: 'Solarized Light',
-                '--bg-primary': '#fdf6e3', '--bg-secondary': '#eee8d5', '--bg-tertiary': 'rgba(101,123,131,0.08)',
-                '--bg-header': 'rgba(253,246,227,0.9)', '--text-primary': '#657b83', '--text-secondary': '#93a1a1',
-                '--border-color': '#eee8d5', '--hover-bg': 'rgba(101,123,131,0.03)', '--scrollbar-bg': '#fdf6e3',
-                '--scrollbar-thumb': '#eee8d5', '--scrollbar-thumb-hover': '#93a1a1', '--thread-line': '#eee8d5',
-                '--input-border': '#eee8d5', '--white-icon': '#657b83', '--dropdown-bg': '#fdf6e3',
-                '--gray-700': '#93a1a1', '--accent-color': '#268bd2', '--accent-hover': '#1f7abc',
-                '--danger-color': '#dc322f', '--danger-hover': '#cb4b16'
-            },
-            'gruvbox': {
-                _name: 'Gruvbox Dark',
-                '--bg-primary': '#282828', '--bg-secondary': '#3c3836', '--bg-tertiary': 'rgba(235,219,178,0.08)',
-                '--bg-header': 'rgba(40,40,40,0.9)', '--text-primary': '#ebdbb2', '--text-secondary': '#a89984',
-                '--border-color': '#3c3836', '--hover-bg': 'rgba(235,219,178,0.03)', '--scrollbar-bg': '#282828',
-                '--scrollbar-thumb': '#504945', '--scrollbar-thumb-hover': '#665c54', '--thread-line': '#504945',
-                '--input-border': '#3c3836', '--white-icon': '#ebdbb2', '--dropdown-bg': '#282828',
-                '--gray-700': '#665c54', '--accent-color': '#fe8019', '--accent-hover': '#e57312',
-                '--danger-color': '#fb4934', '--danger-hover': '#cc241d'
-            },
-            'catppuccin': {
-                _name: 'Catppuccin Mocha',
-                '--bg-primary': '#1e1e2e', '--bg-secondary': '#313244', '--bg-tertiary': 'rgba(205,214,244,0.08)',
-                '--bg-header': 'rgba(30,30,46,0.9)', '--text-primary': '#cdd6f4', '--text-secondary': '#a6adc8',
-                '--border-color': '#313244', '--hover-bg': 'rgba(205,214,244,0.03)', '--scrollbar-bg': '#1e1e2e',
-                '--scrollbar-thumb': '#45475a', '--scrollbar-thumb-hover': '#585b70', '--thread-line': '#45475a',
-                '--input-border': '#313244', '--white-icon': '#cdd6f4', '--dropdown-bg': '#1e1e2e',
-                '--gray-700': '#585b70', '--accent-color': '#cba6f7', '--accent-hover': '#b48def',
-                '--danger-color': '#f38ba8', '--danger-hover': '#eba0ac'
-            },
-            'tokyo-night': {
-                _name: 'Tokyo Night',
-                '--bg-primary': '#1a1b26', '--bg-secondary': '#24283b', '--bg-tertiary': 'rgba(169,177,214,0.08)',
-                '--bg-header': 'rgba(26,27,38,0.9)', '--text-primary': '#a9b1d6', '--text-secondary': '#565f89',
-                '--border-color': '#24283b', '--hover-bg': 'rgba(169,177,214,0.03)', '--scrollbar-bg': '#1a1b26',
-                '--scrollbar-thumb': '#292e42', '--scrollbar-thumb-hover': '#3b4261', '--thread-line': '#292e42',
-                '--input-border': '#24283b', '--white-icon': '#a9b1d6', '--dropdown-bg': '#1a1b26',
-                '--gray-700': '#3b4261', '--accent-color': '#7aa2f7', '--accent-hover': '#6690e6',
-                '--danger-color': '#f7768e', '--danger-hover': '#ff899d'
-            },
-            'rose-pine': {
-                _name: 'Rosé Pine',
-                '--bg-primary': '#191724', '--bg-secondary': '#1f1d2e', '--bg-tertiary': 'rgba(224,222,244,0.08)',
-                '--bg-header': 'rgba(25,23,36,0.9)', '--text-primary': '#e0def4', '--text-secondary': '#908caa',
-                '--border-color': '#26233a', '--hover-bg': 'rgba(224,222,244,0.03)', '--scrollbar-bg': '#191724',
-                '--scrollbar-thumb': '#26233a', '--scrollbar-thumb-hover': '#393552', '--thread-line': '#26233a',
-                '--input-border': '#26233a', '--white-icon': '#e0def4', '--dropdown-bg': '#191724',
-                '--gray-700': '#393552', '--accent-color': '#c4a7e7', '--accent-hover': '#b392d9',
-                '--danger-color': '#eb6f92', '--danger-hover': '#b4637a'
-            },
-            'one-dark': {
-                _name: 'One Dark',
-                '--bg-primary': '#282c34', '--bg-secondary': '#21252b', '--bg-tertiary': 'rgba(171,178,191,0.08)',
-                '--bg-header': 'rgba(40,44,52,0.9)', '--text-primary': '#abb2bf', '--text-secondary': '#5c6370',
-                '--border-color': '#3e4451', '--hover-bg': 'rgba(171,178,191,0.03)', '--scrollbar-bg': '#282c34',
-                '--scrollbar-thumb': '#3e4451', '--scrollbar-thumb-hover': '#4b5263', '--thread-line': '#3e4451',
-                '--input-border': '#3e4451', '--white-icon': '#abb2bf', '--dropdown-bg': '#282c34',
-                '--gray-700': '#4b5263', '--accent-color': '#61afef', '--accent-hover': '#519fdf',
-                '--danger-color': '#e06c75', '--danger-hover': '#be5046'
-            },
-            'monokai': {
-                _name: 'Monokai',
-                '--bg-primary': '#272822', '--bg-secondary': '#3e3d32', '--bg-tertiary': 'rgba(248,248,242,0.08)',
-                '--bg-header': 'rgba(39,40,34,0.9)', '--text-primary': '#f8f8f2', '--text-secondary': '#75715e',
-                '--border-color': '#3e3d32', '--hover-bg': 'rgba(248,248,242,0.03)', '--scrollbar-bg': '#272822',
-                '--scrollbar-thumb': '#49483e', '--scrollbar-thumb-hover': '#75715e', '--thread-line': '#49483e',
-                '--input-border': '#3e3d32', '--white-icon': '#f8f8f2', '--dropdown-bg': '#272822',
-                '--gray-700': '#75715e', '--accent-color': '#a6e22e', '--accent-hover': '#94cc29',
-                '--danger-color': '#f92672', '--danger-hover': '#ff4d88'
-            },
-            'github-dark': {
-                _name: 'GitHub Dark',
-                '--bg-primary': '#0d1117', '--bg-secondary': '#161b22', '--bg-tertiary': 'rgba(201,209,217,0.08)',
-                '--bg-header': 'rgba(13,17,23,0.9)', '--text-primary': '#c9d1d9', '--text-secondary': '#8b949e',
-                '--border-color': '#30363d', '--hover-bg': 'rgba(177,186,196,0.12)', '--scrollbar-bg': '#0d1117',
-                '--scrollbar-thumb': '#484f58', '--scrollbar-thumb-hover': '#6e7681', '--thread-line': '#30363d',
-                '--input-border': '#30363d', '--white-icon': '#c9d1d9', '--dropdown-bg': '#0d1117',
-                '--gray-700': '#484f58', '--accent-color': '#58a6ff', '--accent-hover': '#79c0ff',
-                '--danger-color': '#f85149', '--danger-hover': '#da3633'
-            },
-            'github-light': {
-                _name: 'GitHub Light',
-                '--bg-primary': '#ffffff', '--bg-secondary': '#f6f8fa', '--bg-tertiary': 'rgba(36,41,47,0.05)',
-                '--bg-header': 'rgba(255,255,255,0.9)', '--text-primary': '#24292f', '--text-secondary': '#57606a',
-                '--border-color': '#d0d7de', '--hover-bg': 'rgba(208,215,222,0.32)', '--scrollbar-bg': '#ffffff',
-                '--scrollbar-thumb': '#afb8c1', '--scrollbar-thumb-hover': '#8c959f', '--thread-line': '#d0d7de',
-                '--input-border': '#d0d7de', '--white-icon': '#24292f', '--dropdown-bg': '#ffffff',
-                '--gray-700': '#57606a', '--accent-color': '#0969da', '--accent-hover': '#0349b4',
-                '--danger-color': '#cf222e', '--danger-hover': '#a40e26'
-            },
-            'cyberpunk': {
-                _name: 'Cyberpunk',
-                '--bg-primary': '#0e0b16', '--bg-secondary': '#1a1025', '--bg-tertiary': 'rgba(240,240,240,0.05)',
-                '--bg-header': 'rgba(14,11,22,0.9)', '--text-primary': '#e0e0e0', '--text-secondary': '#a0a0a0',
-                '--border-color': '#4717f6', '--hover-bg': 'rgba(231,223,221,0.08)', '--scrollbar-bg': '#0e0b16',
-                '--scrollbar-thumb': '#4717f6', '--scrollbar-thumb-hover': '#a239ca', '--thread-line': '#4717f6',
-                '--input-border': '#4717f6', '--white-icon': '#e0e0e0', '--dropdown-bg': '#0e0b16',
-                '--gray-700': '#a0a0a0', '--accent-color': '#00ffcc', '--accent-hover': '#00cc99',
-                '--danger-color': '#ff003c', '--danger-hover': '#d90033'
-            },
-            'synthwave': {
-                _name: 'Synthwave \'84',
-                '--bg-primary': '#262335', '--bg-secondary': '#241b2f', '--bg-tertiary': 'rgba(255,255,255,0.05)',
-                '--bg-header': 'rgba(38,35,53,0.9)', '--text-primary': '#ffffff', '--text-secondary': '#8b8b99',
-                '--border-color': '#362f4b', '--hover-bg': 'rgba(255,255,255,0.03)', '--scrollbar-bg': '#262335',
-                '--scrollbar-thumb': '#362f4b', '--scrollbar-thumb-hover': '#8b8b99', '--thread-line': '#362f4b',
-                '--input-border': '#362f4b', '--white-icon': '#ffffff', '--dropdown-bg': '#262335',
-                '--gray-700': '#8b8b99', '--accent-color': '#f92aad', '--accent-hover': '#e2259b',
-                '--danger-color': '#ff3366', '--danger-hover': '#ff0044'
-            },
-            'aura-dark': {
-                _name: 'Aura Dark',
-                '--bg-primary': '#15141b', '--bg-secondary': '#21202e', '--bg-tertiary': 'rgba(237,224,212,0.08)',
-                '--bg-header': 'rgba(21,20,27,0.9)', '--text-primary': '#ede0d4', '--text-secondary': '#a2a2a2',
-                '--border-color': '#21202e', '--hover-bg': 'rgba(237,224,212,0.03)', '--scrollbar-bg': '#15141b',
-                '--scrollbar-thumb': '#3c3b4a', '--scrollbar-thumb-hover': '#6b6a7a', '--thread-line': '#3c3b4a',
-                '--input-border': '#3c3b4a', '--white-icon': '#ede0d4', '--dropdown-bg': '#15141b',
-                '--gray-700': '#6b6a7a', '--accent-color': '#82e2ff', '--accent-hover': '#5eccff',
-                '--danger-color': '#ff7373', '--danger-hover': '#ff5c5c'
-            },
-            'vesper': {
-                _name: 'Vesper',
-                '--bg-primary': '#101010', '--bg-secondary': '#161616', '--bg-tertiary': 'rgba(255,255,255,0.05)',
-                '--bg-header': 'rgba(16,16,16,0.9)', '--text-primary': '#cccccc', '--text-secondary': '#777777',
-                '--border-color': '#222222', '--hover-bg': 'rgba(255,255,255,0.03)', '--scrollbar-bg': '#101010',
-                '--scrollbar-thumb': '#333333', '--scrollbar-thumb-hover': '#555555', '--thread-line': '#222222',
-                '--input-border': '#222222', '--white-icon': '#cccccc', '--dropdown-bg': '#101010',
-                '--gray-700': '#555555', '--accent-color': '#ffc799', '--accent-hover': '#ffb073',
-                '--danger-color': '#ff5f5f', '--danger-hover': '#ff4d4d'
-            },
-            'material-ocean': {
-                _name: 'Material Ocean',
-                '--bg-primary': '#0f111a', '--bg-secondary': '#1a1c29', '--bg-tertiary': 'rgba(255,255,255,0.05)',
-                '--bg-header': 'rgba(15,17,26,0.9)', '--text-primary': '#8f93a2', '--text-secondary': '#4a4d5d',
-                '--border-color': '#1f2233', '--hover-bg': 'rgba(255,255,255,0.03)', '--scrollbar-bg': '#0f111a',
-                '--scrollbar-thumb': '#1f2233', '--scrollbar-thumb-hover': '#4a4d5d', '--thread-line': '#1f2233',
-                '--input-border': '#1f2233', '--white-icon': '#8f93a2', '--dropdown-bg': '#0f111a',
-                '--gray-700': '#4a4d5d', '--accent-color': '#80cbc4', '--accent-hover': '#5fbcb3',
-                '--danger-color': '#ff5370', '--danger-hover': '#f07178'
-            },
-            'gruvbox-light': {
-                _name: 'Gruvbox Light',
-                '--bg-primary': '#fbf1c7', '--bg-secondary': '#ebdbb2', '--bg-tertiary': 'rgba(0,0,0,0.05)',
-                '--bg-header': 'rgba(251,241,199,0.9)', '--text-primary': '#3c3836', '--text-secondary': '#7c6f64',
-                '--border-color': '#d5c4a1', '--hover-bg': 'rgba(0,0,0,0.03)', '--scrollbar-bg': '#fbf1c7',
-                '--scrollbar-thumb': '#bdae93', '--scrollbar-thumb-hover': '#a89984', '--thread-line': '#d5c4a1',
-                '--input-border': '#d5c4a1', '--white-icon': '#3c3836', '--dropdown-bg': '#fbf1c7',
-                '--gray-700': '#7c6f64', '--accent-color': '#d65d0e', '--accent-hover': '#af3a03',
-                '--danger-color': '#9d0006', '--danger-hover': '#cc241d'
-            }
-        };
-
-        const FONT_URLS = {
-            inter: 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap',
-            roboto: 'https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap',
-            jakarta: 'https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;700&display=swap',
-            outfit: 'https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;700&display=swap',
-            nunito: 'https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700&display=swap',
-            jetbrains: 'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap',
-        };
-
-        function tweetApp() {
-            return {
-                viewMode: 'list',
-                tweets: [],
-                loading: true,
-                loadingMore: false,
-                page: 1,
-                totalPages: 1,
-                total: 0,
-                collectionFilter: 'all',
-                sortOrder: 'default',
-                searchQuery: '',
-                error: null,
-                
-                threadData: null,
-                loadingThread: false,
-                
-                quotesTweetId: null,
-                quotesList: [],
-                quotesPage: 1,
-                quotesTotalPages: 1,
-                quotesLoading: false,
-                quotesLoadingMore: false,
-                
-                lightboxOpen: false,
-                lightboxMedia: [],
-                lightboxIndex: 0,
-                videoObserver: null,
-
-                tagModalOpen: false,
-                tagModalData: null,
-                tagModalTweetId: null,
-                
-                isEditingTags: false,
-                editableTags: [],
-                tagSearchQuery: '',
-                tagAutocompleteOptions: [],
-                tagSearchDropdown: false,
-                
-                showSettingsModal: false,
-                settingsTab: 'tags',
-                globalTags: [],
-                globalTagsLoading: false,
-                tagSearchTerm: '',
-                
-                configSchema: null,
-                configData: null,
-                configSaving: false,
-                showAdvancedConfig: false,
-                
-                mergePrimaryTag: '',
-                mergeTagsList: [],
-                mergeSearchTerm: '',
-                mergePrimarySearchTerm: '',
-                mergePrimaryDropdown: false,
-                mergeTagsDropdown: false,
-                mergeSelectedIndex: 0,
-                primarySelectedIndex: 0,
-                
-                showScrollTop: false,
-                lastSyncAt: null,
-                lastSyncFormatted: '',
-                darkMode: true,
-                
-                THEMES: THEMES,
-                currentTheme: 'classic-dark',
-
-                fontFamily: 'system',
-                fontSize: 'default',
-                tweetDensity: 'default',
-
-                initApp() {
-                    if ('scrollRestoration' in history) {
-                        history.scrollRestoration = 'manual';
-                    }
-                    
-
-                    const savedTheme = localStorage.getItem('tvx-theme') || localStorage.getItem('theme');
-                    if (savedTheme && THEMES[savedTheme]) {
-                        this.applyTheme(savedTheme);
-                    } else if (savedTheme === 'light') {
-                        this.applyTheme('classic-light');
-                    }
-                    
-                    const savedFont = localStorage.getItem('tvx-font');
-                    const savedFontFamily = localStorage.getItem('tvx-font-family');
-                    if (savedFont && savedFontFamily) {
-                        this.fontFamily = savedFont;
-                        this.loadFont(savedFont);
-                        document.body.style.fontFamily = savedFontFamily;
-                    }
-                    
-                    const savedFontSize = localStorage.getItem('tvx-font-size');
-                    const savedFontSizePx = localStorage.getItem('tvx-font-size-px');
-                    if (savedFontSize && savedFontSizePx) {
-                        this.fontSize = savedFontSize;
-                        document.documentElement.style.setProperty('--font-size-base', savedFontSizePx);
-                    }
-                    
-                    const savedDensity = localStorage.getItem('tvx-density');
-                    const savedDensityPx = localStorage.getItem('tvx-density-px');
-                    if (savedDensity && savedDensityPx) {
-                        this.tweetDensity = savedDensity;
-                        document.documentElement.style.setProperty('--tweet-padding', savedDensityPx);
-                    }
-                    
-                    window.addEventListener('scroll', () => {
-                        this.showScrollTop = window.scrollY > 300;
-                    });
-                    
-                    this.fetchStats();
-                    
-                    this.$watch('showSettingsModal', val => {
-                        if (val) {
-                            this.fetchGlobalTags();
-                            this.fetchConfig();
-                        }
-                    });
-                    
-                    window.addEventListener('open-lightbox', (e) => {
-                        this.lightboxMedia = e.detail.media;
-                        this.lightboxIndex = e.detail.index;
-                        this.lightboxOpen = true;
-                    });
-                    
-                    this.videoObserver = new IntersectionObserver((entries) => {
-                        entries.forEach(e => {
-                            if (e.target.tagName === 'VIDEO') {
-                                if (!e.isIntersecting) {
-                                    e.target.pause();
-                                } else if (e.target.hasAttribute('autoplay')) {
-                                    e.target.play().catch(() => {});
-                                }
-                            }
-                        });
-                    }, { threshold: 0.1 });
-
-                    const domObserver = new MutationObserver((mutations) => {
-                        mutations.forEach(m => {
-                            m.addedNodes.forEach(node => {
-                                if (node.nodeType === 1) {
-                                    if (node.tagName === 'VIDEO') this.videoObserver.observe(node);
-                                    node.querySelectorAll('video').forEach(v => this.videoObserver.observe(v));
-                                }
-                            });
-                        });
-                    });
-                    domObserver.observe(document.body, { childList: true, subtree: true });
-                    
-                    history.replaceState({ viewMode: 'list', scrollY: window.scrollY }, '');
-                    
-                    window.addEventListener('popstate', (e) => {
-                        this.pauseAllVideos();
-                        if (e.state && e.state.viewMode === 'thread') {
-                            this.openThread(e.state.tweetId, true);
-                        } else if (e.state && e.state.viewMode === 'quotes') {
-                            this.viewMode = 'quotes';
-                            this.quotesTweetId = e.state.quotesTweetId;
-                            if (this.quotesList.length === 0) {
-                                this.fetchQuotes();
-                            }
-                        } else {
-                            this.viewMode = 'list';
-                            if (e.state && e.state.scrollY !== undefined) {
-                                window.scrollTo(0, e.state.scrollY);
-                                this.$nextTick(() => {
-                                    window.scrollTo(0, e.state.scrollY);
-                                    setTimeout(() => window.scrollTo(0, e.state.scrollY), 20);
-                                });
-                            }
-                        }
-                    });
-
-                    this.fetchTweets();
-                },
-
-                pauseAllVideos() {
-                    document.querySelectorAll('video').forEach(v => {
-                        v.pause();
-                        v.currentTime = 0;
-                    });
-                },
-
-                async fetchTweets(append = false) {
-                    if (!append) {
-                        this.loading = true;
-                        this.tweets = [];
-                        window.scrollTo(0, 0);
-                    } else {
-                        this.loadingMore = true;
-                    }
-                    
-                    let url = `/api/tweets?collection=${this.collectionFilter}&sort=${this.sortOrder}&page=${this.page}`;
-                    if (this.searchQuery.trim()) {
-                        url += `&q=${encodeURIComponent(this.searchQuery)}`;
-                    }
-
-                    try {
-                        this.error = null;
-                        const res = await fetch(url);
-                        
-                        let data;
-                        try {
-                            data = await res.json();
-                        } catch (parseError) {
-                            throw new Error(`Invalid server response (${res.status}): Please check server logs.`);
-                        }
-                        
-                        if (!res.ok) {
-                            throw new Error(data.detail || `Server error: ${res.status}`);
-                        }
-                        
-                        if (append) {
-                            this.tweets = [...this.tweets, ...data.tweets];
-                        } else {
-                            this.tweets = data.tweets;
-                        }
-                        this.page = data.page;
-                        this.totalPages = data.pages;
-                        this.total = data.total || 0;
-                    } catch (e) {
-                        console.error(e);
-                        this.error = e.message;
-                    } finally {
-                        this.loading = false;
-                        this.loadingMore = false;
-                    }
-                },
-                
-                toggleTheme() {
-                    // Legacy — now handled by applyTheme
-                },
-
-                applyTheme(key) {
-                    const theme = THEMES[key];
-                    if (!theme) return;
-                    this.currentTheme = key;
-                    const root = document.documentElement;
-                    for (const [prop, val] of Object.entries(theme)) {
-                        if (prop.startsWith('--')) root.style.setProperty(prop, val);
-                    }
-                    // Sync darkMode for any legacy checks
-                    const bgHex = theme['--bg-primary'] || '#000000';
-                    const r = parseInt(bgHex.slice(1,3),16), g = parseInt(bgHex.slice(3,5),16), b = parseInt(bgHex.slice(5,7),16);
-                    this.darkMode = (r*0.299 + g*0.587 + b*0.114) < 128;
-                    if (this.darkMode) { root.classList.remove('light'); } else { root.classList.add('light'); }
-                    localStorage.setItem('tvx-theme', key);
-                },
-
-
-                loadFont(key) {
-                    if (key === 'system' || document.querySelector(`link[data-font="${key}"]`)) return;
-                    const url = FONT_URLS[key];
-                    if (!url) return;
-                    const link = document.createElement('link');
-                    link.rel = 'stylesheet';
-                    link.href = url;
-                    link.dataset.font = key;
-                    document.head.appendChild(link);
-                },
-
-                setFont(key, family) {
-                    this.fontFamily = key;
-                    this.loadFont(key);
-                    document.body.style.fontFamily = family;
-                    localStorage.setItem('tvx-font', key);
-                    localStorage.setItem('tvx-font-family', family);
-                },
-
-                setFontSize(key, px) {
-                    this.fontSize = key;
-                    document.documentElement.style.setProperty('--font-size-base', px);
-                    localStorage.setItem('tvx-font-size', key);
-                    localStorage.setItem('tvx-font-size-px', px);
-                },
-
-                setTweetDensity(key, px) {
-                    this.tweetDensity = key;
-                    document.documentElement.style.setProperty('--tweet-padding', px);
-                    localStorage.setItem('tvx-density', key);
-                    localStorage.setItem('tvx-density-px', px);
-                },
-                
-                loadMore() {
-                    if (this.loadingMore || this.loading || this.page >= this.totalPages) return;
-                    this.page++;
-                    this.fetchTweets(true);
-                },
-
-                async openThread(tweetId, fromPopState = false) {
-                    if (this.viewMode === 'list') {
-                        history.replaceState({ viewMode: 'list', scrollY: window.scrollY }, '');
-                    } else if (this.viewMode === 'quotes') {
-                        history.replaceState({ viewMode: 'quotes', quotesTweetId: this.quotesTweetId, scrollY: window.scrollY }, '');
-                    }
-                    this.viewMode = 'thread';
-                    this.loadingThread = true;
-                    this.threadData = null;
-                    window.scrollTo(0, 0);
-
-                    if (!fromPopState) {
-                        history.pushState({ viewMode: 'thread', tweetId }, '');
-                    }
-
-                    try {
-                        const res = await fetch(`/api/tweets/${tweetId}`);
-                        if (!res.ok) throw new Error('Failed to load thread');
-                        this.threadData = await res.json();
-                    } catch (e) {
-                        console.error(e);
-                        this.goBack();
-                    } finally {
-                        this.loadingThread = false;
-                    }
-                },
-                
-                async openQuotes(tweetId) {
-                    history.replaceState({ viewMode: this.viewMode, tweetId: this.threadData?.main?.tweet_id, scrollY: window.scrollY }, '');
-                    this.viewMode = 'quotes';
-                    this.quotesTweetId = tweetId;
-                    this.quotesPage = 1;
-                    this.quotesList = [];
-                    this.quotesLoading = true;
-                    window.scrollTo(0, 0);
-                    
-                    history.pushState({ viewMode: 'quotes', quotesTweetId: tweetId }, '');
-                    
-                    await this.fetchQuotes();
-                },
-                
-                async fetchQuotes(append = false) {
-                    if (append) this.quotesLoadingMore = true;
-                    else this.quotesLoading = true;
-                    
-                    try {
-                        const res = await fetch(`/api/tweets/${this.quotesTweetId}/quotes?page=${this.quotesPage}`);
-                        const data = await res.json();
-                        
-                        if (append) this.quotesList = [...this.quotesList, ...data.tweets];
-                        else this.quotesList = data.tweets;
-                        
-                        this.quotesTotalPages = Math.ceil(data.total / data.limit);
-                    } catch (e) {
-                        console.error(e);
-                    } finally {
-                        this.quotesLoading = false;
-                        this.quotesLoadingMore = false;
-                    }
-                },
-                
-                goBack() {
-                    history.back();
-                },
-
-                async fetchStats() {
-                    try {
-                        const res = await fetch('/api/stats');
-                        const data = await res.json();
-                        if (data.latest_sync_at) {
-                            this.lastSyncAt = new Date(data.latest_sync_at);
-                            this.updateSyncTime();
-                            // Update every minute
-                            setInterval(() => this.updateSyncTime(), 60000);
-                        }
-                    } catch (e) {
-                        console.error('Failed to fetch stats', e);
-                    }
-                },
-
-                updateSyncTime() {
-                    if (!this.lastSyncAt) return;
-                    
-                    const now = new Date();
-                    const diffMs = now - this.lastSyncAt;
-                    const diffMins = Math.floor(diffMs / 60000);
-                    const diffHours = Math.floor(diffMins / 60);
-                    const diffDays = Math.floor(diffHours / 24);
-                    
-                    let relativeStr = '';
-                    if (diffMins < 1) relativeStr = 'Just now';
-                    else if (diffMins < 60) relativeStr = `${diffMins}m ago`;
-                    else if (diffHours < 24) relativeStr = `${diffHours}h ago`;
-                    else relativeStr = `${diffDays}d ago`;
-                    
-                    const options = { year: 'numeric', month: 'short', day: 'numeric' };
-                    const dateStr = this.lastSyncAt.toLocaleDateString(undefined, options);
-                    
-                    this.lastSyncFormatted = `Last sync: ${dateStr} · ${relativeStr}`;
-                },
-
-                search() { 
-                    if (!this.searchQuery.trim() && this.sortOrder === 'default') this.sortOrder = 'newest';
-                    this.page = 1; this.viewMode = 'list'; this.fetchTweets(); 
-                },
-                searchFrom(username) {
-                    if(!username) return;
-                    this.searchQuery = `from:${username}`;
-                    this.search();
-                },
-                
-                getInitial(tweet) {
-                    if (tweet.author && tweet.author.display_name) return tweet.author.display_name.charAt(0);
-                    if (tweet.author && tweet.author.username) return tweet.author.username.charAt(0);
-                    return '?';
-                },
-
-                openTagModal(tweetId, tagsData) {
-                    this.tagModalTweetId = tweetId;
-                    this.tagModalData = tagsData;
-                    this.tagModalOpen = true;
-                    document.body.style.overflow = 'hidden';
-                },
-                
-                closeTagModal() {
-                    this.tagModalOpen = false;
-                    setTimeout(() => {
-                        this.tagModalData = null;
-                        this.tagModalTweetId = null;
-                        document.body.style.overflow = '';
-                    }, 300);
-                },
-                
-                async deleteTags() {
-                    if (!this.tagModalTweetId || !confirm("Are you sure you want to delete the tags for this tweet?")) return;
-                    try {
-                        const res = await fetch(`/api/tags/${this.tagModalTweetId}`, { method: 'DELETE' });
-                        if (res.ok) {
-                            const tweet = this.tweets.find(t => t.tweet_id === this.tagModalTweetId);
-                            if (tweet) tweet.media_tags = null;
-                            if (this.threadData?.main?.tweet_id === this.tagModalTweetId) this.threadData.main.media_tags = null;
-                            this.closeTagModal();
-                        } else {
-                            alert("Failed to delete tags.");
-                        }
-                    } catch (e) {
-                        alert("Error: " + e.message);
-                    }
-                },
-                
-                // --- Tweet Tag Editing ---
-                startEditingTags() {
-                    this.isEditingTags = true;
-                    this.editableTags = [...(this.tagModalData?.tags || [])];
-                },
-                async fetchTagAutocomplete(query) {
-                    try {
-                        const res = await fetch(`/api/tags/autocomplete?q=${encodeURIComponent(query)}`);
-                        if(res.ok) {
-                            const data = await res.json();
-                            this.tagAutocompleteOptions = data.tags;
-                        }
-                    } catch(e) {}
-                },
-                addEditableTag(tag) {
-                    const trimmed = tag.trim();
-                    if(trimmed && !this.editableTags.find(t => t.toLowerCase() === trimmed.toLowerCase())) {
-                        this.editableTags.push(trimmed);
-                    }
-                    this.tagSearchQuery = '';
-                },
-                async saveTags() {
-                    try {
-                        const res = await fetch(`/api/tags/${this.tagModalTweetId}`, {
-                            method: 'PUT',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ tags: this.editableTags })
-                        });
-                        if (res.ok) {
-                            const tweet = this.tweets.find(t => t.tweet_id === this.tagModalTweetId);
-                            if (tweet) {
-                                if(!tweet.media_tags) tweet.media_tags = {};
-                                tweet.media_tags.tags = [...this.editableTags];
-                            }
-                            if (this.threadData?.main?.tweet_id === this.tagModalTweetId) {
-                                if(!this.threadData.main.media_tags) this.threadData.main.media_tags = {};
-                                this.threadData.main.media_tags.tags = [...this.editableTags];
-                            }
-                            if (this.tagModalData) {
-                                this.tagModalData.tags = [...this.editableTags];
-                            }
-                            this.isEditingTags = false;
-                        } else {
-                            alert("Failed to save tags.");
-                        }
-                    } catch(e) {
-                        alert("Error saving tags: " + e.message);
-                    }
-                },
-                
-                // --- Global Tag Management ---
-                async fetchGlobalTags() {
-                    this.globalTagsLoading = true;
-                    try {
-                        const res = await fetch('/api/tags/stats');
-                        if (res.ok) {
-                            const data = await res.json();
-                            this.globalTags = data.tags;
-                        }
-                    } catch(e) { console.error(e); }
-                    finally { this.globalTagsLoading = false; }
-                },
-                
-                get filteredGlobalTags() {
-                    if(!this.tagSearchTerm) return this.globalTags;
-                    const term = this.tagSearchTerm.toLowerCase();
-                    return this.globalTags.filter(t => t.tag.toLowerCase().includes(term));
-                },
-                
-                async deleteGlobalTag(tag) {
-                    if(!confirm(`Are you sure you want to permanently delete the tag "${tag}" from all posts?`)) return;
-                    try {
-                        const res = await fetch(`/api/tags/global/${encodeURIComponent(tag)}`, { method: 'DELETE' });
-                        if(res.ok) {
-                            this.globalTags = this.globalTags.filter(t => t.tag !== tag);
-                        } else {
-                            alert("Failed to delete global tag");
-                        }
-                    } catch(e) {
-                        alert("Error: " + e.message);
-                    }
-                },
-                
-                // --- Merge logic ---
-                get filteredMergeOptions() {
-                    let opts = this.globalTags.filter(t => !this.mergeTagsList.includes(t.tag) && t.tag !== this.mergePrimaryTag);
-                    if(this.mergeSearchTerm) {
-                        const q = this.mergeSearchTerm.toLowerCase();
-                        opts = opts.filter(t => t.tag.toLowerCase().includes(q));
-                    }
-                    return opts.slice(0, 10);
-                },
-                
-                get filteredPrimaryOptions() {
-                    let opts = this.globalTags.filter(t => !this.mergeTagsList.includes(t.tag));
-                    if(this.mergePrimarySearchTerm) {
-                        const q = this.mergePrimarySearchTerm.toLowerCase();
-                        opts = opts.filter(t => t.tag.toLowerCase().includes(q));
-                    }
-                    return opts.slice(0, 10);
-                },
-                
-                mergeMoveUp() {
-                    if (this.mergeSelectedIndex > 0) this.mergeSelectedIndex--;
-                },
-                
-                mergeMoveDown() {
-                    if (this.mergeSelectedIndex < this.filteredMergeOptions.length - 1) this.mergeSelectedIndex++;
-                },
-                
-                primaryMoveUp() {
-                    if (this.primarySelectedIndex > 0) this.primarySelectedIndex--;
-                },
-                
-                primaryMoveDown() {
-                    if (this.primarySelectedIndex < this.filteredPrimaryOptions.length - 1) this.primarySelectedIndex++;
-                },
-
-                addMergeTag(tag) {
-                    if(!this.mergeTagsList.includes(tag)) {
-                        this.mergeTagsList.push(tag);
-                    }
-                    this.$nextTick(() => { this.mergeTagsDropdown = true; });
-                },
-                
-                addMergeTagFromInput() {
-                    if(!this.mergeSearchTerm || this.filteredMergeOptions.length === 0) return;
-                    const tag = this.filteredMergeOptions[this.mergeSelectedIndex]?.tag || this.filteredMergeOptions[0].tag;
-                    this.addMergeTag(tag);
-                    this.mergeTagsDropdown = true;
-                    this.mergeSelectedIndex = 0;
-                },
-                
-                setPrimaryTagFromInput() {
-                    if(!this.mergePrimarySearchTerm || this.filteredPrimaryOptions.length === 0) return;
-                    const tag = this.filteredPrimaryOptions[this.primarySelectedIndex]?.tag || this.filteredPrimaryOptions[0].tag;
-                    this.mergePrimaryTag = tag;
-                    this.mergePrimarySearchTerm = '';
-                    this.mergePrimaryDropdown = false;
-                },
-                
-                removeMergeTag(tag) {
-                    this.mergeTagsList = this.mergeTagsList.filter(t => t !== tag);
-                },
-                
-                getMergePath(index, total) {
-                    if (total === 1) return 'M 0 50 L 100 50';
-                    const startY = ((index + 0.5) / total) * 100;
-                    return `M 0 ${startY} C 35 ${startY}, 35 50, 75 50 L 100 50`;
-                },
-                
-                async submitMerge() {
-                    if(!this.mergePrimaryTag || this.mergeTagsList.length === 0) return;
-                    if(!confirm(`Merge ${this.mergeTagsList.length} tags into "${this.mergePrimaryTag}"? This cannot be undone.`)) return;
-                    
-                    try {
-                        const res = await fetch('/api/tags/merge', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ primary_tag: this.mergePrimaryTag, merge_tags: this.mergeTagsList })
-                        });
-                        if (res.ok) {
-                            alert("Tags merged successfully!");
-                            this.mergeTagsList = [];
-                            this.mergePrimaryTag = '';
-                            this.mergePrimarySearchTerm = '';
-                            this.fetchGlobalTags();
-                        } else {
-                            alert("Failed to merge tags.");
-                        }
-                    } catch(e) {
-                        alert("Error merging tags: " + e.message);
-                    }
-                },
-
-                getReplyTo(tweet) {
-                    if (!tweet.raw_json) return null;
-                    if (tweet.raw_json.legacy && tweet.raw_json.legacy.in_reply_to_screen_name) return tweet.raw_json.legacy.in_reply_to_screen_name;
-                    if (tweet.raw_json.in_reply_to_screen_name) return tweet.raw_json.in_reply_to_screen_name;
-                    return null;
-                },
-
-                formatDate(dateStr, includeTime = false) {
-                    if (!dateStr) return '';
-                    const d = new Date(dateStr);
-                    if (includeTime) {
-                        return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) + ' · ' + 
-                               d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-                    }
-                    const now = new Date();
-                    const diff = (now - d) / 1000;
-                    if (diff < 60) return 'Just now';
-                    if (diff < 3600) return Math.floor(diff/60) + 'm';
-                    if (diff < 86400) return Math.floor(diff/3600) + 'h';
-                    const options = { month: 'short', day: 'numeric' };
-                    if (d.getFullYear() !== now.getFullYear()) options.year = 'numeric';
-                    return d.toLocaleDateString('en-US', options);
-                },
-                
-                async fetchConfig() {
-                    try {
-                        const [resSchema, resConfig] = await Promise.all([
-                            fetch('/api/config/schema'),
-                            fetch('/api/config')
-                        ]);
-                        if (resSchema.ok && resConfig.ok) {
-                            this.configSchema = await resSchema.json();
-                            this.configData = await resConfig.json();
-                        }
-                    } catch (e) {
-                        console.error("Error fetching config", e);
-                    }
-                },
-                
-                isFieldVisible(section, key) {
-                    const fullKey = `${section}.${key}`;
-                    if (!this.configSchema || !this.configData) return false;
-                    if (this.configSchema.blacklist.includes(fullKey)) return false;
-                    if (this.configSchema.whitelist.includes(fullKey)) return true;
-                    return this.showAdvancedConfig;
-                },
-                
-                hasVisibleFields(section) {
-                    if (!this.configSchema || !this.configData || !this.configData[section]) return false;
-                    return Object.keys(this.configData[section]).some(k => this.isFieldVisible(section, k));
-                },
-                
-                getFieldType(section, key) {
-                    if (!this.configSchema || !this.configData) return 'text';
-                    const fullKey = `${section}.${key}`;
-                    if (this.configSchema.types && this.configSchema.types[fullKey]) return this.configSchema.types[fullKey];
-                    
-                    const val = this.configData[section][key];
-                    if (typeof val === 'boolean') return 'boolean';
-                    if (typeof val === 'number') return 'number';
-                    return 'text';
-                },
-                
-                isFieldFullWidth(section, key) {
-                    const fullKey = `${section}.${key}`;
-                    if (this.configSchema && this.configSchema.full_width && this.configSchema.full_width.includes(fullKey)) return true;
-                    return false;
-                },
-                
-                async saveConfig() {
-                    this.configSaving = true;
-                    try {
-                        const res = await fetch('/api/config', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(this.configData)
-                        });
-                        if (res.ok) {
-                            const btn = document.getElementById('save-config-btn');
-                            if (btn) {
-                                const old = btn.innerHTML;
-                                btn.innerHTML = "Saved!";
-                                btn.classList.replace('bg-[var(--accent-color)]', 'bg-green-600');
-                                setTimeout(() => {
-                                    btn.innerHTML = old;
-                                    btn.classList.replace('bg-green-600', 'bg-[var(--accent-color)]');
-                                }, 2000);
-                            }
-                        } else {
-                            alert("Failed to save config: " + await res.text());
-                        }
-                            } catch (e) {
-                        console.error("Error saving config", e);
-                        alert("Error saving config.");
-                    } finally {
-                        this.configSaving = false;
-                    }
-                },
-                
-                async restoreConfigDefaults() {
-                    if(!confirm("Are you sure you want to restore default configuration settings? This will overwrite your current settings, but your passwords and keys will be preserved.")) return;
-                    
-                    try {
-                        const res = await fetch('/api/config/defaults');
-                        if (res.ok) {
-                            const defaults = await res.json();
-                            // Keep user's auth token, ct0, api key, and web host/port intact
-                            if (this.configData.auth) {
-                                defaults.auth.auth_token = this.configData.auth.auth_token;
-                                defaults.auth.ct0 = this.configData.auth.ct0;
-                                defaults.auth.user_id = this.configData.auth.user_id;
-                            }
-                            if (this.configData.tagging) {
-                                defaults.tagging.api_key = this.configData.tagging.api_key;
-                            }
-                            if (this.configData.web) {
-                                defaults.web.host = this.configData.web.host;
-                                defaults.web.port = this.configData.web.port;
-                            }
-                            this.configData = defaults;
-                        }
-                    } catch (e) {
-                        console.error("Error fetching defaults", e);
-                        alert("Error fetching default config.");
-                    }
-                },
-
-                formatSyncDate(tweet) {
-                    let synced = tweet.synced_at || (tweet.collection ? tweet.collection.synced_at : null);
-                    if (!synced) return 'Archived';
-                    let dS = new Date(synced);
-                    return `Synced ${dS.toLocaleDateString('en-US', {month:'short', day:'numeric'})}`;
-                },
-
-                getQuoteTweet(tweet) {
-                    if (!tweet.raw_json) return null;
-                    const quote = tweet.raw_json.quoted_status_result?.result;
-                    if (quote?.__typename === 'TweetWithVisibilityResults') {
-                        if (quote.birdwatch_pivot && quote.tweet) {
-                            quote.tweet.birdwatch_pivot = quote.birdwatch_pivot;
-                        }
-                        return quote.tweet;
-                    }
-                    if (quote?.__typename === 'Tweet') return quote;
-                    if (quote?.__typename === 'TweetTombstone' || quote?.__typename === 'TweetUnavailable') return quote;
-                    if (tweet.raw_json.quoted_status) return tweet.raw_json.quoted_status;
-                    return null;
-                },
-
-                isTombstone(qt) {
-                    if (!qt) return false;
-                    return qt.__typename === 'TweetTombstone' || qt.__typename === 'TweetUnavailable' || qt.__tombstone__ === true;
-                },
-
-                getRetweet(tweet) {
-                    if (!tweet.raw_json) return null;
-                    const rt = tweet.raw_json.legacy?.retweeted_status_result?.result;
-                    if (rt?.__typename === 'TweetWithVisibilityResults') {
-                        if (rt.birdwatch_pivot && rt.tweet) rt.tweet.birdwatch_pivot = rt.birdwatch_pivot;
-                        return rt.tweet;
-                    }
-                    if (rt?.__typename === 'Tweet') return rt;
-                    if (tweet.raw_json.retweeted_status) return tweet.raw_json.retweeted_status;
-                    return null;
-                },
-
-                formatRetweetToTweet(originalTweet, rt) {
-                    const author = this.getQuoteAuthor(rt);
-                    return {
-                        tweet_id: rt.rest_id || rt.id_str || originalTweet.tweet_id,
-                        author: { display_name: author.name, username: author.screen_name, id: author.id },
-                        text: this.getQuoteText(rt),
-                        created_at: rt.legacy?.created_at || rt.created_at || originalTweet.created_at,
-                        synced_at: originalTweet.synced_at,
-                        collection: originalTweet.collection,
-                        raw_json: rt,
-                        media: originalTweet.media,
-                        qt_media: originalTweet.qt_media
-                    };
-                },
-
-                getQuoteAuthor(qt) {
-                    if (!qt) return { name: 'Unknown', screen_name: 'unknown', id: 'x', initial: '?' };
-                    const userResult = qt.core?.user_results?.result;
-                    let name = userResult?.legacy?.name || userResult?.core?.name || qt.user?.name || 'Unknown';
-                    let screen_name = userResult?.legacy?.screen_name || userResult?.core?.screen_name || qt.user?.screen_name || 'unknown';
-                    let id = userResult?.rest_id || qt.user?.id_str || 'x';
-                    return { name, screen_name, id, initial: name.charAt(0) };
-                },
-
-                getQuoteText(qt) {
-                    if (!qt) return '';
-                    if (this.isTombstone(qt)) {
-                        return qt.tombstone?.text?.text || qt.text || "This post is unavailable.";
-                    }
-                    return qt.legacy?.full_text || qt.full_text || qt.text || '';
-                },
-
-                formatText(tweet) {
-                    let text = tweet.text || '';
-                    const raw = tweet.raw_json;
-                    
-                    if (raw && raw.legacy && raw.legacy.in_reply_to_status_id_str) {
-                        text = text.replace(/^(@\w+\s+)+/, '');
-                    }
-                    
-                    let urlMap = {};
-                    if (raw && raw.legacy) {
-                        const urlsToRemove = [];
-                        if (raw.legacy.entities?.media) urlsToRemove.push(...raw.legacy.entities.media.map(m => m.url));
-                        if (raw.legacy.extended_entities?.media) urlsToRemove.push(...raw.legacy.extended_entities.media.map(m => m.url));
-                        if (raw.legacy.quoted_status_permalink?.url) urlsToRemove.push(raw.legacy.quoted_status_permalink.url);
-                        
-                        if (raw.card && raw.card.legacy && raw.card.legacy.url) urlsToRemove.push(raw.card.legacy.url);
-                        if (raw.card && raw.card.url) urlsToRemove.push(raw.card.url);
-                        
-                        urlsToRemove.filter(Boolean).forEach(u => {
-                            text = text.split(u).join('');
-                        });
-                        
-                        if (raw.legacy.entities?.urls) {
-                            raw.legacy.entities.urls.forEach(u => {
-                                if (!urlsToRemove.includes(u.url)) {
-                                    urlMap[u.url] = `<a href="${u.expanded_url}" target="_blank" class="text-[var(--accent-color)] hover:underline" @click.stop>${u.display_url}</a>`;
-                                }
-                            });
-                        }
-                    }
-                    
-                    text = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                    text = text.replace(/@(\w+)/g, '<span class="mention text-[var(--accent-color)] hover:underline cursor-pointer" data-user="$1">@$1</span>');
-                    
-                    Object.keys(urlMap).forEach(u => {
-                        text = text.split(u).join(urlMap[u]);
-                    });
-                    
-                    return text.trim();
-                },
-
-                scrollToTop() {
-                    window.scrollTo({ top: 0, behavior: 'smooth' });
-                },
-
-                handleTextClick(e) {
-                    if (e.target.tagName === 'SPAN' && e.target.classList.contains('mention')) {
-                        e.stopPropagation();
-                        this.searchFrom(e.target.dataset.user);
-                    }
-                },
-                
-                renderCard(tweet) {
-                    if (!tweet || !tweet.raw_json) return '';
-                    const card = tweet.raw_json.card;
-                    if (!card) return '';
-                    const name = card.name || card.legacy?.name || '';
-                    const bindingArray = card.binding_values || card.legacy?.binding_values || [];
-                    const binding = {};
-                    if (Array.isArray(bindingArray)) {
-                        bindingArray.forEach(item => {
-                            binding[item.key] = item.value;
-                        });
-                    } else {
-                        Object.assign(binding, bindingArray);
-                    }
-                    let html = '';
-
-                    if (name.startsWith('poll')) {
-                        const choices = [];
-                        for (let i = 1; i <= 4; i++) {
-                            const choice = binding[`choice${i}_label`];
-                            const count = binding[`choice${i}_count`];
-                            if (choice && choice.string_value) {
-                                choices.push({
-                                    label: choice.string_value,
-                                    count: count ? parseInt(count.string_value) : 0
-                                });
-                            }
-                        }
-                        if (choices.length > 0) {
-                            const total = choices.reduce((s, c) => s + c.count, 0) || 1;
-                            const trueTotal = choices.reduce((s, c) => s + c.count, 0);
-                            const maxCount = Math.max(...choices.map(c => c.count));
-                            const isFinal = binding.counts_are_final?.boolean_value === true;
-                            
-                            html += `<div class="mt-3 flex flex-col space-y-[6px]">`;
-                            choices.forEach(c => {
-                                const pct = Math.round((c.count / total) * 100);
-                                const isWinner = c.count === maxCount && maxCount > 0;
-                                const weightClass = isWinner ? 'font-bold' : 'font-normal';
-                                const barColor = isWinner ? 'bg-[var(--accent-color)] opacity-[0.4]' : 'bg-[var(--border-color)] opacity-[0.6]';
-                                
-                                html += `<div class="relative w-full h-[32px] rounded flex items-center overflow-hidden">
-                                            <div class="absolute left-0 top-0 bottom-0 ${barColor} rounded" style="width: ${pct}%"></div>
-                                            <span class="relative z-10 text-[15px] ${weightClass} text-[var(--text-primary)] w-full flex justify-between px-3">
-                                                <span class="truncate pr-4" title="${c.label}">${c.label}</span>
-                                                <span>${pct}%</span>
-                                            </span>
-                                         </div>`;
-                            });
-                            
-                            const statusText = isFinal ? 'Final results' : '';
-                            const dot = isFinal ? ' · ' : '';
-                            html += `<div class="text-[14px] text-[var(--text-secondary)] mt-2">${trueTotal} votes${dot}${statusText}</div></div>`;
-                        }
-                    } else if (name === 'summary' || name === 'summary_large_image') {
-                        const title = binding.title?.string_value || '';
-                        const desc = binding.description?.string_value || '';
-                        const vanityUrl = binding.vanity_url?.string_value || '';
-                        const expandedUrl = binding.card_url?.string_value || vanityUrl || '#';
-                        let imageHtml = '';
-                        
-                        if (name === 'summary_large_image') {
-                            const imgUrl = binding.thumbnail_image_original?.image_value?.url || 
-                                           binding.summary_photo_image_original?.image_value?.url || 
-                                           binding.thumbnail_image_x_large?.image_value?.url ||
-                                           binding.thumbnail_image?.image_value?.url || 
-                                           binding.photo_image_full_size?.image_value?.url || 
-                                           binding.summary_photo_image?.image_value?.url;
-                            if (imgUrl) {
-                                imageHtml = `<div class="w-full aspect-[1.91/1] bg-[var(--bg-tertiary)] overflow-hidden border-b border-[var(--border-color)]">
-                                                <img src="${imgUrl}" class="w-full h-full object-cover" loading="lazy">
-                                             </div>`;
-                            }
-                        }
-                        
-                        if (title || desc || imageHtml) {
-                            html += `<a href="${expandedUrl}" target="_blank" class="mt-3 block border border-[var(--border-color)] rounded-xl overflow-hidden hover-bg transition cursor-pointer">
-                                        ${imageHtml}
-                                        <div class="p-3">
-                                            <div class="text-[13px] text-[var(--text-secondary)] mb-1">${vanityUrl}</div>
-                                            <div class="text-[15px] text-[var(--text-primary)] font-bold leading-tight mb-1" style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">${title}</div>
-                                            <div class="text-[14px] text-[var(--text-secondary)]" style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">${desc}</div>
-                                        </div>
-                                     </a>`;
-                        }
-                    }
-                    return html;
-                },
-
-                renderMediaGrid(mediaList) {
-                    if (!mediaList || mediaList.length === 0) return '';
-                    
-                    const getSrc = (m) => {
-                        return m.download?.local_path ? `/${m.download.local_path}` : null;
-                    };
-
-                    const getPoster = (m) => {
-                        return m.download?.thumbnail_local_path ? `/${m.download.thumbnail_local_path}` : null;
-                    };
-
-                    const validMedia = mediaList.map(m => {
-                        const type = (m.type === 'video' || m.type === 'animated_gif') ? 'video' : 'photo';
-                        const isGif = m.type === 'animated_gif'; 
-                        const duration = m.duration_millis;
-                        const isShort = duration && duration <= 60000;
-                        return { m, src: getSrc(m), poster: getPoster(m), type, isGif, isShort };
-                    }).filter(x => x.src);
-                    
-                    if (validMedia.length === 0) return '';
-                    
-                    const jsonStr = JSON.stringify(validMedia).replace(/'/g, "&#39;").replace(/"/g, "&quot;");
-
-                    if (validMedia.length === 1) {
-                        const { src, poster, type, isGif, isShort } = validMedia[0];
-                        if (type === 'photo') {
-                            return `<div class="mt-3 rounded-2xl overflow-hidden border border-[var(--border-color)]" @click.stop>
-                                        <img src="${src}" onclick="window.dispatchEvent(new CustomEvent('open-lightbox', { detail: { media: JSON.parse('${jsonStr}'), index: 0 } }))" class="w-full h-auto max-h-[600px] object-cover cursor-pointer hover:opacity-90 transition">
-                                    </div>`;
-                        } else {
-                            const loopAttr = (isGif || isShort) ? 'loop' : '';
-                            const autoplayAttr = isGif ? 'autoplay muted playsinline' : '';
-                            const controlsAttr = isGif ? '' : 'controls';
-                            
-                            return `<div class="mt-3 rounded-2xl overflow-hidden border border-[var(--border-color)] bg-black" @click.stop>
-                                        <video src="${src}" poster="${poster || ''}" ${autoplayAttr} ${loopAttr} ${controlsAttr} class="w-full h-auto max-h-[600px] object-contain outline-none"></video>
-                                    </div>`;
-                        }
-                    }
-                    
-                    let gridClass = validMedia.length === 2 ? 'grid-cols-2' : 'grid-cols-2 grid-rows-2';
-                    let html = `<div class="mt-3 grid gap-[2px] rounded-2xl overflow-hidden border border-[var(--border-color)] aspect-[16/9] ${gridClass}" @click.stop>`;
-                    
-                    validMedia.forEach((item, idx) => {
-                        const { src, poster, type, isGif, isShort } = item;
-                        let itemClass = (validMedia.length === 3 && idx === 0) ? 'row-span-2 col-span-1' : (validMedia.length === 3 ? 'col-span-1' : '');
-                        
-                        if (type === 'photo') {
-                            html += `<div class="relative w-full h-full bg-[var(--border-color)] ${itemClass}">
-                                        <img src="${src}" onclick="window.dispatchEvent(new CustomEvent('open-lightbox', { detail: { media: JSON.parse('${jsonStr}'), index: ${idx} } }))" class="absolute inset-0 w-full h-full object-cover cursor-pointer hover:opacity-90 transition">
-                                    </div>`;
-                        } else {
-                            const loopAttr = (isGif || isShort) ? 'loop' : '';
-                            const autoplayAttr = isGif ? 'autoplay muted playsinline' : '';
-                            const controlsAttr = isGif ? '' : 'controls';
-                            
-                            html += `<div class="relative w-full h-full bg-black ${itemClass}">
-                                        <video src="${src}" poster="${poster || ''}" ${autoplayAttr} ${loopAttr} ${controlsAttr} class="absolute inset-0 w-full h-full object-cover"></video>
-                                    </div>`;
-                        }
-                    });
-                    html += `</div>`;
-                    return html;
-                },
-
-                renderRawMediaGrid(rawMediaList) {
-                    return this.renderMediaGrid(rawMediaList, true);
-                },
-
-                escapeHTML(str) {
-                    if (!str) return '';
-                    return str.replace(/&/g, '&amp;')
-                              .replace(/</g, '&lt;')
-                              .replace(/>/g, '&gt;')
-                              .replace(/"/g, '&quot;')
-                              .replace(/'/g, '&#039;');
-                },
-
-                formatCommunityNoteText(bw) {
-                    let text = bw.subtitle?.text || '';
-                    if (!text) return '';
-                    let entities = bw.subtitle?.entities || [];
-                    
-                    entities = [...entities].sort((a, b) => a.fromIndex - b.fromIndex);
-                    
-                    let html = '';
-                    let lastIndex = 0;
-                    
-                    for (const ent of entities) {
-                        if (ent.ref?.urlType === 'ExternalUrl' && ent.ref?.url) {
-                            html += this.escapeHTML(text.substring(lastIndex, ent.fromIndex));
-                            const linkText = this.escapeHTML(text.substring(ent.fromIndex, ent.toIndex));
-                            const href = this.escapeHTML(ent.ref.url);
-                            html += `<a href="${href}" target="_blank" class="text-[var(--accent-color)] hover:underline" @click.stop>${linkText}</a>`;
-                            lastIndex = ent.toIndex;
-                        }
-                    }
-                    html += this.escapeHTML(text.substring(lastIndex));
-                    return html;
-                },
-
-                renderCommunityNote(raw_json, isQuote = false) {
-                    if (!raw_json || !raw_json.birdwatch_pivot) return '';
-                    const bw = raw_json.birdwatch_pivot;
-                    if (!bw.subtitle || !bw.subtitle.text) return '';
-                    
-                    const textHtml = this.formatCommunityNoteText(bw);
-                    const containerClass = isQuote 
-                        ? "-mx-3 -mb-3 p-3 bg-[var(--bg-secondary)] border-t border-[var(--border-color)] rounded-b-xl text-left" 
-                        : "mt-3 border border-[var(--border-color)] rounded-xl p-3 bg-[var(--bg-secondary)] hover-bg transition cursor-pointer text-left";
-
-                    const iconSvg = `<svg viewBox="0 0 24 24" fill="var(--accent-color)" class="w-[18px] h-[18px]"><path fill-rule="evenodd" d="M8.25 6.75a3.75 3.75 0 117.5 0 3.75 3.75 0 01-7.5 0zM15.75 9.75a3 3 0 116 0 3 3 0 01-6 0zM2.25 9.75a3 3 0 116 0 3 3 0 01-6 0zM6.31 15.117A6.745 6.745 0 0112 12a6.745 6.745 0 016.709 7.498.75.75 0 01-.372.568A12.696 12.696 0 0112 21.75c-2.305 0-4.47-.612-6.337-1.684a.75.75 0 01-.372-.568 6.787 6.787 0 011.019-4.38z" clip-rule="evenodd" /><path d="M5.082 14.254a8.287 8.287 0 00-1.308 5.135 9.687 9.687 0 01-1.764-.44l-.115-.04a.563.563 0 01-.373-.487l-.01-.121a3.75 3.75 0 016.576-3.036c.32.338.608.708.857 1.103a6.732 6.732 0 00-3.863 1.341 6.772 6.772 0 01-.004-3.456z" /><path d="M18.918 14.254a8.287 8.287 0 011.308 5.135 9.687 9.687 0 001.764-.44l.115-.04a.563.563 0 00.373-.487l-.01-.121a3.75 3.75 0 00-6.576-3.036c-.32.338-.608.708-.857 1.103a6.732 6.732 0 013.863 1.341 6.772 6.772 0 00.004-3.456z" /></svg>`;
-                    
-                    return `
-                    <div class="${containerClass}" ${!isQuote ? 'onclick="event.stopPropagation()"' : ''}>
-                        <div class="flex items-center space-x-2 text-[15px] font-bold text-[var(--text-primary)] mb-1">
-                            ${iconSvg}
-                            <span>${bw.shorttitle || 'Readers added context'}</span>
-                        </div>
-                        <div class="text-[15px] text-[var(--text-primary)] whitespace-pre-wrap break-words leading-normal mt-2">${textHtml}</div>
-                    </div>`;
-                },
-
-                renderActionBar(tweet, isMain = false) {
-                    const legacy = tweet.raw_json?.legacy || {};
-                    const replyCount = legacy.reply_count || 0;
-                    const retweetCount = (legacy.retweet_count || 0) + (legacy.quote_count || 0);
-                    const likeCount = legacy.favorite_count || 0;
-                    const viewCount = tweet.raw_json?.views?.count || 0;
-                    const bmkCount = legacy.bookmark_count || 0;
-                    
-                    const formatNum = (num) => num > 0 ? (num > 999 ? (num/1000).toFixed(1) + 'K' : num) : '';
-                    
-                    const collections = tweet.collections || [];
-                    if (tweet.collection?.type) collections.push(tweet.collection.type);
-                    const isLiked = collections.includes('like');
-                    const isBookmarked = collections.includes('bookmark');
-                    
-                    const likeIcon = isLiked ? 
-                        `<svg viewBox="0 0 24 24" class="w-[18.5px] h-[18.5px]" style="fill: var(--danger-color)"><path d="M20.884 13.19c-1.351 2.48-4.001 5.12-8.379 7.67l-.503.3-.504-.3C7.121 18.31 4.471 15.67 3.119 13.19 1.928 10.99 1.898 8.48 2.921 6.45 3.864 4.56 5.8 3.32 8.016 3.42c1.474.07 2.812.8 3.486 2.08l.498.94.498-.94c.674-1.28 2.012-2.01 3.486-2.08 2.216-.1 4.152 1.14 5.095 3.03 1.023 2.03.993 4.54-.195 6.74z"></path></svg>` : 
-                        `<svg viewBox="0 0 24 24" class="w-[18.5px] h-[18.5px] fill-current group-hover:fill-[var(--danger-color)]"><path d="M16.697 5.5c-1.222-.06-2.679.51-3.89 2.16l-.805 1.09-.806-1.09C9.984 6.01 8.526 5.44 7.304 5.5c-1.243.07-2.349.78-2.91 1.91-.552 1.12-.633 2.78.479 4.82 1.074 1.97 3.257 4.27 7.129 6.61 3.87-2.34 6.052-4.64 7.126-6.61 1.111-2.04 1.03-3.7.477-4.82-.561-1.13-1.666-1.84-2.908-1.91zm4.187 7.69c-1.351 2.48-4.001 5.12-8.379 7.67l-.503.3-.504-.3c-4.379-2.55-7.029-5.19-8.382-7.67-1.36-2.5-1.41-4.86-.514-6.67.887-1.79 2.647-2.91 4.601-3.01 1.651-.09 3.368.56 4.798 2.01 1.429-1.45 3.146-2.1 4.796-2.01 1.954.1 3.714 1.22 4.601 3.01.896 1.81.846 4.17-.514 6.67z"></path></svg>`;
-
-                    const bmkIcon = isBookmarked ? 
-                        `<svg viewBox="0 0 24 24" class="w-[18.5px] h-[18.5px] fill-[var(--accent-color)]"><path d="M4 4.5C4 3.12 5.119 2 6.5 2h11C18.881 2 20 3.12 20 4.5v18.44l-8-5.71-8 5.71V4.5z"></path></svg>` : 
-                        `<svg viewBox="0 0 24 24" class="w-[18.5px] h-[18.5px] fill-current"><path d="M4 4.5C4 3.12 5.119 2 6.5 2h11C18.881 2 20 3.12 20 4.5v18.44l-8-5.71-8 5.71V4.5zM6.5 4c-.276 0-.5.22-.5.5v14.56l6-4.29 6 4.29V4.5c0-.28-.224-.5-.5-.5H6.5z"></path></svg>`;
-
-                    const margin = isMain ? 'py-3 mt-4 border-y border-[var(--border-color)] w-full' : 'mt-3 mb-1 w-full';
-                    
-                    return `
-                    <div class="flex items-center justify-between text-[var(--text-secondary)] w-full ${margin}">
-                        <div class="flex items-center">
-                            <svg viewBox="0 0 24 24" class="w-[18.5px] h-[18.5px] fill-current"><path d="M1.751 10c0-4.42 3.584-8 8.005-8h4.366c4.49 0 8.129 3.64 8.129 8.13 0 2.96-1.607 5.68-4.196 7.11l-8.054 4.46v-3.69h-.067c-4.49.1-8.183-3.51-8.183-8.01zm8.005-6c-3.317 0-6.005 2.69-6.005 6 0 3.37 2.77 6.08 6.138 6.01l.351-.01h1.761v2.3l5.087-2.81c1.951-1.08 3.163-3.13 3.163-5.36 0-3.39-2.744-6.13-6.129-6.13H9.756z"></path></svg>
-                            <span class="text-[13px] ml-2 font-medium">${formatNum(replyCount)}</span>
-                        </div>
-                        <div class="flex items-center">
-                            <svg viewBox="0 0 24 24" class="w-[18.5px] h-[18.5px] fill-current"><path d="M4.5 3.88l4.432 4.14-1.364 1.46L5.5 7.55V16c0 1.1.896 2 2 2H13v2H7.5c-2.209 0-4-1.79-4-4V7.55L1.432 9.48.068 8.02 4.5 3.88zM16.5 6H11V4h5.5c2.209 0 4 1.79 4 4v8.45l2.068-1.93 1.364 1.46-4.432 4.14-4.432-4.14 1.364-1.46 2.068 1.93V8c0-1.1-.896-2-2-2z"></path></svg>
-                            <span class="text-[13px] ml-2 font-medium">${formatNum(retweetCount)}</span>
-                        </div>
-                        <div class="flex items-center group cursor-pointer ${isLiked ? 'text-[var(--danger-color)]' : 'hover:text-[var(--danger-color)]'}">
-                            ${likeIcon}
-                            <span class="text-[13px] ml-2 font-medium">${formatNum(likeCount)}</span>
-                        </div>
-                        <div class="flex items-center group cursor-pointer ${isBookmarked ? 'text-[var(--accent-color)]' : 'hover:text-[var(--accent-color)]'}">
-                            ${bmkIcon}
-                            <span class="text-[13px] ml-2 font-medium">${formatNum(bmkCount)}</span>
-                        </div>
-                        <div class="flex items-center">
-                            <svg viewBox="0 0 24 24" class="w-[18.5px] h-[18.5px] fill-current"><path d="M8.75 21V3h2v18h-2zM18 21V8.5h2V21h-2zM4 21l.004-10h2L6 21H4zm9.248 0v-7h2v7h-2z"></path></svg>
-                            <span class="text-[13px] ml-2 font-medium">${formatNum(viewCount)}</span>
-                        </div>
-                        <div class="flex items-center space-x-5">
-                            ${tweet.media_tags ? `
-                            <div class="flex items-center text-[var(--text-secondary)] cursor-pointer hover:text-[var(--text-primary)] transition" @click.stop="openTagModal('${tweet.tweet_id}', ${JSON.stringify(tweet.media_tags).replace(/"/g, '&quot;')})" title="View Tags">
-                                <svg viewBox="0 0 24 24" class="w-[18.5px] h-[18.5px] fill-current"><path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10-4.477 10-10 10zm-1-11v6h2v-6h-2zm0-4v2h2V7h-2z"></path></svg>
-                            </div>
-                            ` : ''}
-                            <a href="https://x.com/${tweet.author?.username || 'i'}/status/${tweet.tweet_id}" target="_blank" @click.stop class="flex items-center" title="Open on Twitter">
-                                <svg viewBox="0 0 24 24" class="w-[18.5px] h-[18.5px] fill-current hover:text-[#e7e9ea] transition"><path d="M18 19H6c-.55 0-1-.45-1-1V6c0-.55.45-1 1-1h5c.55 0 1-.45 1-1s-.45-1-1-1H6c-1.65 0-3 1.35-3 3v12c0 1.65 1.35 3 3 3h12c1.65 0 3-1.35 3-3v-5c0-.55-.45-1-1-1s-1 .45-1 1v5c0 .55-.45 1-1 1zM14 4c0 .55.45 1 1 1h2.59l-9.13 9.13c-.39.39-.39 1.02 0 1.41.19.19.45.29.71.29s.51-.1.71-.29L19 6.41V9c0 .55.45 1 1 1s1-.45 1-1V4c0-.55-.45-1-1-1h-5c-.55 0-1 .45-1 1z"></path></svg>
-                            </a>
-                        </div>
-                    </div>`;
-                }
-            }
-        }
-
-        function searchAutocomplete() {
-            return {
-                showDropdown: false,
-                selectedIndex: 0,
-                options: [],
-                cursorPos: 0,
-                
-                allFilters: [
-                    { prefix: 'from:', desc: 'Sent from a specific user' },
-                    { prefix: 'to:', desc: 'Replying to a specific user' },
-                    { prefix: 'has:', desc: 'Includes specific type of media' },
-                    { prefix: 'filter:', desc: 'Filter by tweet type' },
-                    { prefix: 'min_faves:', desc: 'Minimum likes' },
-                    { prefix: 'min_retweets:', desc: 'Minimum retweets' },
-                    { prefix: 'since:', desc: 'After a specific date (YYYY-MM-DD)' },
-                    { prefix: 'until:', desc: 'Before a specific date (YYYY-MM-DD)' },
-                    { prefix: 'url:', desc: 'Contains a specific URL' },
-                    { prefix: 'tag:', desc: 'Matches media tag' }
-                ],
-                
-                hasOptions: [
-                    { prefix: 'has:', value: 'media', desc: 'Images, videos, or GIFs' },
-                    { prefix: 'has:', value: 'image', desc: 'Only images' },
-                    { prefix: 'has:', value: 'video', desc: 'Videos or GIFs' },
-                    { prefix: 'has:', value: 'links', desc: 'External links' }
-                ],
-                
-                filterOptions: [
-                    { prefix: 'filter:', value: 'media', desc: 'Any media' },
-                    { prefix: 'filter:', value: 'images', desc: 'Only images' },
-                    { prefix: 'filter:', value: 'videos', desc: 'Videos or GIFs' },
-                    { prefix: 'filter:', value: 'links', desc: 'External links' },
-                    { prefix: 'filter:', value: 'replies', desc: 'Replies to other tweets' },
-                    { prefix: 'filter:', value: 'quote', desc: 'Quote tweets' },
-                    { prefix: 'filter:', value: 'nativeretweets', desc: 'Retweets' },
-                    { prefix: 'filter:', value: 'self_threads', desc: 'Self-reply threads' },
-                    { prefix: 'filter:', value: 'verified', desc: 'From verified users' }
-                ],
-                
-                handleInput() {
-                    const input = this.$refs.searchInput;
-                    this.cursorPos = input.selectionStart;
-                    
-                    const textToCursor = this.searchQuery.substring(0, this.cursorPos);
-                    const words = textToCursor.split(/\s+/);
-                    const currentWord = words[words.length - 1] || '';
-                    
-                    this.showDropdown = true;
-                    this.selectedIndex = 0;
-                    
-                    if (currentWord.includes(':')) {
-                        const parts = currentWord.split(':');
-                        const prefix = parts[0] + ':';
-                        const val = parts.slice(1).join(':').toLowerCase();
-                        
-                        if (prefix === 'has:') {
-                            this.options = this.hasOptions.filter(o => o.value.startsWith(val));
-                        } else if (prefix === 'filter:') {
-                            this.options = this.filterOptions.filter(o => o.value.startsWith(val));
-                        } else if (prefix === 'tag:') {
-                            fetch(`/api/tags/autocomplete?q=${encodeURIComponent(val)}`)
-                                .then(res => res.ok ? res.json() : { tags: [] })
-                                .then(data => {
-                                    const tagsList = data && data.tags ? data.tags : [];
-                                    this.options = tagsList.map(t => ({
-                                        isTag: true,
-                                        prefix: 'tag:',
-                                        value: t.tag,
-                                        count: t.count.toLocaleString()
-                                    }));
-                                    if (this.options.length === 0) {
-                                        this.showDropdown = false;
-                                    }
-                                })
-                                .catch(err => {
-                                    console.error(err);
-                                    this.options = [];
-                                    this.showDropdown = false;
-                                });
-                        } else {
-                            this.options = [];
-                            this.showDropdown = false;
-                        }
-                    } else {
-                        if (currentWord.startsWith('-')) {
-                            const cleanWord = currentWord.substring(1).toLowerCase();
-                            this.options = this.allFilters.filter(o => o.prefix.startsWith(cleanWord)).map(o => ({...o, prefix: '-' + o.prefix}));
-                        } else {
-                            const lowerWord = currentWord.toLowerCase();
-                            this.options = this.allFilters.filter(o => o.prefix.startsWith(lowerWord));
-                        }
-                    }
-                },
-                
-                moveDown() {
-                    if (!this.showDropdown || this.options.length === 0) return;
-                    this.selectedIndex = (this.selectedIndex + 1) % this.options.length;
-                },
-                
-                moveUp() {
-                    if (!this.showDropdown || this.options.length === 0) return;
-                    this.selectedIndex = (this.selectedIndex - 1 + this.options.length) % this.options.length;
-                },
-                
-                selectOptionIndex(idx) {
-                    this.selectedIndex = idx;
-                    this.selectOption();
-                },
-                
-                selectOption() {
-                    if (!this.showDropdown || this.options.length === 0) return;
-                    
-                    const opt = this.options[this.selectedIndex];
-                    const textToCursor = this.searchQuery.substring(0, this.cursorPos);
-                    const textAfterCursor = this.searchQuery.substring(this.cursorPos);
-                    
-                    const words = textToCursor.split(/\s+/);
-                    words.pop(); // remove current word
-                    
-                    let valueToInsert = opt.value;
-                    if (valueToInsert && valueToInsert.includes(' ')) {
-                        valueToInsert = `"${valueToInsert}"`;
-                    }
-                    
-                    let insertion = opt.prefix + (valueToInsert ? valueToInsert + ' ' : '');
-                    
-                    const newTextToCursor = (words.length > 0 ? words.join(' ') + ' ' : '') + insertion;
-                    this.searchQuery = newTextToCursor + textAfterCursor;
-                    
-                    this.showDropdown = false;
-                    
-                    this.$nextTick(() => {
-                        this.$refs.searchInput.focus();
-                        this.$refs.searchInput.setSelectionRange(newTextToCursor.length, newTextToCursor.length);
-                        if (opt.value || opt.prefix.endsWith(':')) {
-                            this.handleInput(); // Re-trigger for next token or typing value
-                        }
-                    });
-                }
-            }
-        }
-    </script>
 </body>
 </html>

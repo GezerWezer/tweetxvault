@@ -2946,6 +2946,28 @@ class ArchiveStore:
                 }
             )
         return results
+    def search_authors(self, query: str, limit: int = 10) -> list[dict[str, str]]:
+        """Search for authors by username or display name."""
+        if not query:
+            return []
+            
+        query = query.lstrip('@')
+        if not query:
+            return []
+            
+        sql = """
+            SELECT DISTINCT author_id, author_username, author_display_name
+            FROM archive
+            WHERE record_type = 'tweet' 
+              AND author_username IS NOT NULL
+              AND (LOWER(author_username) LIKE LOWER(?) OR LOWER(author_display_name) LIKE LOWER(?))
+            ORDER BY author_username ASC
+            LIMIT ?
+        """
+        pattern = f"%{query}%"
+        rows = self.conn.execute(sql, (pattern, pattern, limit)).fetchall()
+        return [{"id": r["author_id"], "username": r["author_username"], "display_name": r["author_display_name"]} for r in rows]
+
 
     def search_fts(
         self,
@@ -2957,6 +2979,19 @@ class ArchiveStore:
     ) -> list[dict[str, Any]]:
         """Full-text search over exposed search result types."""
         self.ensure_fts_index()
+        
+        import re
+        sanitized_tokens = []
+        for token in query.split():
+            if token in ("AND", "OR", "NOT"):
+                sanitized_tokens.append(token)
+            elif not re.match(r'^[a-zA-Z0-9_]+$', token):
+                safe_token = token.replace('"', '""')
+                sanitized_tokens.append(f'"{safe_token}"')
+            else:
+                sanitized_tokens.append(token)
+        query = " ".join(sanitized_tokens)
+        
         fetch_limit = max(limit, 1)
         max_fetch_limit = max(limit * 8, 50)
         results: list[dict[str, Any]] = []
