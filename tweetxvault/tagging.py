@@ -191,15 +191,23 @@ async def tag_media_tweets(
                     console.print(f"[yellow]Gemini API busy ({reason}). Retrying in {delay} seconds (Attempt {attempt + 1}/5)...[/yellow]")
                     await asyncio.sleep(delay)
                 elif "400" in err_str or "INVALID_ARGUMENT" in err_str:
-                    console.print(f"[red]Gemini rejected the payload (400 INVALID_ARGUMENT). The media may exceed processing limits. Marking batch as skipped.[/red]")
-                    for tid in tweet_ids:
-                        store.conn.execute(
-                            "INSERT OR REPLACE INTO archive (row_key, record_type, tweet_id, raw_json, enrichment_state, updated_at) "
-                            "VALUES (?, ?, ?, ?, ?, ?)",
-                            (f"media_tag:{tid}", "media_tag", tid, "{}", "failed", str(time.time()))
-                        )
-                    store.conn.commit()
-                    return len(tweet_ids)
+                    if len(tweet_ids) > 1:
+                        mid = len(tweet_ids) // 2
+                        console.print(f"[yellow]Gemini rejected the payload (400) for batch of {len(tweet_ids)}. Splitting into batches of {mid} and {len(tweet_ids) - mid}...[/yellow]")
+                        total = 0
+                        total += await tag_media_tweets(store, config, paths, console, tweet_ids[:mid], model_override)
+                        total += await tag_media_tweets(store, config, paths, console, tweet_ids[mid:], model_override)
+                        return total
+                    else:
+                        console.print(f"[red]Gemini rejected the payload (400 INVALID_ARGUMENT). Marking tweet as failed.[/red]")
+                        for tid in tweet_ids:
+                            store.conn.execute(
+                                "INSERT OR REPLACE INTO archive (row_key, record_type, tweet_id, raw_json, enrichment_state, updated_at) "
+                                "VALUES (?, ?, ?, ?, ?, ?)",
+                                (f"media_tag:{tid}", "media_tag", tid, "{}", "failed", str(time.time()))
+                            )
+                        store.conn.commit()
+                        return len(tweet_ids)
                 else:
                     raise e
         
@@ -207,6 +215,30 @@ async def tag_media_tweets(
             return 0
             
         res_json = response.text
+        if not res_json:
+            reason = "Unknown"
+            if getattr(response, "candidates", None) and len(response.candidates) > 0:
+                if getattr(response.candidates[0], "finish_reason", None):
+                    reason = str(response.candidates[0].finish_reason)
+            
+            if len(tweet_ids) > 1:
+                mid = len(tweet_ids) // 2
+                console.print(f"[yellow]Gemini returned an empty response (Reason: {reason}) for batch of {len(tweet_ids)}. Splitting into batches of {mid} and {len(tweet_ids) - mid}...[/yellow]")
+                total = 0
+                total += await tag_media_tweets(store, config, paths, console, tweet_ids[:mid], model_override)
+                total += await tag_media_tweets(store, config, paths, console, tweet_ids[mid:], model_override)
+                return total
+            else:
+                console.print(f"[red]Gemini returned an empty response (Reason: {reason}). Marking tweet as failed.[/red]")
+                for tid in tweet_ids:
+                    store.conn.execute(
+                        "INSERT OR REPLACE INTO archive (row_key, record_type, tweet_id, raw_json, enrichment_state, updated_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (f"media_tag:{tid}", "media_tag", tid, "{}", "failed", str(time.time()))
+                    )
+                store.conn.commit()
+                return len(tweet_ids)
+
         console.print("\n[bold cyan]Gemini API Response:[/bold cyan]")
         console.print(res_json)
         console.print()
