@@ -456,6 +456,39 @@ uv run tweetxvault unfurl --limit 100
 uv run tweetxvault unfurl --retry-failed
 ```
 
+### Gemini media tagging
+
+With tagging enabled in `config.toml`, the bare command processes eligible media tweets
+using the same loop as the automatic sync follow-up. It continues until no work remains or
+the configured Gemini requests-per-day limit is reached:
+
+```bash
+# Tag all eligible media tweets, respecting configured batching and RPD
+uv run tweetxvault tag
+
+# Stop after selecting at most 100 tweets
+uv run tweetxvault tag --limit 100
+
+# Enable configured-size batches even when tagging.batch is false
+uv run tweetxvault tag --batch
+
+# Tag or re-tag one archived tweet by ID or status URL
+uv run tweetxvault tag 2026531440414925307
+uv run tweetxvault tag https://x.com/example/status/2026531440414925307
+
+# Preview one validated result without saving its description or tags
+uv run tweetxvault tag 2026531440414925307 --test
+
+# Override the configured Gemini model for this run
+uv run tweetxvault tag --model gemini-3.6-flash
+```
+
+`--test` is limited to one tweet and prints the archived tweet context, generated
+description, and normalized tags rather than the raw model response. It does not create,
+replace, or mark a media-tag row, but it does count real Gemini generation attempts toward
+the local RPD counter. RPD usage is stored per model in the archive, resets at Pacific
+midnight, and counts failed requests and retries as well as successful generations.
+
 ### Thread Expansion
 
 ```bash

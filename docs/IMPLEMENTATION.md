@@ -22,6 +22,18 @@ Planning note (2026-03-15):
 
 - [x] Restore the Web UI basic/advanced configuration split after the coverage pass
   accidentally classified every editable setting as always visible.
+- [x] Replace Gemini RPD inference and request pacing with a persistent per-model hard cap
+  that reserves every generation attempt against the Pacific quota day, including failures,
+  retries, grounding fallbacks, and split batches.
+- [x] Remove the sync follow-up's tag-count-derived quota precheck and disable SDK retries so
+  centralized tagging accounting is authoritative and explicit exponential backoff is the
+  only retry layer.
+- [x] Create quota state lazily without migrating historical tag rows; existing installations
+  intentionally start with fresh local usage state after upgrading.
+- [x] Make bare `tweetxvault tag` share the sync tagging loop, with total-run `--limit`,
+  batching override, model override, and explicit tweet ID/status-URL targeting.
+- [x] Add one-tweet `tag --test` generation that prints validated tweet context, description,
+  and normalized tags without changing media-tag state while still accounting for RPD usage.
 - [x] Remove obsolete embedding/vector surfaces and their redundant tests.
 - [x] Add focused configuration, SQLite storage, migration, media-tag, Gemini-tagging,
   tag-CLI, extractor, interactive-progress, and web-daemon coverage.

@@ -37,6 +37,7 @@ from tweetxvault.export.common import (
     display_collection_name,
     normalize_collection_name,
 )
+from tweetxvault.extractor import extract_status_id_from_url
 from tweetxvault.grailbird import convert_archive as convert_grailbird_archive
 from tweetxvault.media import download_media
 from tweetxvault.query_ids import QueryIdStore, refresh_query_ids
@@ -178,6 +179,7 @@ MEDIA_LIMIT_HELP = "Maximum number of pending media rows to process."
 MEDIA_PHOTOS_ONLY_HELP = "Only download photo rows and skip video or animated GIF media."
 RETRY_FAILED_HELP = "Retry rows that previously failed instead of only untouched pending rows."
 UNFURL_LIMIT_HELP = "Maximum number of saved URL rows to fetch metadata for."
+TAG_LIMIT_HELP = "Maximum number of tweets to tag in this run."
 SEARCH_QUERY_HELP = "Search query text."
 SEARCH_LIMIT_HELP = "Maximum number of results to return."
 # Keep the user-facing flag as --type, but map it onto internal search-result kinds so
@@ -208,6 +210,10 @@ RETRY_FAILED_OPTION = Annotated[
     typer.Option("--retry-failed", help=RETRY_FAILED_HELP),
 ]
 UNFURL_LIMIT_OPTION = Annotated[int | None, typer.Option("--limit", help=UNFURL_LIMIT_HELP)]
+TAG_LIMIT_OPTION = Annotated[
+    int | None,
+    typer.Option("--limit", min=1, help=TAG_LIMIT_HELP),
+]
 SEARCH_QUERY_ARGUMENT = Annotated[str, typer.Argument(help=SEARCH_QUERY_HELP)]
 SEARCH_LIMIT_OPTION = Annotated[int, typer.Option("--limit", help=SEARCH_LIMIT_HELP)]
 
@@ -528,8 +534,16 @@ def _run_sync_all_command(
         profile=profile,
         profile_path=profile_path,
         runner=lambda config, auth_bundle, runner_console: _run_with_depth(
-            config, auth_bundle, runner_console, max_linked_depth,
-            full, backfill, article_backfill, head_only, limit, followups
+            config,
+            auth_bundle,
+            runner_console,
+            max_linked_depth,
+            full,
+            backfill,
+            article_backfill,
+            head_only,
+            limit,
+            followups,
         ),
     )
     for result in outcome.results:
@@ -1516,6 +1530,25 @@ def unfurl_archive(
 
 @app.command("tag", help="Use Gemini to generate search tags and descriptions for media tweets.")
 def tag_archive(
+    target: Annotated[
+        str | None,
+        typer.Argument(help="Tweet ID or x.com status URL to tag."),
+    ] = None,
+    limit: TAG_LIMIT_OPTION = None,
+    test: Annotated[
+        bool,
+        typer.Option(
+            "--test",
+            help="Generate and display tags for one tweet without saving media tags.",
+        ),
+    ] = False,
+    batch: Annotated[
+        bool,
+        typer.Option(
+            "--batch",
+            help="Batch tweets even when batching is disabled in config.toml.",
+        ),
+    ] = False,
     model: Annotated[
         str | None,
         typer.Option("--model", help="Override the Gemini model specified in config.toml"),
@@ -1525,26 +1558,49 @@ def tag_archive(
     try:
         config, paths = load_config()
         from tweetxvault.jobs import locked_archive_job
-        from tweetxvault.tagging import tag_media_tweets
+        from tweetxvault.tagging import (
+            TaggingRunResult,
+            tag_media_tweets,
+            tag_pending_media_tweets,
+        )
 
-        async def run_tagging():
+        tweet_id = None
+        if target is not None:
+            candidate = target.strip()
+            tweet_id = candidate if candidate.isdigit() else extract_status_id_from_url(candidate)
+            if tweet_id is None:
+                raise ConfigError("Unsupported tag target. Use a tweet ID or x.com status URL.")
+
+        async def run_tagging() -> TaggingRunResult:
             async with locked_archive_job(config=config, paths=paths, console=console) as job:
-                # We fetch eligible tweets up to limit, or 1 if batching is disabled
-                limit = config.tagging.limit if config.tagging.batch else 1
-                tweet_ids = job.store.get_eligible_tweets_for_tagging(limit=limit)
-                if not tweet_ids:
-                    console.print("No eligible untagged media tweets found.")
-                    return
-                await tag_media_tweets(
+                if tweet_id is not None:
+                    tagged = await tag_media_tweets(
+                        store=job.store,
+                        config=config,
+                        paths=paths,
+                        console=console,
+                        tweet_ids=[tweet_id],
+                        model_override=model,
+                        dry_run=test,
+                    )
+                    return TaggingRunResult(processed=1, tagged=tagged, batches=1)
+
+                return await tag_pending_media_tweets(
                     store=job.store,
                     config=config,
                     paths=paths,
                     console=console,
-                    tweet_ids=tweet_ids,
+                    limit=limit,
+                    batch_override=batch,
                     model_override=model,
+                    dry_run=test,
                 )
 
-        asyncio.run(run_tagging())
+        result = asyncio.run(run_tagging())
+        if result.processed == 0:
+            console.print("No eligible untagged media tweets found.")
+        elif not test:
+            console.print(f"tag: {result.processed} processed, {result.tagged} tagged")
     except ConfigError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc

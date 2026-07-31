@@ -23,13 +23,7 @@ runner = CliRunner()
 
 
 class FakeTagStore:
-    def __init__(self, tweet_ids: list[str]) -> None:
-        self.tweet_ids = tweet_ids
-        self.eligible_limits: list[int] = []
-
-    def get_eligible_tweets_for_tagging(self, *, limit: int) -> list[str]:
-        self.eligible_limits.append(limit)
-        return self.tweet_ids[:limit]
+    pass
 
 
 class FakeLockedJob:
@@ -78,14 +72,15 @@ def configure_tag_command(
     monkeypatch: pytest.MonkeyPatch,
     paths,
     *,
-    batch: bool = True,
-    limit: int = 20,
-    tweet_ids: list[str] | None = None,
+    pending_result: tagging.TaggingRunResult | None = None,
+    direct_tagged: int = 1,
     enter_error: BaseException | None = None,
+    pending_error: BaseException | None = None,
 ) -> tuple[
     AppConfig,
     FakeTagStore,
     list[str],
+    list[dict[str, Any]],
     list[dict[str, Any]],
     list[dict[str, Any]],
 ]:
@@ -93,14 +88,13 @@ def configure_tag_command(
         tagging=TaggingConfig(
             enabled=True,
             api_key="test-key",
-            batch=batch,
-            limit=limit,
         )
     )
-    store = FakeTagStore(tweet_ids if tweet_ids is not None else ["1", "2", "3"])
+    store = FakeTagStore()
     lifecycle: list[str] = []
     lock_calls: list[dict[str, Any]] = []
-    tagging_calls: list[dict[str, Any]] = []
+    direct_calls: list[dict[str, Any]] = []
+    pending_calls: list[dict[str, Any]] = []
 
     monkeypatch.setattr(cli, "load_config", lambda: (config, paths))
 
@@ -109,13 +103,21 @@ def configure_tag_command(
         return FakeLockedJob(store, lifecycle, enter_error=enter_error)
 
     async def fake_tag_media_tweets(**kwargs: Any) -> int:
-        lifecycle.append("tag")
-        tagging_calls.append(kwargs)
-        return len(kwargs["tweet_ids"])
+        lifecycle.append("direct")
+        direct_calls.append(kwargs)
+        return direct_tagged
+
+    async def fake_tag_pending_media_tweets(**kwargs: Any) -> tagging.TaggingRunResult:
+        lifecycle.append("pending")
+        pending_calls.append(kwargs)
+        if pending_error is not None:
+            raise pending_error
+        return pending_result or tagging.TaggingRunResult(processed=3, tagged=3, batches=2)
 
     monkeypatch.setattr(jobs, "locked_archive_job", fake_locked_archive_job)
     monkeypatch.setattr(tagging, "tag_media_tweets", fake_tag_media_tweets)
-    return config, store, lifecycle, lock_calls, tagging_calls
+    monkeypatch.setattr(tagging, "tag_pending_media_tweets", fake_tag_pending_media_tweets)
+    return config, store, lifecycle, lock_calls, direct_calls, pending_calls
 
 
 def test_root_help_exposes_installed_non_sync_additions() -> None:
@@ -131,80 +133,195 @@ def test_root_help_exposes_installed_non_sync_additions() -> None:
     assert "serve-daemon" not in result.stdout
 
 
-def test_tag_help_documents_model_override() -> None:
+def test_tag_help_documents_target_and_all_options() -> None:
     result = runner.invoke(cli.app, ["tag", "--help"])
+    help_text = " ".join(result.stdout.replace("│", " ").split())
 
     assert result.exit_code == 0
-    assert "--model" in result.stdout
-    assert "Override the Gemini model specified in config.toml" in result.stdout
+    assert "Tweet ID or x.com status URL to tag" in help_text
+    assert "--limit" in help_text
+    assert "Maximum number of tweets to tag in this run" in help_text
+    assert "--test" in help_text
+    assert "without saving media tags" in help_text
+    assert "--batch" in help_text
+    assert "Batch tweets even when batching is disabled" in help_text
+    assert "--model" in help_text
+    assert "Override the Gemini model specified in config.toml" in help_text
 
 
-@pytest.mark.parametrize(
-    ("batch", "configured_limit", "expected_limit", "expected_ids"),
-    [
-        (True, 2, 2, ["1", "2"]),
-        (False, 9, 1, ["1"]),
-    ],
-)
-def test_tag_command_respects_batch_limit_and_forwards_default_model(
+def test_tag_command_delegates_default_run_to_pending_runner_inside_locked_job(
     monkeypatch: pytest.MonkeyPatch,
     paths,
-    batch: bool,
-    configured_limit: int,
-    expected_limit: int,
-    expected_ids: list[str],
 ) -> None:
     output = capture_console(monkeypatch)
-    config, store, lifecycle, lock_calls, tagging_calls = configure_tag_command(
-        monkeypatch,
-        paths,
-        batch=batch,
-        limit=configured_limit,
+    config, store, lifecycle, lock_calls, direct_calls, pending_calls = configure_tag_command(
+        monkeypatch, paths
     )
 
     result = runner.invoke(cli.app, ["tag"])
 
     assert result.exit_code == 0, result.output
-    assert output.getvalue() == ""
-    assert store.eligible_limits == [expected_limit]
-    assert lifecycle == ["enter", "tag", "exit:clean"]
+    assert "tag: 3 processed, 3 tagged" in output.getvalue()
+    assert lifecycle == ["enter", "pending", "exit:clean"]
     assert lock_calls == [{"config": config, "paths": paths, "console": ANY}]
-    assert tagging_calls == [
+    assert direct_calls == []
+    assert pending_calls == [
         {
             "store": store,
             "config": config,
             "paths": paths,
             "console": ANY,
-            "tweet_ids": expected_ids,
+            "limit": None,
+            "batch_override": False,
             "model_override": None,
+            "dry_run": False,
         }
     ]
 
 
-def test_tag_command_forwards_model_override_inside_locked_job(
+def test_tag_command_forwards_limit_batch_test_and_model_to_pending_runner(
     monkeypatch: pytest.MonkeyPatch,
     paths,
 ) -> None:
-    capture_console(monkeypatch)
-    config, store, lifecycle, lock_calls, tagging_calls = configure_tag_command(
-        monkeypatch,
-        paths,
-        tweet_ids=["41", "42"],
+    output = capture_console(monkeypatch)
+    preview_result = tagging.TaggingRunResult(processed=1, tagged=1, batches=1)
+    config, store, lifecycle, lock_calls, direct_calls, pending_calls = configure_tag_command(
+        monkeypatch, paths, pending_result=preview_result
     )
 
     result = runner.invoke(
         cli.app,
-        ["tag", "--model", "gemini-explicit"],
+        [
+            "tag",
+            "--limit",
+            "7",
+            "--batch",
+            "--test",
+            "--model",
+            "gemini-explicit",
+        ],
     )
 
     assert result.exit_code == 0, result.output
-    assert lifecycle == ["enter", "tag", "exit:clean"]
+    assert lifecycle == ["enter", "pending", "exit:clean"]
     assert lock_calls[0]["config"] is config
     assert lock_calls[0]["paths"] is paths
-    assert lock_calls[0]["console"] is tagging_calls[0]["console"]
-    assert tagging_calls[0]["store"] is store
-    assert tagging_calls[0]["tweet_ids"] == ["41", "42"]
-    assert tagging_calls[0]["model_override"] == "gemini-explicit"
+    assert lock_calls[0]["console"] is pending_calls[0]["console"]
+    assert direct_calls == []
+    assert pending_calls == [
+        {
+            "store": store,
+            "config": config,
+            "paths": paths,
+            "console": ANY,
+            "limit": 7,
+            "batch_override": True,
+            "model_override": "gemini-explicit",
+            "dry_run": True,
+        }
+    ]
+    assert "tag: 1 processed" not in output.getvalue()
+
+
+@pytest.mark.parametrize(
+    ("target", "tweet_id"),
+    [
+        ("2026531440414925307", "2026531440414925307"),
+        (
+            "https://x.com/example/status/2026531440414925307?s=20",
+            "2026531440414925307",
+        ),
+        (
+            "https://twitter.com/example/status/2026531440414925307/video/1",
+            "2026531440414925307",
+        ),
+    ],
+)
+def test_tag_command_normalizes_explicit_target_and_bypasses_pending_runner(
+    monkeypatch: pytest.MonkeyPatch,
+    paths,
+    target: str,
+    tweet_id: str,
+) -> None:
+    output = capture_console(monkeypatch)
+    config, store, lifecycle, _, direct_calls, pending_calls = configure_tag_command(
+        monkeypatch, paths, direct_tagged=1
+    )
+
+    result = runner.invoke(cli.app, ["tag", target, "--model", "gemini-explicit"])
+
+    assert result.exit_code == 0, result.output
+    assert lifecycle == ["enter", "direct", "exit:clean"]
+    assert pending_calls == []
+    assert direct_calls == [
+        {
+            "store": store,
+            "config": config,
+            "paths": paths,
+            "console": ANY,
+            "tweet_ids": [tweet_id],
+            "model_override": "gemini-explicit",
+            "dry_run": False,
+        }
+    ]
+    assert "tag: 1 processed, 1 tagged" in output.getvalue()
+
+
+def test_tag_command_forwards_test_mode_for_explicit_target_without_summary(
+    monkeypatch: pytest.MonkeyPatch,
+    paths,
+) -> None:
+    output = capture_console(monkeypatch)
+    _, _, lifecycle, _, direct_calls, pending_calls = configure_tag_command(
+        monkeypatch, paths, direct_tagged=1
+    )
+
+    result = runner.invoke(cli.app, ["tag", "41", "--test"])
+
+    assert result.exit_code == 0, result.output
+    assert lifecycle == ["enter", "direct", "exit:clean"]
+    assert pending_calls == []
+    assert direct_calls[0]["tweet_ids"] == ["41"]
+    assert direct_calls[0]["dry_run"] is True
+    assert "tag: 1 processed" not in output.getvalue()
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "not-a-tweet",
+        "https://example.com/person/status/2026531440414925307",
+        "https://x.com/example/status/not-numeric",
+    ],
+)
+def test_tag_command_rejects_invalid_explicit_target_before_locking_archive(
+    monkeypatch: pytest.MonkeyPatch,
+    paths,
+    target: str,
+) -> None:
+    output = capture_console(monkeypatch)
+    _, _, lifecycle, lock_calls, direct_calls, pending_calls = configure_tag_command(
+        monkeypatch, paths
+    )
+
+    result = runner.invoke(cli.app, ["tag", target])
+
+    assert result.exit_code == 1
+    assert lifecycle == []
+    assert lock_calls == []
+    assert direct_calls == []
+    assert pending_calls == []
+    assert "Unsupported tag target. Use a tweet ID or x.com status URL." in output.getvalue()
+
+
+@pytest.mark.parametrize("raw_limit", ["0", "-1"])
+def test_tag_command_rejects_nonpositive_limit(
+    raw_limit: str,
+) -> None:
+    result = runner.invoke(cli.app, ["tag", "--limit", raw_limit])
+
+    assert result.exit_code == 2
+    assert "Invalid value for '--limit'" in result.output
 
 
 def test_tag_command_reports_no_eligible_rows_and_still_closes_job(
@@ -212,18 +329,19 @@ def test_tag_command_reports_no_eligible_rows_and_still_closes_job(
     paths,
 ) -> None:
     output = capture_console(monkeypatch)
-    _, store, lifecycle, _, tagging_calls = configure_tag_command(
+    no_work = tagging.TaggingRunResult()
+    _, _, lifecycle, _, direct_calls, pending_calls = configure_tag_command(
         monkeypatch,
         paths,
-        tweet_ids=[],
+        pending_result=no_work,
     )
 
     result = runner.invoke(cli.app, ["tag"])
 
     assert result.exit_code == 0, result.output
-    assert store.eligible_limits == [20]
-    assert tagging_calls == []
-    assert lifecycle == ["enter", "exit:clean"]
+    assert direct_calls == []
+    assert len(pending_calls) == 1
+    assert lifecycle == ["enter", "pending", "exit:clean"]
     assert "No eligible untagged media tweets found." in output.getvalue()
 
 
@@ -243,12 +361,12 @@ def test_tag_command_maps_config_error_to_exit_one(
     assert "invalid tagging config" in output.getvalue()
 
 
-def test_tag_command_maps_runtime_domain_error_to_exit_two_and_closes_job(
+def test_tag_command_maps_lock_entry_error_to_exit_two(
     monkeypatch: pytest.MonkeyPatch,
     paths,
 ) -> None:
     output = capture_console(monkeypatch)
-    _, _, lifecycle, _, _ = configure_tag_command(
+    _, _, lifecycle, _, _, _ = configure_tag_command(
         monkeypatch,
         paths,
         enter_error=TweetXVaultError("archive is unavailable"),
@@ -259,6 +377,24 @@ def test_tag_command_maps_runtime_domain_error_to_exit_two_and_closes_job(
     assert result.exit_code == 2
     assert lifecycle == ["enter"]
     assert "archive is unavailable" in output.getvalue()
+
+
+def test_tag_command_maps_runner_domain_error_to_exit_two_and_closes_job(
+    monkeypatch: pytest.MonkeyPatch,
+    paths,
+) -> None:
+    output = capture_console(monkeypatch)
+    _, _, lifecycle, _, _, _ = configure_tag_command(
+        monkeypatch,
+        paths,
+        pending_error=TweetXVaultError("tagging is unavailable"),
+    )
+
+    result = runner.invoke(cli.app, ["tag"])
+
+    assert result.exit_code == 2
+    assert lifecycle == ["enter", "pending", "exit:TweetXVaultError"]
+    assert "tagging is unavailable" in output.getvalue()
 
 
 def test_python_module_help_dispatches_real_cli() -> None:

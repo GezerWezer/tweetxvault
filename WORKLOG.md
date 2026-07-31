@@ -5,7 +5,22 @@
     always-visible basic set and prove the toggle reveals only advanced fields.
   - Traced a production 503 retry delay of roughly 72 minutes to the audit-added Gemini
     request pacer: with `tagging.rpd = 20`, `86400 / 20` spaces attempts by 4,320 seconds,
-    overriding the displayed 15-second retry delay. No tagging behavior changed yet.
+    overriding the displayed 15-second retry delay.
+  - Replaced inferred tag-count quota accounting with a persistent, per-model hard cap on
+    actual Gemini generation attempts. Counters reset at midnight in `America/Los_Angeles`,
+    reserve capacity before dispatch, and include failed requests, retries, grounding
+    fallbacks, and recursively split batches.
+  - Removed both the request pacer and the sync follow-up's inferred daily precheck. Gemini
+    retry attempts now use only their advertised 15/30/60/120-second exponential backoff,
+    with the SDK's hidden retry layer disabled so every provider attempt is accounted for.
+  - Added the quota state lazily on first use with no historical migration or backfill;
+    existing installations begin with a fresh local counter after upgrading.
+  - Reworked `tweetxvault tag` to share the sync follow-up's loop: bare runs continue until
+    eligible work or RPD is exhausted, `--limit` caps total selected tweets, and `--batch`
+    enables configured-size batches while preserving `--model` overrides.
+  - Added explicit ID/x.com status-URL targeting and `--test` previews. Test generation is
+    restricted to one tweet, prints validated tweet context/description/tags, consumes RPD,
+    and never creates, replaces, or marks a media-tag row.
 
 - 2026-07-30 (Comprehensive non-sync test audit and implementation)
   - Created `comprehensive-non-sync-tests` from merged `main`; syncing implementation and
