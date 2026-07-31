@@ -16,38 +16,6 @@ from tweetxvault.storage import open_archive_store
 from tweetxvault.storage.backend import _PageBuffer
 
 
-class _FakeQueryBuilder:
-    def __init__(self) -> None:
-        self.metric_name: str | None = None
-        self.where_expr: str | None = None
-        self.limit_value: int | None = None
-        self.vector_value: list[float] | None = None
-        self.text_value: str | None = None
-
-    def metric(self, metric: str):
-        self.metric_name = metric
-        return self
-
-    def where(self, expr: str, prefilter: bool | None = None):
-        self.where_expr = expr
-        return self
-
-    def limit(self, value: int):
-        self.limit_value = value
-        return self
-
-    def vector(self, vector: list[float]):
-        self.vector_value = vector
-        return self
-
-    def text(self, text: str):
-        self.text_value = text
-        return self
-
-    def to_list(self) -> list[dict[str, object]]:
-        return [{"tweet_id": "1"}]
-
-
 def _counts(**overrides: int) -> dict[str, int]:
     counts = {
         "raw_captures": 0,
@@ -409,40 +377,60 @@ def test_archive_stats_bfs_depth(paths) -> None:
     assert store is not None
 
     # Depth 0 (Root)
-    store._merge_records([store._record(
-        record_type="tweet",
-        row_key="tweet:100",
-        tweet_id="100",
-    )])
+    store._merge_records(
+        [
+            store._record(
+                record_type="tweet",
+                row_key="tweet:100",
+                tweet_id="100",
+            )
+        ]
+    )
 
     # Depth 0 -> Depth 1 (100 -> 200)
-    store._merge_records([store._record(
-        record_type="url_ref",
-        row_key="url_ref:100:0",
-        tweet_id="100",
-        expanded_url="https://x.com/user/status/200",
-    )])
+    store._merge_records(
+        [
+            store._record(
+                record_type="url_ref",
+                row_key="url_ref:100:0",
+                tweet_id="100",
+                expanded_url="https://x.com/user/status/200",
+            )
+        ]
+    )
 
     # Depth 1 -> Depth 2 (200 -> 300)
-    store._merge_records([store._record(
-        record_type="url_ref",
-        row_key="url_ref:200:0",
-        tweet_id="200",
-        expanded_url="https://x.com/user/status/300",
-    )])
+    store._merge_records(
+        [
+            store._record(
+                record_type="url_ref",
+                row_key="url_ref:200:0",
+                tweet_id="200",
+                expanded_url="https://x.com/user/status/300",
+            )
+        ]
+    )
 
     # Depth 2 -> Depth 3 (300 -> 400)
-    store._merge_records([store._record(
-        record_type="url_ref",
-        row_key="url_ref:300:0",
-        tweet_id="300",
-        expanded_url="https://x.com/user/status/400",
-    )])
+    store._merge_records(
+        [
+            store._record(
+                record_type="url_ref",
+                row_key="url_ref:300:0",
+                tweet_id="300",
+                expanded_url="https://x.com/user/status/400",
+            )
+        ]
+    )
 
     assert store.archive_stats(max_linked_depth=0).pending_thread_linked_status_count == 0
     assert store.archive_stats(max_linked_depth=1).pending_thread_linked_status_count == 1  # 200
-    assert store.archive_stats(max_linked_depth=2).pending_thread_linked_status_count == 2  # 200, 300
-    assert store.archive_stats(max_linked_depth=3).pending_thread_linked_status_count == 3  # 200, 300, 400
+    assert (
+        store.archive_stats(max_linked_depth=2).pending_thread_linked_status_count == 2
+    )  # 200, 300
+    assert (
+        store.archive_stats(max_linked_depth=3).pending_thread_linked_status_count == 3
+    )  # 200, 300, 400
 
     store.close()
 
@@ -471,7 +459,6 @@ def test_export_rows_only_returns_tweet_records(paths) -> None:
     assert exported[0]["tweet_id"] == "1"
     assert exported[0]["collection"]["type"] == "bookmark"
     store.close()
-
 
 
 def test_export_rows_limit_only_fetches_secondary_rows_for_selected_tweets(
@@ -844,7 +831,7 @@ def test_persist_page_preserves_richer_secondary_values_from_existing_rows(paths
     store.close()
 
 
-def test_secondary_row_listings_filter_through_lancedb(paths) -> None:
+def test_secondary_row_listings_filter_through_sqlite(paths) -> None:
     store = open_archive_store(paths, create=True)
     assert store is not None
 
@@ -948,8 +935,6 @@ def test_secondary_row_listings_filter_through_lancedb(paths) -> None:
     assert [row["tweet_id"] for row in preview_rows] == ["101"]
     assert preview_rows[0]["status"] == "preview_only"
     store.close()
-
-
 
 
 def test_persist_thread_detail_keeps_context_tweets_out_of_memberships(paths) -> None:

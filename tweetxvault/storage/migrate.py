@@ -1,16 +1,18 @@
-import sys
-import subprocess
-from pathlib import Path
+from __future__ import annotations
 
-try:
-    import lancedb
-except ImportError:
-    print("Error: lancedb package is required to run the migration.")
-    print("Please reinstall tweetxvault with the lancedb dependency, or run: pip install lancedb pyarrow")
-    sys.exit(1)
+import importlib
+import subprocess
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 from tweetxvault.config import load_config
 from tweetxvault.storage import open_archive_store
+
+WORKER_END_OF_TABLE = 42
+DEFAULT_BATCH_SIZE = 5000
+MAX_CONSECUTIVE_FAILURES = 100
 
 WORKER_CODE = """
 import sys
@@ -49,12 +51,14 @@ def worker():
         "display_url", "url_host", "description", "site_name", "unfurl_state", "last_fetched_at",
         "article_id", "title", "summary_text", "content_text", "published_at", "status",
         "archive_digest", "archive_generation_date", "import_started_at", "import_completed_at",
-        "warnings_json", "counts_json", "last_head_tweet_id", "backfill_cursor", "backfill_incomplete",
+        "warnings_json", "counts_json", "last_head_tweet_id", "backfill_cursor",
+        "backfill_incomplete",
         "updated_at", "key", "value"
     ]
     placeholders = ", ".join(["?"] * len(cols))
     col_names = ", ".join(cols)
-    sql = f"INSERT OR REPLACE INTO archive ({col_names}) VALUES ({placeholders})"
+    # A rerun must never overwrite newer data already present in SQLite.
+    sql = f"INSERT OR IGNORE INTO archive ({col_names}) VALUES ({placeholders})"
     
     params = []
     for record in rows:
@@ -65,105 +69,215 @@ def worker():
         
     with conn:
         conn.executemany(sql, params)
-    
+    conn.close()
+
     sys.exit(0)
 
 if __name__ == "__main__":
     worker()
 """
 
-def run_migration() -> None:
-    config, paths = load_config()
-    
-    # Old path
-    lance_path = paths.data_dir / "archive.lancedb"
-    if not lance_path.exists():
-        print(f"No old LanceDB archive found at {lance_path}.")
-        return
-        
-    print(f"Reading LanceDB at {lance_path}...")
-    ldb = lancedb.connect(lance_path)
+
+@dataclass(slots=True)
+class MigrationResult:
+    status: str
+    total_rows: int = 0
+    migrated_rows: int = 0
+    skipped_rows: int = 0
+    worker_calls: int = 0
+    final_offset: int = 0
+    fts_rebuilt: bool = False
+
+
+def _import_lancedb() -> Any | None:
+    """Load the legacy dependency only when the migration command is used."""
     try:
-        table = ldb.open_table("archive")
-    except Exception as e:
-        print("LanceDB archive table not found.", e)
-        return
-        
-    total_rows = table.count_rows()
-    print(f"Found {total_rows} rows to migrate.")
-    
-    new_db_path = paths.database_path
-    print(f"Inserting into native SQLite database at {new_db_path}...")
-    
-    store = open_archive_store(paths, create=True, config=config)
-    if not store:
-        print("Failed to open SQLite store.")
-        return
-    store.close()
-    
+        return importlib.import_module("lancedb")
+    except ImportError:
+        return None
+
+
+def _create_progress(total_rows: int) -> Any | None:
     try:
         from tqdm import tqdm
-        pbar = tqdm(total=total_rows, desc="Migrating to SQLite", unit="rows")
     except ImportError:
-        pbar = None
+        return None
+    return tqdm(total=total_rows, desc="Migrating to SQLite", unit="rows")
 
-    batch_size = 5000
+
+def _run_worker(
+    lance_path: Path,
+    database_path: Path,
+    batch_size: int,
+    offset: int,
+) -> subprocess.CompletedProcess[bytes]:
+    command = [
+        sys.executable,
+        "-c",
+        WORKER_CODE,
+        str(lance_path),
+        str(database_path),
+        str(batch_size),
+        str(offset),
+    ]
+    return subprocess.run(command, capture_output=True, check=False)
+
+
+def _progress_warning(progress: Any | None, message: str) -> None:
+    if progress is not None:
+        progress.write(message)
+    else:
+        print(message)
+
+
+def _advance_progress(progress: Any | None, total_rows: int, batch_size: int) -> None:
+    if progress is None:
+        return
+    remaining = max(0, total_rows - int(progress.n))
+    if remaining:
+        progress.update(min(batch_size, remaining))
+
+
+def _copy_batches(
+    *,
+    lance_path: Path,
+    database_path: Path,
+    total_rows: int,
+    batch_size: int,
+    progress: Any | None,
+) -> MigrationResult:
+    result = MigrationResult(status="complete", total_rows=total_rows)
     offset = 0
     consecutive_failures = 0
-    
+
     while True:
-        cmd = [
-            sys.executable, 
-            "-c", 
-            WORKER_CODE, 
-            str(lance_path), 
-            str(new_db_path), 
-            str(batch_size), 
-            str(offset)
-        ]
-        
-        res = subprocess.run(cmd, capture_output=True)
-        
-        if res.returncode == 42:
-            # Reached end of table
+        try:
+            worker_result = _run_worker(
+                lance_path,
+                database_path,
+                batch_size,
+                offset,
+            )
+            return_code = worker_result.returncode
+        except Exception as error:
+            return_code = 1
+            _progress_warning(
+                progress,
+                f"Warning: Migration worker failed at offset {offset}: {error}",
+            )
+
+        result.worker_calls += 1
+        if return_code == WORKER_END_OF_TABLE:
             break
-        elif res.returncode != 0:
+
+        rows_in_chunk = min(batch_size, max(0, total_rows - offset))
+        if return_code != 0:
             consecutive_failures += 1
-            if pbar:
-                pbar.write(f"\nWarning: Corrupted chunk detected at offset {offset}. Skipping {batch_size} rows to recover data...")
-            else:
-                print(f"Warning: Corrupted chunk detected at offset {offset}. Skipping {batch_size} rows...")
-            
-            # If we fail too many times in a row, the database might be completely unreadable
-            if consecutive_failures > 100:
+            result.skipped_rows += rows_in_chunk
+            _progress_warning(
+                progress,
+                "Warning: Corrupted chunk detected at "
+                f"offset {offset}. Skipping {batch_size} rows to recover data...",
+            )
+            if consecutive_failures > MAX_CONSECUTIVE_FAILURES:
+                result.status = "aborted"
                 print("Too many consecutive failures. Aborting migration.")
                 break
         else:
             consecutive_failures = 0
-            
+            result.migrated_rows += rows_in_chunk
+
         offset += batch_size
-        
-        # We don't exactly know how many rows were fetched if it succeeded (usually batch_size, except at the end)
-        # But we can just advance the progress bar by batch_size. It will cap at 100%.
-        if pbar:
-            pbar.update(min(batch_size, total_rows - pbar.n))
-            
-    if pbar:
-        pbar.close()
-        
+        result.final_offset = offset
+        _advance_progress(progress, total_rows, batch_size)
+
+    return result
+
+
+def _rebuild_fts(config: Any, paths: Any) -> bool:
     print("Rebuilding Full-Text Search index (this may take a few moments)...")
-    store = open_archive_store(paths, create=False, config=config)
-    if store:
-        try:
-            store.conn.execute("INSERT INTO archive_fts(archive_fts) VALUES('rebuild')")
-            store.conn.commit()
-        except Exception as e:
-            print(f"Warning: Failed to rebuild FTS index: {e}")
-        finally:
-            store.close()
-        
+    try:
+        # create=True reruns schema migrations after the workers have inserted rows.
+        # In particular, it backfills created_at_ts before search indexes are used.
+        store = open_archive_store(paths, create=True, config=config)
+    except Exception as error:
+        print(f"Warning: Failed to open SQLite store for FTS rebuild: {error}")
+        return False
+    if store is None:
+        print("Warning: Failed to open SQLite store for FTS rebuild.")
+        return False
+    try:
+        store.conn.execute("INSERT INTO archive_fts(archive_fts) VALUES('rebuild')")
+        store.conn.commit()
+        return True
+    except Exception as error:
+        print(f"Warning: Failed to rebuild FTS index: {error}")
+        return False
+    finally:
+        store.close()
+
+
+def run_migration(*, batch_size: int = DEFAULT_BATCH_SIZE) -> MigrationResult:
+    config, paths = load_config()
+    lance_path = paths.data_dir / "archive.lancedb"
+    if not lance_path.exists():
+        print(f"No old LanceDB archive found at {lance_path}.")
+        return MigrationResult(status="source_missing")
+
+    lancedb = _import_lancedb()
+    if lancedb is None:
+        print("Error: lancedb and pyarrow are required to run the migration.")
+        print("Please reinstall tweetxvault with its migration dependencies.")
+        return MigrationResult(status="dependency_missing")
+
+    print(f"Reading LanceDB at {lance_path}...")
+    try:
+        legacy_database = lancedb.connect(lance_path)
+        table = legacy_database.open_table("archive")
+        total_rows = int(table.count_rows())
+    except Exception as error:
+        print(f"LanceDB archive table not found or unreadable: {error}")
+        return MigrationResult(status="table_missing")
+
+    print(f"Found {total_rows} rows to migrate.")
+    database_path = paths.database_path
+    print(f"Inserting into native SQLite database at {database_path}...")
+
+    try:
+        store = open_archive_store(paths, create=True, config=config)
+    except Exception as error:
+        print(f"Failed to initialize SQLite store: {error}")
+        return MigrationResult(status="destination_failed", total_rows=total_rows)
+    if store is None:
+        print("Failed to open SQLite store.")
+        return MigrationResult(status="destination_failed", total_rows=total_rows)
+    store.close()
+
+    progress = _create_progress(total_rows)
+    try:
+        result = _copy_batches(
+            lance_path=lance_path,
+            database_path=database_path,
+            total_rows=total_rows,
+            batch_size=batch_size,
+            progress=progress,
+        )
+    finally:
+        if progress is not None:
+            progress.close()
+
+    result.fts_rebuilt = _rebuild_fts(config, paths)
+    if result.status == "aborted":
+        print("Migration stopped before all readable chunks were processed.")
+        return result
+
     print("Migration complete! You can now run `tweetxvault stats`.")
-    print(f"If it works correctly, you may safely backup and delete the original `{lance_path}` directory.")
+    print(
+        "If it works correctly, you may safely backup and delete the original "
+        f"`{lance_path}` directory."
+    )
+    return result
+
 
 if __name__ == "__main__":
     run_migration()
