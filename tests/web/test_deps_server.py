@@ -147,6 +147,18 @@ def test_lifespan_without_paths_does_not_open_a_store(monkeypatch) -> None:
         assert "store" not in server_state
 
 
+def test_lifespan_reports_missing_archive(monkeypatch, tmp_path: Path) -> None:
+    server_state["paths"] = _paths(tmp_path)
+    monkeypatch.setattr(server, "open_archive_store", lambda *_args, **_kwargs: None)
+    app = FastAPI(lifespan=server.lifespan)
+
+    with pytest.raises(RuntimeError, match="Archive database not found"):
+        with TestClient(app):
+            pass
+
+    assert "store" not in server_state
+
+
 @pytest.mark.asyncio
 async def test_lifespan_closes_store_when_context_exits_with_error(
     monkeypatch, tmp_path: Path

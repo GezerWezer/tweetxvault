@@ -446,6 +446,14 @@ class ArchiveStore:
             return self.conn.execute("SELECT COUNT(*) FROM archive").fetchone()[0]
         return self.conn.execute(f"SELECT COUNT(*) FROM archive WHERE {filter_expr}").fetchone()[0]
 
+    def _count_distinct(self, field: str, filter_expr: str | None = None) -> int:
+        if field not in ARCHIVE_COLUMNS:
+            raise ValueError(f"Unknown archive field: {field}")
+        sql = f"SELECT COUNT(DISTINCT {field}) FROM archive"
+        if filter_expr:
+            sql += f" WHERE {filter_expr}"
+        return self.conn.execute(sql).fetchone()[0]
+
     def _delete(self, filter_expr: str) -> None:
         with self.conn:
             self.conn.execute(f"DELETE FROM archive WHERE {filter_expr}")
@@ -1839,7 +1847,7 @@ class ArchiveStore:
     ) -> list[dict[str, Any]]:
         rows = self._query(
             expr="record_type = 'tweet_object' AND enrichment_state = 'terminal_unavailable'",
-            cols=["tweet_id"],
+            cols=["tweet_id", "enrichment_checked_at"],
         )
         rows.sort(
             key=lambda row: (row.get("enrichment_checked_at") or "", row.get("tweet_id") or "")
@@ -3156,15 +3164,6 @@ class ArchiveStore:
         formatted = ", ".join(_expr_quote(c) for c in collections)
         return f"collection_type IN ({formatted})"
 
-    def _query_tokens(self, query: str) -> list[str]:
-        import re
-
-        return [
-            token
-            for token in re.findall(r"\w+", query.casefold())
-            if token not in {"and", "or", "not", "near"}
-        ]
-
     def _prepare_fts_query(self, query: str) -> str:
         import re
 
@@ -3213,9 +3212,42 @@ class ArchiveStore:
         return self._query(expr=where_expr, limit=limit, is_fts=True, query=query)
 
     def _search_article_rows_fts(self, query: str, *, limit: int) -> list[dict[str, Any]]:
-        tokens = self._query_tokens(query)
-        if not tokens:
+        import re
+
+        parts = re.findall(r'"[^"]*"|\S+', query)
+        groups: list[tuple[list[str], list[str]]] = [([], [])]
+        negate_next = False
+        for part in parts:
+            operator = part.upper()
+            if operator == "OR":
+                groups.append(([], []))
+                negate_next = False
+            elif operator == "AND":
+                negate_next = False
+            elif operator == "NOT":
+                negate_next = True
+            else:
+                target = groups[-1][1] if negate_next else groups[-1][0]
+                target.append(part)
+                negate_next = False
+        if not any(positive or negative for positive, negative in groups):
             return []
+
+        def term_parts(term: str) -> list[str]:
+            if term.startswith('"') and term.endswith('"'):
+                term = term[1:-1]
+            return re.findall(r"\w+", term.casefold())
+
+        def matches_term(term: str, words: list[str], normalized: str) -> bool:
+            pieces = term_parts(term)
+            if not pieces:
+                return False
+            if term.endswith("*") and len(pieces) == 1:
+                return any(word.startswith(pieces[0]) for word in words)
+            if len(pieces) > 1 or (term.startswith('"') and term.endswith('"')):
+                return " ".join(pieces) in normalized
+            return pieces[0] in words
+
         rows = self._query(expr="record_type = 'article'")
         matches: list[dict[str, Any]] = []
         for row in rows:
@@ -3229,10 +3261,23 @@ class ArchiveStore:
                 if isinstance(part, str) and part
             )
             folded = haystack.casefold()
-            if not all(token in folded for token in tokens):
+            words = re.findall(r"\w+", folded)
+            normalized = " ".join(words)
+            matching_groups = [
+                positive
+                for positive, negative in groups
+                if all(matches_term(term, words, normalized) for term in positive)
+                and not any(matches_term(term, words, normalized) for term in negative)
+            ]
+            if not matching_groups:
                 continue
             matched = dict(row)
-            matched["match_score"] = float(sum(folded.count(token) for token in tokens))
+            matched["match_score"] = float(
+                max(
+                    sum(normalized.count(" ".join(term_parts(term))) for term in positive)
+                    for positive in matching_groups
+                )
+            )
             matches.append(matched)
         matches.sort(
             key=lambda row: (

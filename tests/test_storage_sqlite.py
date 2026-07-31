@@ -326,6 +326,32 @@ def test_fts_filters_types_and_collections_and_hydrates_memberships(paths) -> No
     store.close()
 
 
+@pytest.mark.parametrize(
+    ("query", "expected_ids"),
+    [
+        ("alpha AND beta", ["3"]),
+        ("alpha OR missing", ["3"]),
+        ("alpha NOT missing", ["3"]),
+        ("alpha NOT beta", []),
+        ('"focused beta"', ["3"]),
+        ("focused-beta", ["3"]),
+    ],
+)
+def test_article_search_honors_boolean_query_semantics(
+    paths,
+    query: str,
+    expected_ids: list[str],
+) -> None:
+    store = open_archive_store(paths, create=True)
+    assert store is not None
+    _seed_search_rows(store)
+
+    results = store.search_fts(query, limit=20, types={"article"})
+
+    assert [row["tweet_id"] for row in results] == expected_ids
+    store.close()
+
+
 def test_fts_overfetches_past_duplicate_memberships(paths) -> None:
     store = open_archive_store(paths, create=True)
     assert store is not None
@@ -370,6 +396,33 @@ def test_search_authors_matches_username_display_name_and_at_prefix(paths) -> No
     assert [row["username"] for row in store.search_authors("Builder")] == ["bob"]
     assert store.search_authors("@") == []
     assert store.search_authors("") == []
+    store.close()
+
+
+def test_search_authors_falls_back_for_legacy_missing_display_name_column(paths) -> None:
+    store = open_archive_store(paths, create=True)
+    assert store is not None
+    _seed_search_rows(store)
+    connection = store.conn
+
+    class LegacyAuthorConnection:
+        def execute(self, sql, parameters=()):
+            if "MIN(author_display_name)" in sql:
+                raise sqlite3.OperationalError("no such column: author_display_name")
+            return connection.execute(sql, parameters)
+
+        def close(self) -> None:
+            connection.close()
+
+    store.conn = LegacyAuthorConnection()
+
+    assert store.search_authors("@ali") == [
+        {
+            "id": "author-1",
+            "username": "alice",
+            "display_name": "alice",
+        }
+    ]
     store.close()
 
 

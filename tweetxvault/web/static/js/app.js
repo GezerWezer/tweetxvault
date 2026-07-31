@@ -1374,7 +1374,9 @@ function tweetApp() {
                 if (raw.legacy.entities?.urls) {
                     raw.legacy.entities.urls.forEach(u => {
                         if (!urlsToRemove.includes(u.url)) {
-                            urlMap[u.url] = `<a href="${u.expanded_url}" target="_blank" class="text-[var(--accent-color)] hover:underline" @click.stop>${u.display_url}</a>`;
+                            const expandedUrl = this.safeURL(u.expanded_url);
+                            const displayUrl = this.escapeHTML(u.display_url || u.expanded_url || '');
+                            urlMap[u.url] = `<a href="${expandedUrl}" target="_blank" rel="noopener noreferrer" class="text-[var(--accent-color)] hover:underline" @click.stop>${displayUrl}</a>`;
                         }
                     });
                 }
@@ -1459,11 +1461,12 @@ function tweetApp() {
                         const isWinner = c.count === maxCount && maxCount > 0;
                         const weightClass = isWinner ? 'font-bold' : 'font-normal';
                         const barColor = isWinner ? 'bg-[var(--accent-color)] opacity-[0.4]' : 'bg-[var(--border-color)] opacity-[0.6]';
+                        const label = this.escapeHTML(c.label);
                         
                         html += `<div class="relative w-full h-[32px] rounded flex items-center overflow-hidden">
                                     <div class="absolute left-0 top-0 bottom-0 ${barColor} rounded" style="width: ${pct}%"></div>
                                     <span class="relative z-10 text-[15px] ${weightClass} text-[var(--text-primary)] w-full flex justify-between px-3">
-                                        <span class="truncate pr-4" title="${c.label}">${c.label}</span>
+                                        <span class="truncate pr-4" title="${label}">${label}</span>
                                         <span>${pct}%</span>
                                     </span>
                                  </div>`;
@@ -1474,10 +1477,12 @@ function tweetApp() {
                     html += `<div class="text-[14px] text-[var(--text-secondary)] mt-2">${trueTotal} votes${dot}${statusText}</div></div>`;
                 }
             } else if (name === 'summary' || name === 'summary_large_image') {
-                const title = binding.title?.string_value || '';
-                const desc = binding.description?.string_value || '';
-                const vanityUrl = binding.vanity_url?.string_value || '';
-                const expandedUrl = binding.card_url?.string_value || vanityUrl || '#';
+                const title = this.escapeHTML(binding.title?.string_value || '');
+                const desc = this.escapeHTML(binding.description?.string_value || '');
+                const vanityUrl = this.escapeHTML(binding.vanity_url?.string_value || '');
+                const expandedUrl = this.safeURL(
+                    binding.card_url?.string_value || binding.vanity_url?.string_value || '#'
+                );
                 let imageHtml = '';
                 
                 if (name === 'summary_large_image') {
@@ -1488,14 +1493,15 @@ function tweetApp() {
                                    binding.photo_image_full_size?.image_value?.url || 
                                    binding.summary_photo_image?.image_value?.url;
                     if (imgUrl) {
+                        const safeImgUrl = this.safeURL(imgUrl);
                         imageHtml = `<div class="w-full aspect-[1.91/1] bg-[var(--bg-tertiary)] overflow-hidden border-b border-[var(--border-color)]">
-                                        <img src="${imgUrl}" class="w-full h-full object-cover" loading="lazy">
+                                        <img src="${safeImgUrl}" class="w-full h-full object-cover" loading="lazy">
                                      </div>`;
                     }
                 }
                 
                 if (title || desc || imageHtml) {
-                    html += `<a href="${expandedUrl}" target="_blank" class="mt-3 block border border-[var(--border-color)] rounded-xl overflow-hidden hover-bg transition cursor-pointer">
+                    html += `<a href="${expandedUrl}" target="_blank" rel="noopener noreferrer" class="mt-3 block border border-[var(--border-color)] rounded-xl overflow-hidden hover-bg transition cursor-pointer">
                                 ${imageHtml}
                                 <div class="p-3">
                                     <div class="text-[13px] text-[var(--text-secondary)] mb-1">${vanityUrl}</div>
@@ -1604,11 +1610,23 @@ function tweetApp() {
 
         escapeHTML(str) {
             if (!str) return '';
-            return str.replace(/&/g, '&amp;')
+            return String(str).replace(/&/g, '&amp;')
                       .replace(/</g, '&lt;')
                       .replace(/>/g, '&gt;')
                       .replace(/"/g, '&quot;')
                       .replace(/'/g, '&#039;');
+        },
+
+        safeURL(value) {
+            if (!value || value === '#') return '#';
+            try {
+                const parsed = new URL(value, window.location?.origin || 'http://localhost');
+                return ['http:', 'https:'].includes(parsed.protocol)
+                    ? this.escapeHTML(parsed.href)
+                    : '#';
+            } catch (_) {
+                return '#';
+            }
         },
 
         formatCommunityNoteText(bw) {
@@ -1650,7 +1668,7 @@ function tweetApp() {
             <div class="${containerClass}" ${!isQuote ? 'onclick="event.stopPropagation()"' : ''}>
                 <div class="flex items-center space-x-2 text-[15px] font-bold text-[var(--text-primary)] mb-1">
                     ${iconSvg}
-                    <span>${bw.shorttitle || 'Readers added context'}</span>
+                    <span>${this.escapeHTML(bw.shorttitle || 'Readers added context')}</span>
                 </div>
                 <div class="text-[15px] text-[var(--text-primary)] whitespace-pre-wrap break-words leading-normal mt-2">${textHtml}</div>
             </div>`;

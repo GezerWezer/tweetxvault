@@ -1019,6 +1019,7 @@ async def _run_archive_followup(
         pending_enrichment=pending,
     )
 
+
 async def resurrect_dead_tweets(
     *,
     limit: int | None,
@@ -1032,7 +1033,7 @@ async def resurrect_dead_tweets(
     config, paths = resolve_job_context(config=config, paths=paths)
     console = console or Console(stderr=True)
     warnings: list[str] = []
-    
+
     if auth_bundle is None:
         auth_bundle = resolve_auth_bundle(config)
 
@@ -1046,15 +1047,16 @@ async def resurrect_dead_tweets(
         resurrect_dead=True,
         status=status,
     )
-    
+
     return ArchiveEnrichResult(
         warnings=warnings,
-        reconciled_collections=0,
+        reconciled_collections=[],
         detail_lookups=succeeded,
         detail_terminal_unavailable=terminal,
         detail_transient_failures=transient,
         pending_enrichment=remaining,
     )
+
 
 async def _enrich_pending_rows(
     *,
@@ -1195,6 +1197,7 @@ async def _enrich_pending_rows(
                             wrote_row = True
                     except Exception as exc:
                         from tweetxvault.exceptions import TerminalUnavailableError
+
                         if isinstance(exc, TerminalUnavailableError):
                             store.update_tweet_object_enrichment(
                                 tweet_id,
@@ -1204,7 +1207,7 @@ async def _enrich_pending_rows(
                                 enrichment_reason="TerminalUnavailableError",
                                 cursor=write_buffer,
                             )
-                            # don't increment transient
+                            terminal += 1
                             wrote_row = True
                         else:
                             store.update_tweet_object_enrichment(

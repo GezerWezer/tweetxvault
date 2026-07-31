@@ -31,15 +31,18 @@ def _build_fts_in_background(store) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if "paths" in server_state:
-        server_state["store"] = open_archive_store(
+        store = open_archive_store(
             server_state["paths"],
             create=False,
             config=server_state.get("config"),
         )
-        server_state["store"].ensure_scalar_indexes()
+        if store is None:
+            raise RuntimeError("Archive database not found")
+        server_state["store"] = store
+        store.ensure_scalar_indexes()
         t = threading.Thread(
             target=_build_fts_in_background,
-            args=(server_state["store"],),
+            args=(store,),
             daemon=True,
         )
         t.start()

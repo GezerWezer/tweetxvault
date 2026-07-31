@@ -165,6 +165,40 @@ class FakeClient:
         self.models = FakeModels(outcomes)
 
 
+class FailingTagConnection:
+    def __init__(self, connection: sqlite3.Connection, *, fail_on_write: int) -> None:
+        self.connection = connection
+        self.fail_on_write = fail_on_write
+        self.media_tag_writes = 0
+        self.rollbacks = 0
+
+    def execute(self, sql: str, parameters: tuple[object, ...] = ()) -> sqlite3.Cursor:
+        if "INSERT OR REPLACE INTO archive" in sql and parameters[1] == "media_tag":
+            self.media_tag_writes += 1
+            if self.media_tag_writes == self.fail_on_write:
+                raise sqlite3.OperationalError("write failed for top-secret-api-key")
+        return self.connection.execute(sql, parameters)
+
+    def commit(self) -> None:
+        self.connection.commit()
+
+    def rollback(self) -> None:
+        self.rollbacks += 1
+        self.connection.rollback()
+
+
+class TrackingImage:
+    def __init__(self) -> None:
+        self.loaded = False
+        self.closed = False
+
+    def load(self) -> None:
+        self.loaded = True
+
+    def close(self) -> None:
+        self.closed = True
+
+
 def response(payload: object, *, finish_reason: str | None = None) -> SimpleNamespace:
     text = payload if isinstance(payload, str) else json.dumps(payload)
     candidates = [SimpleNamespace(finish_reason=finish_reason)] if finish_reason is not None else []
@@ -824,6 +858,56 @@ async def test_partial_output_stores_only_valid_requested_results(
     }
     assert store.media_tag("2") is None
     assert "Skipping invalid Gemini result" in output.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_later_result_write_failure_rolls_back_batch_and_closes_all_images(
+    monkeypatch: pytest.MonkeyPatch,
+    paths,
+) -> None:
+    store = FakeStore()
+    prepare_photo(store, paths.data_dir, "1")
+    prepare_photo(store, paths.data_dir, "2")
+    connection = store.conn
+    failing_connection = FailingTagConnection(connection, fail_on_write=2)
+    store.conn = failing_connection
+    images = [TrackingImage(), TrackingImage()]
+    monkeypatch.setattr(tagging.Image, "open", lambda path: images.pop(0))
+    opened_images = list(images)
+    client = FakeClient(
+        [
+            response(
+                [
+                    {
+                        "id": "1",
+                        "description": "First valid result",
+                        "tags": ["One", "Two"],
+                    },
+                    {
+                        "id": "2",
+                        "description": "Second valid result",
+                        "tags": ["Three", "Four"],
+                    },
+                ]
+            )
+        ]
+    )
+    monkeypatch.setattr(tagging.genai, "Client", lambda **kwargs: client)
+    console, output = make_console()
+
+    assert await tagging.tag_media_tweets(store, make_config(), paths, console, ["1", "2"]) == 0
+    assert failing_connection.media_tag_writes == 2
+    assert failing_connection.rollbacks == 1
+    assert (
+        connection.execute(
+            "SELECT count(*) FROM archive WHERE record_type = 'media_tag'"
+        ).fetchone()[0]
+        == 0
+    )
+    assert all(image.loaded for image in opened_images)
+    assert all(image.closed for image in opened_images)
+    assert "top-secret-api-key" not in output.getvalue()
+    assert "[REDACTED]" in output.getvalue()
 
 
 @pytest.mark.asyncio

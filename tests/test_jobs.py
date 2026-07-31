@@ -7,27 +7,15 @@ from tweetxvault.exceptions import ConfigError
 
 
 class _FakeStore:
-    def __init__(
-        self,
-        *,
-        version_counts: list[int] | None = None,
-        optimize_exc: BaseException | None = None,
-    ) -> None:
+    def __init__(self) -> None:
         self.optimize_calls = 0
         self.closed = False
-        self._version_counts = version_counts or [0]
-        self._version_index = 0
-        self._optimize_exc = optimize_exc
 
     def version_count(self) -> int:
-        value = self._version_counts[min(self._version_index, len(self._version_counts) - 1)]
-        self._version_index += 1
-        return value
+        return 0
 
     def optimize(self) -> None:
         self.optimize_calls += 1
-        if self._optimize_exc is not None:
-            raise self._optimize_exc
 
     def close(self) -> None:
         self.closed = True
@@ -61,7 +49,7 @@ async def test_locked_archive_job_interrupt_closes_without_optimizing(
     config,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    store = _FakeStore(version_counts=[0, 1])
+    store = _FakeStore()
     monkeypatch.setattr(jobs, "open_archive_store", lambda _paths, create=False, config=None: store)
 
     with pytest.raises(KeyboardInterrupt):

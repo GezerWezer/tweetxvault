@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from tweetxvault.storage.backend import ArchiveCollectionStats, ArchiveStats
+from tweetxvault.storage.backend import ArchiveCollectionStats, ArchiveStats, ArchiveStore
 from tweetxvault.web.routes import stats as stats_routes
 
 
@@ -19,6 +19,7 @@ def _stats_store() -> SimpleNamespace:
             tweet_id TEXT,
             author_id TEXT,
             created_at_ts INTEGER,
+            updated_at TEXT,
             key TEXT,
             value TEXT,
             enrichment_state TEXT,
@@ -36,17 +37,17 @@ def test_summary_reports_counts_ranges_owner_and_latest_sync(make_web_client) ->
     store.conn.executemany(
         """
         INSERT INTO archive (
-            record_type, tweet_id, author_id, created_at_ts, key, value
-        ) VALUES (?, ?, ?, ?, ?, ?)
+            record_type, tweet_id, author_id, created_at_ts, updated_at, key, value
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
         [
-            ("tweet", "t1", "a1", 1_700_000_000, None, None),
-            ("tweet", "t2", "a2", 1_800_000_000, None, None),
-            ("article", None, None, None, None, None),
-            ("media", "t1", "a1", None, None, None),
-            ("url", "t1", None, None, None, None),
-            ("sync_state", None, None, 1_750_000_000, None, None),
-            ("metadata", None, None, None, "owner_user_id", "owner-42"),
+            ("tweet", "t1", "a1", 1_700_000_000, None, None, None),
+            ("tweet", "t2", "a2", 1_800_000_000, None, None, None),
+            ("article", None, None, None, None, None, None),
+            ("media", "t1", "a1", None, None, None, None),
+            ("url", "t1", None, None, None, None, None),
+            ("sync_state", None, None, None, "2025-06-15T00:00:00Z", None, None),
+            ("metadata", None, None, None, None, "owner_user_id", "owner-42"),
         ],
     )
     client = make_web_client(stats_routes.router, store=store)
@@ -152,7 +153,7 @@ def test_health_reports_pipeline_counts(make_web_client) -> None:
             ("tweet", None, "c1", None),
             ("tweet", None, "c1", None),
             ("tweet", None, "c2", None),
-            ("article", None, None, "preview"),
+            ("article", None, None, "preview_only"),
             ("article", None, None, "body_present"),
         ],
     )
@@ -235,6 +236,73 @@ def test_tag_stats_ignore_malformed_tag_json(make_web_client) -> None:
     assert response.json()["tagged_tweets"] == 1
     assert response.json()["unique_tags"] == 1
     assert response.json()["top_tags"] == [{"tag": "bird", "count": 1}]
+
+
+def test_tag_stats_require_a_nonempty_tags_array(make_web_client) -> None:
+    store = _stats_store()
+    store.conn.executemany(
+        "INSERT INTO archive (record_type, tweet_id, raw_json) VALUES (?, ?, ?)",
+        [
+            ("media", "t1", None),
+            ("media", "t2", None),
+            ("media", "t3", None),
+            ("media_tag", "t1", "{}"),
+            ("media_tag", "t2", '{"tags":[]}'),
+            ("media_tag", "t3", '{"tags":["Bird"]}'),
+        ],
+    )
+    client = make_web_client(stats_routes.router, store=store)
+
+    data = client.get("/api/stats/tags").json()
+
+    assert data["tagged_tweets"] == 1
+    assert data["untagged_eligible"] == 2
+    assert data["coverage_pct"] == 33.3
+
+
+def test_summary_and_health_follow_real_archive_schema(tmp_path, make_web_client) -> None:
+    store = ArchiveStore(tmp_path / "archive.db", create=True)
+    store._merge_records(
+        [
+            store._record(
+                row_key="tweet:bookmark::1",
+                record_type="tweet",
+                tweet_id="1",
+                collection_type="bookmark",
+                author_id="author-1",
+                created_at_ts=1_700_000_000,
+            ),
+            store._record(
+                row_key="tweet:like::1",
+                record_type="tweet",
+                tweet_id="1",
+                collection_type="like",
+                author_id="author-1",
+                created_at_ts=1_700_000_000,
+            ),
+            store._record(
+                row_key="sync_state:bookmark:",
+                record_type="sync_state",
+                collection_type="bookmark",
+                updated_at="2025-06-15T00:00:00Z",
+            ),
+            store._record(
+                row_key="article:1",
+                record_type="article",
+                tweet_id="1",
+                status="preview_only",
+            ),
+        ]
+    )
+    client = make_web_client(stats_routes.router, store=store)
+
+    summary = client.get("/api/stats/summary").json()
+    health = client.get("/api/stats/health").json()
+
+    assert summary["unique_posts"] == 1
+    assert summary["latest_sync"] == "Jun 15, 2025"
+    assert health["preview_articles"] == 1
+    store.close()
 
 
 def test_stats_routes_require_authentication(make_web_client) -> None:

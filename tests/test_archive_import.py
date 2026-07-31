@@ -352,8 +352,7 @@ def test_import_x_archive_directory_populates_archive_and_copies_media(
     assert row_by_key[("like", "300")]["sort_index"] == "-1"
 
     tweet_objects = {
-        row["tweet_id"]: row
-        for row in store._query(expr="record_type = 'tweet_object'")
+        row["tweet_id"]: row for row in store._query(expr="record_type = 'tweet_object'")
     }
     assert tweet_objects["100"]["source"] == "x_archive"
     assert tweet_objects["200"]["enrichment_state"] == "terminal_unavailable"
@@ -577,9 +576,7 @@ def test_repeated_import_enrich_preserves_existing_manifest_warnings(
 
     store = open_archive_store(paths, create=False)
     assert store is not None
-    manifest_row = (
-        store._query(expr="record_type = 'import_manifest'", limit=1)[0]
-    )
+    manifest_row = store._query(expr="record_type = 'import_manifest'", limit=1)[0]
     manifest_warnings = json.loads(manifest_row["warnings_json"])
     assert expected_warning in manifest_warnings
     assert "detail enrichment failed: upstream 429" in manifest_warnings
@@ -712,8 +709,8 @@ def test_enrich_pending_rows_batches_detail_writes(paths, monkeypatch: pytest.Mo
             cursor=buffer,
         )
     archive_import._flush_buffer(store, buffer)
-    before = store.version_count()
     store.close()
+    dirty_calls: list[tuple[int, int]] = []
 
     @asynccontextmanager
     async def fake_locked_archive_job(*, config=None, paths=None, console=None):
@@ -725,7 +722,7 @@ def test_enrich_pending_rows_batches_detail_writes(paths, monkeypatch: pytest.Mo
                 self.store = store
 
             def mark_dirty(self, rows: int = 1, batches: int = 1) -> None:
-                return None
+                dirty_calls.append((rows, batches))
 
         try:
             yield _Job(store)
@@ -772,6 +769,7 @@ def test_enrich_pending_rows_batches_detail_writes(paths, monkeypatch: pytest.Mo
     )
 
     assert (refreshed, terminal, transient, pending) == (12, 0, 0, 0)
+    assert dirty_calls == [(5, 1), (5, 1), (2, 1)]
 
     store = open_archive_store(paths, create=False)
     assert store is not None
@@ -1139,10 +1137,8 @@ def test_import_x_archive_detail_api_errors_become_transient_failures(
     assert store is not None
     tweet_object = store._query(expr="row_key = 'tweet_object:300'", limit=1)[0]
     assert tweet_object["enrichment_state"] == "transient_failure"
-    assert tweet_object["enrichment_http_status"] == '500'
-    manifest_row = (
-        store._query(expr="record_type = 'import_manifest'", limit=1)[0]
-    )
+    assert tweet_object["enrichment_http_status"] == "500"
+    manifest_row = store._query(expr="record_type = 'import_manifest'", limit=1)[0]
     manifest_counts = json.loads(manifest_row["counts_json"])
     assert manifest_counts["detail_transient_failures"] == 1
     store.close()
@@ -1194,9 +1190,7 @@ def test_import_x_archive_detail_stale_query_id_leaves_rows_retryable(
     tweet_object = store._query(expr="row_key = 'tweet_object:300'", limit=1)[0]
     assert tweet_object["enrichment_state"] == "pending"
     assert tweet_object["enrichment_http_status"] is None
-    manifest_row = (
-        store._query(expr="record_type = 'import_manifest'", limit=1)[0]
-    )
+    manifest_row = store._query(expr="record_type = 'import_manifest'", limit=1)[0]
     manifest_counts = json.loads(manifest_row["counts_json"])
     assert manifest_counts["pending_enrichment"] == 1
     store.close()
@@ -1228,9 +1222,7 @@ def test_import_x_archive_preserves_attempt_start_time(
 
     store = open_archive_store(paths, create=False)
     assert store is not None
-    manifest_row = (
-        store._query(expr="record_type = 'import_manifest'", limit=1)[0]
-    )
+    manifest_row = store._query(expr="record_type = 'import_manifest'", limit=1)[0]
     assert manifest_row["import_started_at"] == "2026-03-17T00:00:00Z"
     assert manifest_row["import_completed_at"] == "2026-03-17T00:00:03Z"
     store.close()
@@ -1277,9 +1269,7 @@ def test_sampled_debug_import_stays_non_completed_and_full_import_can_rerun(
 
     store = open_archive_store(paths, create=False)
     assert store is not None
-    manifest_row = (
-        store._query(expr="record_type = 'import_manifest'", limit=1)[0]
-    )
+    manifest_row = store._query(expr="record_type = 'import_manifest'", limit=1)[0]
     assert manifest_row["status"] == "sampled"
     store.close()
 
@@ -1295,9 +1285,7 @@ def test_sampled_debug_import_stays_non_completed_and_full_import_can_rerun(
     assert full.skipped is False
     store = open_archive_store(paths, create=False)
     assert store is not None
-    manifest_row = (
-        store._query(expr="record_type = 'import_manifest'", limit=1)[0]
-    )
+    manifest_row = store._query(expr="record_type = 'import_manifest'", limit=1)[0]
     assert manifest_row["status"] == "completed"
     store.close()
 
@@ -1331,9 +1319,7 @@ def test_interrupted_import_marks_manifest_failed_and_rerun_reuses_archive_captu
 
     store = open_archive_store(paths, create=False)
     assert store is not None
-    manifest_row = (
-        store._query(expr="record_type = 'import_manifest'", limit=1)[0]
-    )
+    manifest_row = store._query(expr="record_type = 'import_manifest'", limit=1)[0]
     assert manifest_row["status"] == "failed"
     raw_capture_count = store.counts()["raw_captures"]
     store.close()
@@ -1354,9 +1340,7 @@ def test_interrupted_import_marks_manifest_failed_and_rerun_reuses_archive_captu
     assert rerun.skipped is False
     store = open_archive_store(paths, create=False)
     assert store is not None
-    manifest_row = (
-        store._query(expr="record_type = 'import_manifest'", limit=1)[0]
-    )
+    manifest_row = store._query(expr="record_type = 'import_manifest'", limit=1)[0]
     assert manifest_row["status"] == "completed"
     assert store.counts()["raw_captures"] == raw_capture_count
     store.close()

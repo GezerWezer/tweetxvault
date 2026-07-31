@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 from typer.testing import CliRunner
 
+import tweetxvault.cli as cli
 import tweetxvault.cli_web as cli_web
 from tweetxvault.config import AppConfig, XDGPaths
 
@@ -344,6 +345,68 @@ def test_start_reports_subprocess_failure(monkeypatch, tmp_path: Path) -> None:
     assert result.exit_code == 1
     assert "Failed to start web server: fork failed" in result.stdout
     assert not cli_web._get_pid_file(paths.data_dir).exists()
+
+
+def test_start_terminates_child_when_pid_file_cannot_be_written(
+    monkeypatch, tmp_path: Path
+) -> None:
+    config, paths = _configured(tmp_path, archive=True)
+    config.web.password_hash = hashlib.sha256(b"secure").hexdigest()
+    _stub_start_prerequisites(monkeypatch, config, paths)
+    process = SimpleNamespace(pid=2468)
+    monkeypatch.setattr(cli_web.subprocess, "Popen", lambda *_args, **_kwargs: process)
+    signals: list[tuple[int, int]] = []
+    monkeypatch.setattr(
+        cli_web.os,
+        "kill",
+        lambda pid, sig: signals.append((pid, sig)),
+    )
+    original_write_text = Path.write_text
+
+    def write_text(path: Path, data: str, **kwargs) -> int:
+        if path == cli_web._get_pid_file(paths.data_dir):
+            raise OSError("read only")
+        return original_write_text(path, data, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", write_text)
+
+    result = runner.invoke(cli_web.web_app, ["start"])
+
+    assert result.exit_code == 1
+    assert signals == [(2468, signal.SIGTERM)]
+    assert "Failed to record web server PID: read only" in result.stdout
+    assert not cli_web._get_pid_file(paths.data_dir).exists()
+
+
+def test_hidden_serve_daemon_exits_when_web_dependencies_are_missing(
+    monkeypatch,
+) -> None:
+    monkeypatch.setitem(sys.modules, "tweetxvault.web.server", None)
+    monkeypatch.setattr(
+        cli,
+        "load_config",
+        lambda: pytest.fail("configuration must not load without web dependencies"),
+    )
+
+    with pytest.raises(cli.typer.Exit) as exc_info:
+        cli.serve_daemon_internal()
+
+    assert exc_info.value.exit_code == 1
+
+
+def test_hidden_serve_daemon_exits_when_archive_is_missing(monkeypatch, tmp_path: Path) -> None:
+    config, paths = _configured(tmp_path)
+    monkeypatch.setattr(cli, "load_config", lambda: (config, paths))
+    monkeypatch.setattr(cli, "open_archive_store", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "tweetxvault.web.server.run_server",
+        lambda *_args: pytest.fail("server must not run without an archive"),
+    )
+
+    with pytest.raises(cli.typer.Exit) as exc_info:
+        cli.serve_daemon_internal()
+
+    assert exc_info.value.exit_code == 1
 
 
 def test_status_reports_recorded_running_server(monkeypatch, tmp_path: Path) -> None:

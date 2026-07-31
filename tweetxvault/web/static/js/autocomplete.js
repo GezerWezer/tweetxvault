@@ -246,12 +246,15 @@ function searchAutocomplete() {
         },
         
         highlightMatch(text, query) {
-            if (!query || !text) return text || '';
+            if (!text) return '';
+            if (!query) return this.escapeHtml(text);
             const cleanQuery = query.startsWith('@') ? query.substring(1) : query;
-            if (!cleanQuery) return text;
+            if (!cleanQuery) return this.escapeHtml(text);
             const idx = text.toLowerCase().indexOf(cleanQuery.toLowerCase());
-            if (idx === -1) return text;
-            return text.substring(0, idx) + '<b>' + text.substring(idx, idx + cleanQuery.length) + '</b>' + text.substring(idx + cleanQuery.length);
+            if (idx === -1) return this.escapeHtml(text);
+            return this.escapeHtml(text.substring(0, idx))
+                + '<b>' + this.escapeHtml(text.substring(idx, idx + cleanQuery.length)) + '</b>'
+                + this.escapeHtml(text.substring(idx + cleanQuery.length));
         },
 
         escapeHtml(unsafe) {
@@ -501,4 +504,3 @@ function searchAutocomplete() {
         }
     };
 }
-

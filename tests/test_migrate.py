@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -172,6 +173,134 @@ def install_worker_sequence(
 
     monkeypatch.setattr(migrate, "_run_worker", fake_worker)
     return calls
+
+
+def test_worker_code_executes_batch_and_preserves_existing_rows(
+    monkeypatch: pytest.MonkeyPatch,
+    paths,
+) -> None:
+    config = AppConfig()
+    store = open_archive_store(paths, create=True, config=config)
+    assert store is not None
+    store.conn.execute(
+        """
+        INSERT INTO archive (row_key, record_type, tweet_id, text)
+        VALUES ('tweet_object:1', 'tweet_object', '1', 'newer SQLite value')
+        """
+    )
+    store.conn.commit()
+    store.close()
+
+    class FakeSearch:
+        def __init__(self) -> None:
+            self.limit_value: int | None = None
+            self.offset_value: int | None = None
+
+        def limit(self, value: int) -> FakeSearch:
+            self.limit_value = value
+            return self
+
+        def offset(self, value: int) -> FakeSearch:
+            self.offset_value = value
+            return self
+
+        def to_list(self) -> list[dict[str, object]]:
+            assert self.limit_value == 25
+            assert self.offset_value == 75
+            return [
+                {
+                    "row_key": "tweet_object:1",
+                    "record_type": "tweet_object",
+                    "tweet_id": "1",
+                    "text": "legacy value must be ignored",
+                },
+                {
+                    "row_key": "tweet_object:2",
+                    "record_type": "tweet_object",
+                    "tweet_id": "2",
+                    "text": "migrated value",
+                    "unknown_legacy_field": "ignored",
+                },
+            ]
+
+    search = FakeSearch()
+    table = SimpleNamespace(search=lambda: search)
+    database = SimpleNamespace(
+        open_table=lambda name: table
+        if name == "archive"
+        else pytest.fail(f"unexpected table: {name}")
+    )
+    connected_paths: list[str] = []
+    fake_lancedb = SimpleNamespace(connect=lambda path: connected_paths.append(path) or database)
+    monkeypatch.setitem(sys.modules, "lancedb", fake_lancedb)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "-c",
+            str(paths.data_dir / "archive.lancedb"),
+            str(paths.database_path),
+            "25",
+            "75",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exit_info:
+        exec(compile(migrate.WORKER_CODE, "<migration-worker>", "exec"), {"__name__": "__main__"})
+
+    assert exit_info.value.code == 0
+    assert connected_paths == [str(paths.data_dir / "archive.lancedb")]
+    connection = sqlite3.connect(paths.database_path)
+    try:
+        rows = connection.execute(
+            """
+            SELECT row_key, text
+            FROM archive
+            WHERE row_key IN ('tweet_object:1', 'tweet_object:2')
+            ORDER BY row_key
+            """
+        ).fetchall()
+    finally:
+        connection.close()
+    assert rows == [
+        ("tweet_object:1", "newer SQLite value"),
+        ("tweet_object:2", "migrated value"),
+    ]
+
+
+def test_worker_code_empty_batch_exits_without_opening_destination(
+    monkeypatch: pytest.MonkeyPatch,
+    paths,
+) -> None:
+    search = SimpleNamespace(
+        limit=lambda value: SimpleNamespace(
+            offset=lambda offset: SimpleNamespace(to_list=lambda: [])
+        )
+    )
+    fake_lancedb = SimpleNamespace(
+        connect=lambda path: SimpleNamespace(
+            open_table=lambda name: SimpleNamespace(search=lambda: search)
+        )
+    )
+    monkeypatch.setitem(sys.modules, "lancedb", fake_lancedb)
+    database_path = paths.data_dir / "must-not-be-created.sqlite"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "-c",
+            str(paths.data_dir / "archive.lancedb"),
+            str(database_path),
+            "5000",
+            "0",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exit_info:
+        exec(compile(migrate.WORKER_CODE, "<migration-worker>", "exec"), {"__name__": "__main__"})
+
+    assert exit_info.value.code == migrate.WORKER_END_OF_TABLE
+    assert not database_path.exists()
 
 
 def test_module_does_not_require_lancedb_until_migration_runs(
