@@ -385,7 +385,10 @@ async def expand_threads(
 
                     _log_threads(
                         console,
-                        f"linked-status pass over {len(filtered_url_rows)} reachable url refs (from {len(url_ref_rows)} total, max depth {max_linked_depth})",
+                        "linked-status pass over "
+                        f"{len(filtered_url_rows)} reachable url refs "
+                        f"(from {len(url_ref_rows)} total, "
+                        f"max depth {max_linked_depth})",
                     )
                     for scanned, row in enumerate(filtered_url_rows, start=1):
                         if limit is not None and result.processed >= limit:

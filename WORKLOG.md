@@ -13,7 +13,7 @@
     coverage for partial media-tagging failures; strengthened batch-write assertions and
     removed obsolete test-double behavior.
   - Validation: `.venv/bin/pytest -q` passed all 568 cases; Node asset harness passed 18/18;
-    Ruff passed across all changed Python files; live localhost browser smoke loaded the app,
+    repository-wide non-sync Ruff lint passed; live localhost browser smoke loaded the app,
     fetched its APIs, opened Settings through Alpine, and logged no browser errors.
 
 - 2026-07-30 (Scroll Back to Top Button)

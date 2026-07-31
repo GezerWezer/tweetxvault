@@ -34,8 +34,8 @@ Planning note (2026-03-15):
   cleanup for multi-result media tagging.
 - [x] Consolidate redundant progress/job tests and strengthen the archive enrichment batch
   test to assert its exact write batches.
-- [x] Validate 568 pytest cases, 18 Node browser-asset cases, changed-file Ruff checks, and a
-  live FastAPI/Alpine browser smoke test.
+- [x] Validate 568 pytest cases, 18 Node browser-asset cases, repository-wide non-sync Ruff
+  lint, and a live FastAPI/Alpine browser smoke test.
 - [x] Leave syncing implementation and sync-test logic unchanged and outside this audit.
 
 ---

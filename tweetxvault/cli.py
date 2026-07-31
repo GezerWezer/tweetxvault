@@ -541,7 +541,19 @@ def _run_sync_all_command(
     _maybe_restart_web(console)
     raise typer.Exit(outcome.exit_code)
 
-def _run_with_depth(config, auth_bundle, runner_console, max_linked_depth, full, backfill, article_backfill, head_only, limit, followups):
+
+def _run_with_depth(
+    config,
+    auth_bundle,
+    runner_console,
+    max_linked_depth,
+    full,
+    backfill,
+    article_backfill,
+    head_only,
+    limit,
+    followups,
+):
     if max_linked_depth is not None:
         config.sync.max_linked_depth = max_linked_depth
     return sync_all(
@@ -576,7 +588,13 @@ def sync_default(
     skip_media: SYNC_SKIP_MEDIA_OPTION = False,
     skip_unfurl: SYNC_SKIP_UNFURL_OPTION = False,
     skip_threads: SYNC_SKIP_THREADS_OPTION = False,
-    retry_failed: Annotated[bool, typer.Option("--retry-failed", help="Retry all previously failed/dead tweets in one batch.")] = False,
+    retry_failed: Annotated[
+        bool,
+        typer.Option(
+            "--retry-failed",
+            help="Retry all previously failed/dead tweets in one batch.",
+        ),
+    ] = False,
     max_linked_depth: SYNC_MAX_LINKED_DEPTH_OPTION = None,
 ) -> None:
     if ctx.invoked_subcommand is not None:
@@ -624,7 +642,13 @@ def _register_sync_collection_command(collection: str):
         skip_media: SYNC_SKIP_MEDIA_OPTION = False,
         skip_unfurl: SYNC_SKIP_UNFURL_OPTION = False,
         skip_threads: SYNC_SKIP_THREADS_OPTION = False,
-        retry_failed: Annotated[bool, typer.Option("--retry-failed", help="Retry all previously failed/dead tweets in one batch.")] = False,
+        retry_failed: Annotated[
+            bool,
+            typer.Option(
+                "--retry-failed",
+                help="Retry all previously failed/dead tweets in one batch.",
+            ),
+        ] = False,
     ) -> None:
         followups = _sync_followup_plan(
             skip_enrich=skip_enrich,
@@ -905,7 +929,13 @@ def sync_everything(
     skip_media: SYNC_SKIP_MEDIA_OPTION = False,
     skip_unfurl: SYNC_SKIP_UNFURL_OPTION = False,
     skip_threads: SYNC_SKIP_THREADS_OPTION = False,
-    retry_failed: Annotated[bool, typer.Option("--retry-failed", help="Retry all previously failed/dead tweets in one batch.")] = False,
+    retry_failed: Annotated[
+        bool,
+        typer.Option(
+            "--retry-failed",
+            help="Retry all previously failed/dead tweets in one batch.",
+        ),
+    ] = False,
     max_linked_depth: SYNC_MAX_LINKED_DEPTH_OPTION = None,
 ) -> None:
     _run_sync_all_command(

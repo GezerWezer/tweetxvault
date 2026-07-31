@@ -61,7 +61,12 @@ class ArchiveWriteTracker:
     @property
     def has_writes(self) -> bool:
         delta = self.version_delta
-        return self.batch_writes > 0 or self.row_writes > 0 or (delta is not None and delta > 0) or self.has_optimized_mid_job
+        return (
+            self.batch_writes > 0
+            or self.row_writes > 0
+            or (delta is not None and delta > 0)
+            or self.has_optimized_mid_job
+        )
 
     def should_optimize_on_interrupt(self) -> bool:
         delta = self.version_delta
