@@ -18,6 +18,26 @@ Planning note (2026-03-15):
 - The active next milestone is turning the X-archive import stub into a real importer using the fresh 2026-03-16 archive fixture.
 - The review-cleanup checklist lower in this file is complete and retained as historical record.
 
+## Comprehensive non-sync test audit (2026-07-30)
+
+- [x] Remove obsolete embedding/vector surfaces and their redundant tests.
+- [x] Add focused configuration, SQLite storage, migration, media-tag, Gemini-tagging,
+  tag-CLI, extractor, interactive-progress, and web-daemon coverage.
+- [x] Add FastAPI route coverage for authentication, configuration, media, avatars,
+  statistics, storage statistics, tags, tweet listings, threads, quotes, and authors.
+- [x] Add deterministic JavaScript coverage for themes, autocomplete, application state,
+  navigation, rendering, media, persistence, and HTML/URL escaping.
+- [x] Add real-SQLite regressions for membership deduplication, tombstone pagination,
+  production timestamp formats, sync-state statistics, article statuses, tag coverage,
+  Boolean article search, legacy author schemas, and resurrection.
+- [x] Execute the real migration worker in tests and cover transactional rollback/resource
+  cleanup for multi-result media tagging.
+- [x] Consolidate redundant progress/job tests and strengthen the archive enrichment batch
+  test to assert its exact write batches.
+- [x] Validate 568 pytest cases, 18 Node browser-asset cases, changed-file Ruff checks, and a
+  live FastAPI/Alpine browser smoke test.
+- [x] Leave syncing implementation and sync-test logic unchanged and outside this audit.
+
 ---
 
 ## Task 0: SeekDB Spikes

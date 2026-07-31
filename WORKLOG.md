@@ -1,3 +1,21 @@
+- 2026-07-30 (Comprehensive non-sync test audit and implementation)
+  - Created `comprehensive-non-sync-tests` from merged `main`; syncing implementation and
+    `tests/test_sync.py` were deliberately left unchanged.
+  - Removed the obsolete embedding/vector command and dependency surfaces, along with their
+    tests, and retained FTS-only search behavior.
+  - Added broad non-sync coverage for configuration, SQLite storage/migrations, media tags,
+    Gemini tagging, tag CLI, extraction, interactive helpers, web daemon management, FastAPI
+    routes, tweet/thread/quote APIs, resurrection, and browser JavaScript.
+  - Used real SQLite integration cases to fix duplicate membership pagination, tombstone
+    totals, Twitter-format date filtering, sync/article/tag statistics, legacy author search,
+    and article Boolean/phrase semantics.
+  - Added direct execution coverage for the migration worker and rollback/image-close
+    coverage for partial media-tagging failures; strengthened batch-write assertions and
+    removed obsolete test-double behavior.
+  - Validation: `.venv/bin/pytest -q` passed all 568 cases; Node asset harness passed 18/18;
+    Ruff passed across all changed Python files; live localhost browser smoke loaded the app,
+    fetched its APIs, opened Settings through Alpine, and logged no browser errors.
+
 - 2026-07-30 (Scroll Back to Top Button)
   - Implemented a floating Back to Top scroll button in the web UI.
   - Added `showScrollTop` state property, window `scroll` event listener (>300px threshold), and `scrollToTop()` smooth scrolling method in `tweetxvault/web/static/js/app.js`.
