@@ -15,7 +15,6 @@ import tweetxvault.cli as cli
 from tweetxvault.auth import BrowserCandidate
 from tweetxvault.client.timelines import TimelineTweet
 from tweetxvault.config import AppConfig, AuthConfig
-from tweetxvault.exceptions import ProcessLockError
 from tweetxvault.storage import open_archive_store
 
 runner = CliRunner()
@@ -90,12 +89,6 @@ def test_version_option_prints_version_text(monkeypatch: pytest.MonkeyPatch) -> 
         "_version_text",
         lambda: f"tweetxvault {cli.__version__} (abc1234, dirty)",
     )
-    monkeypatch.setattr(
-        cli,
-        "_raise_nofile_limit",
-        lambda: (_ for _ in ()).throw(AssertionError("should not run for --version")),
-    )
-
     result = runner.invoke(cli.app, ["--version"])
 
     assert result.exit_code == 0
@@ -220,10 +213,10 @@ def test_search_help_describes_flags() -> None:
     result = runner.invoke(cli.app, ["search", "--help"])
 
     assert result.exit_code == 0
-    assert "Search archived posts and articles." in result.stdout
+    assert "Full-text search archived posts and articles." in result.stdout
     assert "Search query text." in result.stdout
     assert "Maximum number of results to" in result.stdout
-    assert "Search mode: auto, fts," in result.stdout
+    assert "--mode" not in result.stdout
     assert "Comma-delimited search result" in result.stdout
     assert "Comma-delimited collections:" in result.stdout
 
@@ -303,9 +296,6 @@ def test_search_uses_shared_tweet_list_rendering(monkeypatch) -> None:
     monkeypatch.setattr(cli, "_with_auto_optimize", lambda store, paths, console, fn: fn(store))
 
     class _FakeStore:
-        def has_embeddings(self) -> bool:
-            return False
-
         def search_fts(self, query: str, *, limit: int, types=None, collections=None):
             assert query == "bookmark"
             assert limit == 5
@@ -332,7 +322,6 @@ def test_search_uses_shared_tweet_list_rendering(monkeypatch) -> None:
     cli.search_archive(
         "bookmark",
         limit=5,
-        mode="fts",
         type_filter="post,article",
         collection_filter="bookmarks",
     )
@@ -345,33 +334,6 @@ def test_search_uses_shared_tweet_list_rendering(monkeypatch) -> None:
     assert "0.750" in output
     assert "post · bookmark" in output
     assert "bookmark tweet" in output
-
-
-def test_search_auto_falls_back_to_fts_when_articles_are_in_scope(monkeypatch) -> None:
-    buffer = StringIO()
-    _capture_console(monkeypatch, buffer)
-    monkeypatch.setattr(cli, "_with_auto_optimize", lambda store, paths, console, fn: fn(store))
-
-    class _FakeStore:
-        def has_embeddings(self) -> bool:
-            return True
-
-        def search_fts(self, query: str, *, limit: int, types=None, collections=None):
-            assert query == "archive"
-            assert limit == 3
-            assert types is None
-            assert collections is None
-            return []
-
-        def close(self) -> None:
-            return None
-
-    monkeypatch.setattr(cli, "_open_store_for_read", lambda console: (_FakeStore(), object()))
-
-    cli.search_archive("archive", limit=3, mode="auto")
-
-    output = buffer.getvalue()
-    assert "No results found." in output
 
 
 def test_sort_search_results_reorders_newest_then_oldest() -> None:
@@ -398,49 +360,6 @@ def test_sort_search_results_reorders_newest_then_oldest() -> None:
 
     assert [row["tweet_id"] for row in newest] == ["2", "1", "3"]
     assert [row["tweet_id"] for row in oldest] == ["1", "2", "3"]
-
-
-def test_search_chronological_sort_keeps_vector_mode(monkeypatch) -> None:
-    buffer = StringIO()
-    _capture_console(monkeypatch, buffer)
-
-    class _FakeStore:
-        def has_embeddings(self) -> bool:
-            return True
-
-        def search_vector(self, vector, *, limit: int, collections=None):
-            assert limit == 2
-            assert collections is None
-            return []
-
-        def search_fts(self, query: str, *, limit: int, types=None, collections=None):
-            raise AssertionError("search_fts should not be called for vector newest sort")
-
-        def close(self) -> None:
-            return None
-
-    monkeypatch.setattr(cli, "_open_store_for_read", lambda console: (_FakeStore(), object()))
-
-    class _FakeVector(list):
-        def tolist(self):
-            return list(self)
-
-    class _FakeEmbeddingEngine:
-        def embed_batch(self, texts):
-            assert texts == ["bookmark"]
-            return [_FakeVector([0.1, 0.2])]
-
-    monkeypatch.setitem(
-        sys.modules,
-        "tweetxvault.embed",
-        SimpleNamespace(EmbeddingEngine=_FakeEmbeddingEngine),
-    )
-
-    cli.search_archive("bookmark", limit=2, mode="vector", sort="newest", type_filter="post")
-
-    output = buffer.getvalue()
-    assert "Falling back to full-text search" not in output
-    assert "No results found." in output
 
 
 def test_export_json_accepts_plural_collection_name(paths, monkeypatch, tmp_path: Path) -> None:
@@ -1509,7 +1428,7 @@ def test_rehydrate_archive_uses_write_lock(paths, monkeypatch) -> None:
             self.optimized = False
             self.closed = False
 
-        def _count(self, filter_expr: str = None) -> int:
+        def _count(self, filter_expr: str | None = None) -> int:
             return 2
 
         def rehydrate_from_raw_json(self, *, progress=None):
@@ -1537,74 +1456,3 @@ def test_rehydrate_archive_uses_write_lock(paths, monkeypatch) -> None:
     assert lock_calls == [paths.lock_file]
     assert store.closed is True
     assert "rehydrated 2 tweet rows and rebuilt 5 secondary rows" in buffer.getvalue()
-
-
-def test_embed_archive_uses_write_lock(paths, monkeypatch) -> None:
-    buffer = StringIO()
-    _capture_console(monkeypatch, buffer)
-    monkeypatch.setattr(cli, "load_config", lambda: (AppConfig(), paths))
-    lock_calls: list[Path] = []
-
-    class FakeTqdm:
-        def __init__(self, *args, **kwargs) -> None:
-            self.updates: list[int] = []
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb) -> bool:
-            return False
-
-        def update(self, count: int) -> None:
-            self.updates.append(count)
-
-    class FakeEmbeddingEngine:
-        def embed_batch(self, texts):
-            return [[0.1, 0.2, 0.3] for _ in texts]
-
-    class FakeStore:
-        def __init__(self) -> None:
-            self.cleared = False
-            self.optimized = False
-            self.closed = False
-            self.writes: list[tuple[list[dict[str, object]], list[list[float]]]] = []
-
-        def clear_embeddings(self) -> None:
-            self.cleared = True
-
-        def count_unembedded(self) -> int:
-            return 1
-
-        def get_unembedded_tweets(self, *, batch_size: int = 100):
-            return [[{"author_username": "user1", "text": "bookmark tweet"}]]
-
-        def write_embeddings(self, batch, vectors) -> None:
-            self.writes.append((batch, vectors))
-
-        def optimize(self) -> None:
-            self.optimized = True
-
-        def close(self) -> None:
-            self.closed = True
-
-    store = FakeStore()
-    monkeypatch.setattr(cli, "open_archive_store", lambda _paths, create=False, config=None: store)
-    monkeypatch.setattr(
-        cli,
-        "_with_archive_write_lock",
-        lambda lock_paths, fn: (lock_calls.append(lock_paths.lock_file), fn())[1],
-    )
-    monkeypatch.setitem(sys.modules, "tqdm", SimpleNamespace(tqdm=FakeTqdm))
-    monkeypatch.setitem(
-        sys.modules,
-        "tweetxvault.embed",
-        SimpleNamespace(EmbeddingEngine=FakeEmbeddingEngine),
-    )
-
-    cli.embed_archive(regen=True)
-
-    assert lock_calls == [paths.lock_file]
-    assert store.cleared is True
-    assert store.closed is True
-    assert len(store.writes) == 1
-    assert "embedded 1 tweets" in buffer.getvalue()

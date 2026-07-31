@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-import resource
 import subprocess
 import sys
 from collections.abc import Awaitable, Callable
@@ -90,6 +89,7 @@ app.add_typer(view_app, name="view", help="Render archived tweets in the termina
 # Web UI management (optional dependency)
 try:
     from tweetxvault.cli_web import web_app
+
     app.add_typer(web_app, name="web", help="Manage the background web UI server.")
 except ImportError:
     pass
@@ -178,10 +178,8 @@ MEDIA_LIMIT_HELP = "Maximum number of pending media rows to process."
 MEDIA_PHOTOS_ONLY_HELP = "Only download photo rows and skip video or animated GIF media."
 RETRY_FAILED_HELP = "Retry rows that previously failed instead of only untouched pending rows."
 UNFURL_LIMIT_HELP = "Maximum number of saved URL rows to fetch metadata for."
-EMBED_REGEN_HELP = "Clear existing embeddings before recomputing them."
 SEARCH_QUERY_HELP = "Search query text."
 SEARCH_LIMIT_HELP = "Maximum number of results to return."
-SEARCH_MODE_HELP = "Search mode: auto, fts, vector, or hybrid."
 # Keep the user-facing flag as --type, but map it onto internal search-result kinds so
 # search code does not collide with storage-level record_type/type terminology.
 SEARCH_TYPE_ALIASES = {
@@ -210,10 +208,8 @@ RETRY_FAILED_OPTION = Annotated[
     typer.Option("--retry-failed", help=RETRY_FAILED_HELP),
 ]
 UNFURL_LIMIT_OPTION = Annotated[int | None, typer.Option("--limit", help=UNFURL_LIMIT_HELP)]
-EMBED_REGEN_OPTION = Annotated[bool, typer.Option("--regen", help=EMBED_REGEN_HELP)]
 SEARCH_QUERY_ARGUMENT = Annotated[str, typer.Argument(help=SEARCH_QUERY_HELP)]
 SEARCH_LIMIT_OPTION = Annotated[int, typer.Option("--limit", help=SEARCH_LIMIT_HELP)]
-SEARCH_MODE_OPTION = Annotated[str, typer.Option("--mode", help=SEARCH_MODE_HELP)]
 
 
 def _configure_logging() -> Console:
@@ -435,7 +431,7 @@ def _with_archive_write_lock(paths, fn):
 
 
 def _with_auto_optimize(store, paths, console: Console, fn):
-    """Run fn(store) (Legacy wrapper for LanceDB auto-optimize)."""
+    """Run a storage operation through the shared read/write wrapper."""
     return fn(store)
 
 
@@ -1491,14 +1487,15 @@ def unfurl_archive(
 @app.command("tag", help="Use Gemini to generate search tags and descriptions for media tweets.")
 def tag_archive(
     model: Annotated[
-        str | None, typer.Option("--model", help="Override the Gemini model specified in config.toml")
+        str | None,
+        typer.Option("--model", help="Override the Gemini model specified in config.toml"),
     ] = None,
 ) -> None:
     console = _configure_logging()
     try:
         config, paths = load_config()
-        from tweetxvault.tagging import tag_media_tweets
         from tweetxvault.jobs import locked_archive_job
+        from tweetxvault.tagging import tag_media_tweets
 
         async def run_tagging():
             async with locked_archive_job(config=config, paths=paths, console=console) as job:
@@ -1723,118 +1720,33 @@ def rehydrate_archive() -> None:
         raise typer.Exit(2) from exc
 
 
-@app.command("embed")
-def embed_archive(regen: EMBED_REGEN_OPTION = False) -> None:
-    """Generate embeddings for archived tweets. Resumes by default."""
-    from tqdm import tqdm
-
-    from tweetxvault.embed import EmbeddingEngine
-
-    console = _configure_logging()
-    config, paths = load_config()
-
-    def run() -> None:
-        store = open_archive_store(paths, create=False, config=config)
-        if store is None:
-            console.print("[red]No local archive found.[/red]")
-            raise typer.Exit(1)
-        try:
-            if regen:
-                console.print("clearing existing embeddings...")
-                store.clear_embeddings()
-            remaining = store.count_unembedded()
-            if remaining == 0:
-                console.print("all tweets already have embeddings")
-                return
-            console.print("loading embedding model...")
-            engine = EmbeddingEngine()
-            console.print(f"embedding {remaining} tweets...")
-            batches = store.get_unembedded_tweets(batch_size=100)
-            with tqdm(total=remaining, desc="embedding", unit="tweets") as pbar:
-                for batch in batches:
-                    texts = [
-                        f"@{row['author_username'] or ''}: {row['text'] or ''}" for row in batch
-                    ]
-                    vectors = engine.embed_batch(texts)
-                    store.write_embeddings(batch, vectors)
-                    pbar.update(len(batch))
-            console.print(f"embedded {remaining} tweets")
-        finally:
-            store.close()
-
-    try:
-        _with_archive_write_lock(paths, run)
-    except ProcessLockError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(2) from exc
-
-
 @app.command("search")
 def search_archive(
     query: SEARCH_QUERY_ARGUMENT,
     limit: SEARCH_LIMIT_OPTION = 20,
-    mode: SEARCH_MODE_OPTION = "auto",
     sort: SEARCH_SORT_OPTION = "relevance",
     type_filter: Annotated[str | None, typer.Option("--type", help=SEARCH_TYPE_HELP)] = None,
     collection_filter: Annotated[
         str | None, typer.Option("--collection", help=SEARCH_COLLECTION_HELP)
     ] = None,
 ) -> None:
-    """Search archived posts and articles. Modes: auto, fts, vector, hybrid."""
+    """Full-text search archived posts and articles."""
     console = _configure_logging()
     store, paths = _open_store_for_read(console)
     try:
         search_types = _parse_search_types(type_filter, console)
         search_collections = _parse_search_collections(collection_filter, console)
-        has_vec = store.has_embeddings()
-        include_articles = search_types is None or "article" in search_types
-        if mode == "auto":
-            mode = "hybrid" if has_vec and search_types == {"post"} else "fts"
-        if mode in ("vector", "hybrid") and include_articles:
-            console.print(
-                "[yellow]Semantic search currently supports posts only. "
-                "Falling back to full-text search so articles stay included.[/yellow]"
-            )
-            mode = "fts"
-        if mode in ("vector", "hybrid") and not has_vec:
-            console.print("[yellow]No embeddings found. Run 'tweetxvault embed' first.[/yellow]")
-            console.print("Falling back to full-text search.")
-            mode = "fts"
-
-        if mode == "fts":
-            results = _with_auto_optimize(
-                store,
-                paths,
-                console,
-                lambda s: s.search_fts(
-                    query,
-                    limit=limit,
-                    types=search_types,
-                    collections=search_collections,
-                ),
-            )
-        elif mode == "vector":
-            from tweetxvault.embed import EmbeddingEngine
-
-            engine = EmbeddingEngine()
-            vec = engine.embed_batch([query])[0].tolist()
-            results = store.search_vector(vec, limit=limit, collections=search_collections)
-        else:
-            from tweetxvault.embed import EmbeddingEngine
-
-            engine = EmbeddingEngine()
-            vec = engine.embed_batch([query])[0].tolist()
-            results = _with_auto_optimize(
-                store,
-                paths,
-                console,
-                lambda s: s.search_hybrid(
-                    query,
-                    vec,
-                    limit=limit,
-                    collections=search_collections,
-                ),
-            )
+        results = _with_auto_optimize(
+            store,
+            paths,
+            console,
+            lambda s: s.search_fts(
+                query,
+                limit=limit,
+                types=search_types,
+                collections=search_collections,
+            ),
+        )
 
         results = _sort_search_results(results, sort=sort)
         if not results:
@@ -1873,6 +1785,7 @@ def search_archive(
     finally:
         store.close()
 
+
 @app.command("serve-daemon", hidden=True)
 def serve_daemon_internal() -> None:
     """Internal command used by 'web start' to run the server process."""
@@ -1882,7 +1795,7 @@ def serve_daemon_internal() -> None:
         raise typer.Exit(1) from exc
 
     config, paths = load_config()
-    
+
     store = open_archive_store(paths, create=False, config=config)
     if store is None:
         raise typer.Exit(1)
@@ -1917,6 +1830,7 @@ def _maybe_restart_web(console: Console) -> None:
                 os.kill(pid, signal.SIGTERM)
                 console.print("[dim]Stopping web server for restart...[/dim]")
                 import time
+
                 for _ in range(50):
                     if not _is_running(pid):
                         break
@@ -1949,21 +1863,12 @@ def _maybe_restart_web(console: Console) -> None:
         f"[green]Web server restarted on http://{web.host}:{web.port} (PID: {process.pid})[/green]"
     )
 
-def _raise_nofile_limit() -> None:
-    """Raise the soft file-descriptor limit to the hard limit.
-
-    LanceDB creates one table version per merge_insert. Large archives can
-    accumulate thousands of versions, each backed by data files that Lance
-    opens during queries. The default soft limit (often 1024) is too low.
-    """
-    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-    if soft < hard:
-        resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
 
 @app.command()
 def migrate() -> None:
     """Migrate data from older LanceDB storage to native SQLite storage."""
     from tweetxvault.storage.migrate import run_migration
+
     run_migration()
 
 
@@ -1981,4 +1886,3 @@ def main(
 ) -> None:
     """tweetxvault CLI."""
     del version
-    _raise_nofile_limit()
