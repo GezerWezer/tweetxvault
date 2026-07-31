@@ -6,7 +6,7 @@ import os
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -61,8 +61,8 @@ class WebConfig(BaseModel):
 
     password_hash: str | None = None
     auto_start: bool = False
-    host: str = "127.0.0.1"
-    port: int = 8000
+    host: str = Field(default="127.0.0.1", min_length=1)
+    port: int = Field(default=8000, ge=1, le=65535)
     fetch_avatars: bool = True
 
 
@@ -78,13 +78,13 @@ class TaggingConfig(BaseModel):
 
     enabled: bool = False
     api_key: str | None = None
-    model: str = "gemini-3.5-flash"
-    thinking_level: str = "high"
+    model: str = Field(default="gemini-3.5-flash", min_length=1)
+    thinking_level: Literal["high", "medium", "low", "none"] = "high"
     batch: bool = True
     limit: int = Field(default=20, ge=1)
     google_search: bool = True
-    rpd: int | None = None
-    max_media_size_mb: int = 100
+    rpd: int | None = Field(default=None, ge=1)
+    max_media_size_mb: int = Field(default=100, ge=1)
 
 
 class AppConfig(BaseModel):
@@ -135,7 +135,7 @@ class XDGPaths(BaseModel):
 def resolve_paths(env: Mapping[str, str] | None = None) -> XDGPaths:
     import platformdirs
 
-    env = env or os.environ
+    env = os.environ if env is None else env
     # Allow explicit env-var overrides; otherwise use platformdirs for
     # cross-platform defaults (XDG on Linux, ~/Library on macOS, %APPDATA% on Windows).
     if raw := env.get("XDG_CONFIG_HOME"):
@@ -169,16 +169,24 @@ def ensure_paths(paths: XDGPaths) -> XDGPaths:
 def _load_config_file(path: Path) -> dict[str, Any]:
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("[database]\ncache_size_kb = 1000000\nmmap_size_bytes = 8589934592\n", encoding="utf-8")
-    else:
-        content = path.read_text(encoding="utf-8")
-        if "[database]" not in content:
-            content = content.rstrip() + "\n\n[database]\ncache_size_kb = 1000000\nmmap_size_bytes = 8589934592\n"
-            path.write_text(content, encoding="utf-8")
-            
+        path.write_text(
+            "[database]\ncache_size_kb = 1000000\nmmap_size_bytes = 8589934592\n",
+            encoding="utf-8",
+        )
+
     with path.open("rb") as handle:
         loaded = tomllib.load(handle)
-    return loaded if isinstance(loaded, dict) else {}
+    if not isinstance(loaded, dict):
+        return {}
+    if "database" not in loaded:
+        content = path.read_text(encoding="utf-8").rstrip()
+        content += "\n\n[database]\ncache_size_kb = 1000000\nmmap_size_bytes = 8589934592\n"
+        path.write_text(content, encoding="utf-8")
+        loaded["database"] = {
+            "cache_size_kb": 1000000,
+            "mmap_size_bytes": 8589934592,
+        }
+    return loaded
 
 
 def _env_float(env: Mapping[str, str], name: str) -> float | None:
@@ -192,7 +200,7 @@ def _env_int(env: Mapping[str, str], name: str) -> int | None:
 
 
 def load_config(env: Mapping[str, str] | None = None) -> tuple[AppConfig, XDGPaths]:
-    env = env or os.environ
+    env = os.environ if env is None else env
     paths = ensure_paths(resolve_paths(env))
     raw = _load_config_file(paths.config_file)
     config = AppConfig.model_validate(raw)
@@ -217,6 +225,7 @@ def load_config(env: Mapping[str, str] | None = None) -> tuple[AppConfig, XDGPat
         "cooldown_threshold": _env_int(env, "TWEETXVAULT_COOLDOWN_THRESHOLD"),
         "cooldown_duration": _env_float(env, "TWEETXVAULT_COOLDOWN_DURATION"),
         "timeout": _env_float(env, "TWEETXVAULT_TIMEOUT"),
+        "max_linked_depth": _env_int(env, "TWEETXVAULT_MAX_LINKED_DEPTH"),
     }
     sync_updates = {key: value for key, value in sync_updates.items() if value is not None}
 
@@ -228,21 +237,27 @@ def load_config(env: Mapping[str, str] | None = None) -> tuple[AppConfig, XDGPat
 
 
 def save_app_config(paths: XDGPaths, config: AppConfig) -> None:
-    lines = []
-    
-    def format_value(v: Any) -> str:
-        if isinstance(v, bool):
-            return "true" if v else "false"
-        elif isinstance(v, (int, float)):
-            return str(v)
-        elif v is None:
-            return '""'
-        else:
-            s = str(v).replace("\\", "\\\\").replace('"', '\\"')
-            return f'"{s}"'
+    lines: list[str] = []
 
-    config_dict = config.model_dump(exclude_unset=True)
-    
+    def format_value(value: Any) -> str:
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, int | float):
+            return str(value)
+        escaped = (
+            str(value)
+            .replace("\\", "\\\\")
+            .replace('"', '\\"')
+            .replace("\b", "\\b")
+            .replace("\t", "\\t")
+            .replace("\n", "\\n")
+            .replace("\f", "\\f")
+            .replace("\r", "\\r")
+        )
+        return f'"{escaped}"'
+
+    config_dict = config.model_dump(exclude_none=True)
+
     for section, fields in config_dict.items():
         if isinstance(fields, dict):
             lines.append(f"[{section}]")
@@ -255,16 +270,33 @@ def save_app_config(paths: XDGPaths, config: AppConfig) -> None:
     paths.config_file.parent.mkdir(parents=True, exist_ok=True)
     paths.config_file.write_text(content, encoding="utf-8")
 
+
 def get_config_ui_schema() -> dict[str, Any]:
     return {
         "whitelist": [
             "auth.auth_token",
             "auth.ct0",
             "auth.user_id",
+            "auth.browser",
+            "auth.browser_profile",
+            "auth.browser_profile_path",
+            "auth.firefox_profile_path",
+            "sync.page_delay",
+            "sync.detail_delay",
+            "sync.max_retries",
+            "sync.backoff_base",
+            "sync.detail_max_retries",
+            "sync.detail_backoff_base",
+            "sync.cooldown_threshold",
+            "sync.cooldown_duration",
+            "sync.timeout",
+            "sync.max_linked_depth",
             "web.auto_start",
             "web.fetch_avatars",
             "web.host",
             "web.port",
+            "database.cache_size_kb",
+            "database.mmap_size_bytes",
             "tagging.enabled",
             "tagging.api_key",
             "tagging.model",
@@ -275,9 +307,7 @@ def get_config_ui_schema() -> dict[str, Any]:
             "tagging.rpd",
             "tagging.max_media_size_mb",
         ],
-        "blacklist": [
-            "web.password_hash"
-        ],
+        "blacklist": ["web.password_hash"],
         "types": {
             "auth.auth_token": "password",
             "auth.ct0": "password",
@@ -287,14 +317,14 @@ def get_config_ui_schema() -> dict[str, Any]:
         "full_width": [
             "auth.browser_profile_path",
             "auth.firefox_profile_path",
-            "tagging.api_key"
+            "tagging.api_key",
         ],
         "select_options": {
             "tagging.thinking_level": [
                 {"value": "high", "label": "High"},
                 {"value": "medium", "label": "Medium"},
                 {"value": "low", "label": "Low"},
-                {"value": "none", "label": "None"}
+                {"value": "none", "label": "None"},
             ]
         },
         "labels": {
@@ -345,18 +375,38 @@ def get_config_ui_schema() -> dict[str, Any]:
             "auth.browser_profile_path": "Absolute path to a specific browser profile.",
             "auth.firefox_profile_path": "Absolute path to a Firefox profile.",
             "database.cache_size_kb": "How much RAM to allocate for faster database queries.",
-            "database.mmap_size_bytes": "How much of the database file to map directly into memory for faster searching.",
+            "database.mmap_size_bytes": (
+                "How much of the database file to map directly into memory for faster searching."
+            ),
             "sync.page_delay": "How many seconds to wait between fetching pages of tweets.",
-            "sync.detail_delay": "How many seconds to wait between fetching individual tweet details.",
-            "sync.max_retries": "How many times to retry fetching a timeline if Twitter rate-limits you.",
-            "sync.backoff_base": "How much to multiply the wait time by after each failed timeline request.",
-            "sync.detail_max_retries": "How many times to retry fetching a single tweet if Twitter rate-limits you.",
-            "sync.detail_backoff_base": "How much to multiply the wait time by after each failed single tweet request.",
-            "sync.cooldown_threshold": "How many consecutive rate-limit errors trigger a long cooldown pause.",
-            "sync.cooldown_duration": "How many seconds to pause when a long cooldown is triggered.",
+            "sync.detail_delay": (
+                "How many seconds to wait between fetching individual tweet details."
+            ),
+            "sync.max_retries": (
+                "How many times to retry fetching a timeline if Twitter rate-limits you."
+            ),
+            "sync.backoff_base": (
+                "How much to multiply the wait time by after each failed timeline request."
+            ),
+            "sync.detail_max_retries": (
+                "How many times to retry fetching a single tweet if Twitter rate-limits you."
+            ),
+            "sync.detail_backoff_base": (
+                "How much to multiply the wait time by after each failed single tweet request."
+            ),
+            "sync.cooldown_threshold": (
+                "How many consecutive rate-limit errors trigger a long cooldown pause."
+            ),
+            "sync.cooldown_duration": (
+                "How many seconds to pause when a long cooldown is triggered."
+            ),
             "sync.timeout": "How many seconds to wait before giving up on a slow network request.",
-            "sync.max_linked_depth": "How deep to go when fetching nested tweet replies or quoted links.",
-            "web.auto_start": "Automatically start the Web UI running in the background after running sync commands.",
+            "sync.max_linked_depth": (
+                "How deep to go when fetching nested tweet replies or quoted links."
+            ),
+            "web.auto_start": (
+                "Automatically start the Web UI in the background after running sync commands."
+            ),
             "web.fetch_avatars": "Automatically download and cache user profile pictures.",
             "web.host": "The IP address the Web UI runs on (default is 127.0.0.1 for local only).",
             "web.port": "The port the Web UI runs on.",
@@ -365,10 +415,11 @@ def get_config_ui_schema() -> dict[str, Any]:
             "tagging.model": "Which Gemini AI model to use for tagging media.",
             "tagging.thinking_level": "How much reasoning effort the AI should use.",
             "tagging.batch": "Group multiple tweets together in one API call to save time.",
-            "tagging.google_search": "Allow the AI to search Google to more effectively identify characters, franchises, or people in images.",
+            "tagging.google_search": (
+                "Allow the AI to search Google to identify people, characters, and franchises."
+            ),
             "tagging.limit": "How many tweets to fetch and tag per batch.",
             "tagging.rpd": "Daily limit on how many API requests the app can make to Gemini.",
             "tagging.max_media_size_mb": "Skip uploading media files larger than this size.",
         },
-        }
-    
+    }
