@@ -101,9 +101,6 @@ def get_storage_breakdown(store: ArchiveStore = Depends(get_store)) -> Dict[str,
     core_total_files = core_photos + core_videos
     core_subtext = f"{core_photos:,} photos · {core_videos:,} videos/gifs"
                     
-    core_total_files = core_photos + core_videos
-    core_subtext = f"{core_photos:,} photos · {core_videos:,} videos/gifs"
-                    
     segments.append({
         "id": "core_media", "group": "media", "name": "Core Media (Bookmarked & Quoted)", "bytes": core_bytes, 
         "count": core_total_files, "unit": "files", "formatted_count": core_subtext,
@@ -201,8 +198,8 @@ def get_storage_breakdown(store: ArchiveStore = Depends(get_store)) -> Dict[str,
     
     total_bytes = total_db_bytes + core_bytes + context_bytes + avatars_file_bytes
     
-    # Filter out 0-byte segments dynamically
-    segments = [s for s in segments if s["bytes"] > 0]
+    # Keep zero-byte media segments when the database still has media records.
+    segments = [s for s in segments if s["bytes"] > 0 or s["count"] > 0]
     segments.sort(key=lambda x: x["bytes"], reverse=True)
     
     for seg in segments:
@@ -229,12 +226,13 @@ def get_storage_breakdown(store: ArchiveStore = Depends(get_store)) -> Dict[str,
             "percent": round((db_bytes / total_bytes) * 100, 2) if total_bytes > 0 else 0.0,
             "description": "Primary SQLite storage file containing raw JSON, tweet records, threads, articles, full-text search indexes, and WAL logging."
         })
-    if media_bytes > 0:
+    media_count = core_total_files + context_total_files + avatars_count
+    if media_bytes > 0 or media_count > 0:
         simplified_segments.append({
             "id": "media",
             "name": "Media Files & Avatars",
             "bytes": media_bytes,
-            "count": core_total_files + context_total_files + avatars_count,
+            "count": media_count,
             "unit": "files",
             "formatted_count": f"{total_photos:,} photos · {total_videos:,} videos · {avatars_count:,} avatars",
             "formatted_size": format_bytes(media_bytes),

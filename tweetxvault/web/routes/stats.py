@@ -136,32 +136,45 @@ def get_stats_tags(store: ArchiveStore = Depends(get_store)) -> Dict[str, Any]:
     ).fetchone()[0] or 0
 
     tagged_tweets = conn.execute(
-        "SELECT count(DISTINCT tweet_id) FROM archive WHERE record_type = 'media_tag'"
+        """
+        SELECT count(DISTINCT tweet_id)
+        FROM archive
+        WHERE record_type = 'media_tag' AND json_valid(raw_json)
+        """
     ).fetchone()[0] or 0
 
     unique_tags = conn.execute(
         """
-        SELECT count(DISTINCT LOWER(t.value)) 
-        FROM archive a, json_each(a.raw_json, '$.tags') as t 
-        WHERE a.record_type = 'media_tag'
+        SELECT count(DISTINCT LOWER(t.value))
+        FROM (
+            SELECT raw_json
+            FROM archive
+            WHERE record_type = 'media_tag' AND json_valid(raw_json)
+        ) a, json_each(a.raw_json, '$.tags') AS t
         """
     ).fetchone()[0] or 0
 
     total_tag_instances = conn.execute(
         """
-        SELECT count(t.value) 
-        FROM archive a, json_each(a.raw_json, '$.tags') as t 
-        WHERE a.record_type = 'media_tag'
+        SELECT count(t.value)
+        FROM (
+            SELECT raw_json
+            FROM archive
+            WHERE record_type = 'media_tag' AND json_valid(raw_json)
+        ) a, json_each(a.raw_json, '$.tags') AS t
         """
     ).fetchone()[0] or 0
 
     top_tags_rows = conn.execute(
         """
-        SELECT LOWER(t.value) as tag, count(*) as count 
-        FROM archive a, json_each(a.raw_json, '$.tags') as t 
-        WHERE a.record_type = 'media_tag'
-        GROUP BY LOWER(t.value) 
-        ORDER BY count DESC 
+        SELECT LOWER(t.value) AS tag, count(*) AS count
+        FROM (
+            SELECT raw_json
+            FROM archive
+            WHERE record_type = 'media_tag' AND json_valid(raw_json)
+        ) a, json_each(a.raw_json, '$.tags') AS t
+        GROUP BY LOWER(t.value)
+        ORDER BY count DESC
         LIMIT 20
         """
     ).fetchall()
