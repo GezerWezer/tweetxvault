@@ -15,6 +15,7 @@ function tweetApp() {
         sortOrder: 'default',
         searchQuery: '',
         error: null,
+        showScrollTop: false,
         
         threadData: null,
         loadingThread: false,
@@ -168,7 +169,6 @@ function tweetApp() {
         mergeSelectedIndex: 0,
         primarySelectedIndex: 0,
         
-        showScrollTop: false,
         lastSyncAt: null,
         lastSyncFormatted: '',
         darkMode: true,
@@ -234,6 +234,10 @@ function tweetApp() {
             window.addEventListener('resize', () => {
                 if (this.storageData) this.updateStorageRowPositions();
             });
+
+            window.addEventListener('scroll', () => {
+                this.showScrollTop = window.scrollY > 300;
+            });
             
             const savedFontSize = localStorage.getItem('tvx-font-size');
             const savedFontSizePx = localStorage.getItem('tvx-font-size-px');
@@ -252,9 +256,6 @@ function tweetApp() {
             // Restore split panel preference
             this.splitPanel = localStorage.getItem('tvx-split-panel') === 'true';
             
-            window.addEventListener('scroll', () => {
-                this.showScrollTop = window.scrollY > 300;
-            });
             
             this.fetchStats();
             this.fetchGlobalTags();
@@ -327,6 +328,10 @@ function tweetApp() {
                 v.pause();
                 v.currentTime = 0;
             });
+        },
+
+        scrollToTop() {
+            window.scrollTo({ top: 0, behavior: 'smooth' });
         },
 
         async fetchTweets(append = false) {
@@ -1390,9 +1395,6 @@ function tweetApp() {
             return text.trim();
         },
 
-        scrollToTop() {
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-        },
 
         expandedTweets: {},
 

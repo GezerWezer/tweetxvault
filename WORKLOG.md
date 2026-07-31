@@ -1,3 +1,13 @@
+- 2026-07-30 (Scroll Back to Top Button)
+  - Implemented a floating Back to Top scroll button in the web UI.
+  - Added `showScrollTop` state property, window `scroll` event listener (>300px threshold), and `scrollToTop()` smooth scrolling method in `tweetxvault/web/static/js/app.js`.
+  - Added floating `<button>` markup with smooth Alpine.js transition effects and theme accent styling in `tweetxvault/web/index.html`.
+
+- 2026-07-30 (Remove Back to Top Button)
+  - Completely removed the floating back to top scroll button from the web UI.
+  - Deleted the `<button>` HTML markup in `tweetxvault/web/index.html`.
+  - Removed `showScrollTop` property, `window` scroll event listener, and `scrollToTop()` method in `tweetxvault/web/static/js/app.js`.
+
 - 2026-07-30 (Detail View Thread Fix)
   - Fixed an issue where the detail view only fetched the immediate parent of a tweet.
   - Modified `api_tweet_thread` in `tweetxvault/web/routes/tweets.py` to recursively fetch the thread hierarchy up to the root (max 50 levels).
