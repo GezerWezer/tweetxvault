@@ -377,6 +377,8 @@ def api_tweets(
                             r["qt_media"] = [
                                 {
                                     "type": m.get("media_type"),
+                                    "width": m.get("width"),
+                                    "height": m.get("height"),
                                     "duration_millis": m.get("duration_millis"),
                                     "download": {
                                         "local_path": m.get("local_path"),
@@ -505,6 +507,8 @@ def api_tweet_thread(
                         qt_media_formatted = [
                             {
                                 "type": m.get("media_type"),
+                                "width": m.get("width"),
+                                "height": m.get("height"),
                                 "duration_millis": m.get("duration_millis"),
                                 "download": {
                                     "local_path": m.get("local_path"),
@@ -527,6 +531,8 @@ def api_tweet_thread(
                 "media": [
                     {
                         "type": m.get("media_type"),
+                        "width": m.get("width"),
+                        "height": m.get("height"),
                         "duration_millis": m.get("duration_millis"),
                         "download": {
                             "local_path": m.get("local_path"),
