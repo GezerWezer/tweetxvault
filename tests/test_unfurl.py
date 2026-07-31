@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import sys
 from io import StringIO
-from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
@@ -289,23 +288,10 @@ async def test_unfurl_urls_interactive_reports_status(paths, config, monkeypatch
     _seed_archive(paths)
     buffer = StringIO()
     console = Console(file=buffer, force_terminal=True, color_system=None)
-    progress_kwargs: list[dict[str, object]] = []
-    updates: list[int] = []
-
-    class FakeTqdm:
-        def __init__(self, *args, **kwargs) -> None:
-            progress_kwargs.append(kwargs)
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb) -> bool:
-            return False
-
-        def update(self, count: int) -> None:
-            updates.append(count)
-
-    monkeypatch.setitem(sys.modules, "tqdm", SimpleNamespace(tqdm=FakeTqdm))
+    progress = MagicMock()
+    on_progress = MagicMock()
+    progress.return_value.__enter__.return_value = on_progress
+    monkeypatch.setattr("tweetxvault.unfurl.progress_callback", progress)
 
     def handler(request: httpx.Request) -> httpx.Response:
         html = """
@@ -328,17 +314,13 @@ async def test_unfurl_urls_interactive_reports_status(paths, config, monkeypatch
     )
 
     assert result.updated == 2
-    assert progress_kwargs == [
-        {
-            "total": 2,
-            "desc": "unfurl",
-            "unit": "urls",
-            "dynamic_ncols": True,
-            "leave": False,
-            "file": console.file,
-        }
-    ]
-    assert updates == [1, 1]
+    progress.assert_called_once_with(
+        console,
+        label="unfurl",
+        total=2,
+        unit="urls",
+    )
+    assert on_progress.call_args_list == [((1, 2),), ((2, 2),)]
     output = buffer.getvalue()
     assert "unfurl: loading saved URL rows" in output
     assert "unfurl: fetching metadata for 2 saved URLs" in output

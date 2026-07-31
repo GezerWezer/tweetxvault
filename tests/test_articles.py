@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import json
-import sys
 import time
 from io import StringIO
 from pathlib import Path
-from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
@@ -220,23 +219,10 @@ async def test_refresh_articles_interactive_reports_status(paths, config, auth_b
     QueryIdStore(paths).save({"TweetDetail": "detail-qid"})
     buffer = StringIO()
     console = Console(file=buffer, force_terminal=True, color_system=None)
-    progress_kwargs: list[dict[str, object]] = []
-    updates: list[int] = []
-
-    class FakeTqdm:
-        def __init__(self, *args, **kwargs) -> None:
-            progress_kwargs.append(kwargs)
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb) -> bool:
-            return False
-
-        def update(self, count: int) -> None:
-            updates.append(count)
-
-    monkeypatch.setitem(sys.modules, "tqdm", SimpleNamespace(tqdm=FakeTqdm))
+    progress = MagicMock()
+    on_progress = MagicMock()
+    progress.return_value.__enter__.return_value = on_progress
+    monkeypatch.setattr("tweetxvault.articles.progress_callback", progress)
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=_fixture_payload(), request=request)
@@ -250,17 +236,13 @@ async def test_refresh_articles_interactive_reports_status(paths, config, auth_b
     )
 
     assert result.updated == 1
-    assert progress_kwargs == [
-        {
-            "total": 1,
-            "desc": "articles refresh",
-            "unit": "tweets",
-            "dynamic_ncols": True,
-            "leave": False,
-            "file": console.file,
-        }
-    ]
-    assert updates == [1]
+    progress.assert_called_once_with(
+        console,
+        label="articles refresh",
+        total=1,
+        unit="tweets",
+    )
+    on_progress.assert_called_once_with(1, 1)
     output = buffer.getvalue()
     assert "articles refresh: refreshing 1 preview-only article rows" in output
     assert "articles refresh: resolving TweetDetail query ID" in output

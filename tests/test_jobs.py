@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-from io import StringIO
-
 import pytest
-from rich.console import Console
 
 import tweetxvault.jobs as jobs
 from tweetxvault.exceptions import ConfigError
@@ -36,11 +33,13 @@ class _FakeStore:
         self.closed = True
 
 
+@pytest.mark.parametrize("mark_dirty", [False, True])
 @pytest.mark.asyncio
-async def test_locked_archive_job_does_not_optimize_automatically(
+async def test_locked_archive_job_never_auto_optimizes(
     paths,
     config,
     monkeypatch: pytest.MonkeyPatch,
+    mark_dirty: bool,
 ) -> None:
     store = _FakeStore()
     monkeypatch.setattr(jobs, "open_archive_store", lambda _paths, create=False, config=None: store)
@@ -49,31 +48,15 @@ async def test_locked_archive_job_does_not_optimize_automatically(
         assert job.config == config
         assert job.paths == paths
         assert job.store is store
-        job.mark_dirty()
+        if mark_dirty:
+            job.mark_dirty()
 
     assert store.optimize_calls == 0
     assert store.closed is True
 
 
 @pytest.mark.asyncio
-async def test_locked_archive_job_skips_optimize_without_changes(
-    paths,
-    config,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    store = _FakeStore()
-    monkeypatch.setattr(jobs, "open_archive_store", lambda _paths, create=False, config=None: store)
-
-    async with jobs.locked_archive_job(config=config, paths=paths):
-        pass
-
-    assert store.optimize_calls == 0
-    assert store.closed is True
-
-
-
-@pytest.mark.asyncio
-async def test_locked_archive_job_interrupt_skips_optimize_for_small_writes(
+async def test_locked_archive_job_interrupt_closes_without_optimizing(
     paths,
     config,
     monkeypatch: pytest.MonkeyPatch,
@@ -88,7 +71,6 @@ async def test_locked_archive_job_interrupt_skips_optimize_for_small_writes(
 
     assert store.optimize_calls == 0
     assert store.closed is True
-
 
 
 @pytest.mark.asyncio

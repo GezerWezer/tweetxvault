@@ -61,6 +61,6 @@ def progress_callback(
             delta = done - last_done
             if delta > 0:
                 progress_bar.update(delta)
-            last_done = done
+                last_done = done
 
         yield callback

@@ -94,15 +94,40 @@ def extract_author_fields(tweet: dict[str, Any]) -> tuple[str | None, str | None
     )
 
 
-def extract_note_tweet_text(tweet: dict[str, Any]) -> str | None:
-    note_result = (tweet.get("note_tweet") or {}).get("note_tweet_results", {}).get("result") or {}
-    if not isinstance(note_result, dict):
+def _note_tweet_result(tweet: dict[str, Any]) -> dict[str, Any] | None:
+    note_tweet = tweet.get("note_tweet")
+    if not isinstance(note_tweet, dict):
         return None
-    return note_result.get("text") or (note_result.get("richtext") or {}).get("text")
+    note_results = note_tweet.get("note_tweet_results")
+    if not isinstance(note_results, dict):
+        return None
+    result = note_results.get("result")
+    return result if isinstance(result, dict) else None
+
+
+def extract_note_tweet_text(tweet: dict[str, Any]) -> str | None:
+    note_result = _note_tweet_result(tweet)
+    if note_result is None:
+        return None
+    text = note_result.get("text")
+    if isinstance(text, str) and text:
+        return text
+    richtext = note_result.get("richtext")
+    if not isinstance(richtext, dict):
+        return None
+    text = richtext.get("text")
+    return text if isinstance(text, str) and text else None
 
 
 def extract_canonical_text(tweet: dict[str, Any]) -> str:
-    return extract_note_tweet_text(tweet) or (tweet.get("legacy") or {}).get("full_text", "")
+    note_text = extract_note_tweet_text(tweet)
+    if note_text:
+        return note_text
+    legacy = tweet.get("legacy")
+    if not isinstance(legacy, dict):
+        return ""
+    text = legacy.get("full_text")
+    return text if isinstance(text, str) else ""
 
 
 def _iso8601_from_unix(value: Any) -> str | None:
@@ -386,9 +411,10 @@ def _tweet_object(tweet: dict[str, Any]) -> TweetObjectData | None:
 def _tweet_urls(tweet: dict[str, Any]) -> list[dict[str, Any]]:
     urls: list[dict[str, Any]] = []
     seen: set[tuple[str | None, str | None, str | None]] = set()
-    note_result = (tweet.get("note_tweet") or {}).get("note_tweet_results", {}).get("result") or {}
-    if isinstance(note_result, dict):
-        note_urls = (note_result.get("entity_set") or {}).get("urls")
+    note_result = _note_tweet_result(tweet)
+    if note_result is not None:
+        entity_set = note_result.get("entity_set")
+        note_urls = entity_set.get("urls") if isinstance(entity_set, dict) else None
         if isinstance(note_urls, list):
             for item in note_urls:
                 if not isinstance(item, dict):

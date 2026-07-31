@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import sys
 from io import StringIO
-from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
@@ -247,23 +246,10 @@ async def test_download_media_interactive_reports_status(paths, config, monkeypa
     _seed_archive(paths)
     buffer = StringIO()
     console = Console(file=buffer, force_terminal=True, color_system=None)
-    progress_kwargs: list[dict[str, object]] = []
-    updates: list[int] = []
-
-    class FakeTqdm:
-        def __init__(self, *args, **kwargs) -> None:
-            progress_kwargs.append(kwargs)
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb) -> bool:
-            return False
-
-        def update(self, count: int) -> None:
-            updates.append(count)
-
-    monkeypatch.setitem(sys.modules, "tqdm", SimpleNamespace(tqdm=FakeTqdm))
+    progress = MagicMock()
+    on_progress = MagicMock()
+    progress.return_value.__enter__.return_value = on_progress
+    monkeypatch.setattr("tweetxvault.media.progress_callback", progress)
 
     def handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
@@ -289,17 +275,13 @@ async def test_download_media_interactive_reports_status(paths, config, monkeypa
     )
 
     assert result.downloaded == 3
-    assert progress_kwargs == [
-        {
-            "total": 3,
-            "desc": "media download",
-            "unit": "rows",
-            "dynamic_ncols": True,
-            "leave": False,
-            "file": console.file,
-        }
-    ]
-    assert updates == [1, 1, 1]
+    progress.assert_called_once_with(
+        console,
+        label="media download",
+        total=3,
+        unit="rows",
+    )
+    assert on_progress.call_args_list == [((1, 3),), ((2, 3),), ((3, 3),)]
     output = buffer.getvalue()
     assert "media download: loading pending media rows" in output
     assert "media download: downloading 3 media rows" in output
