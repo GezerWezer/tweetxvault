@@ -404,35 +404,56 @@ def api_tweet_thread(
 ):
     try:
         import json
-        relations = store._query(expr=
-            f"record_type = 'tweet_relation' AND (tweet_id = '{tweet_id}' OR target_tweet_id = '{tweet_id}')",
+        all_relations = []
+        related_ids = {tweet_id}
+        
+        curr_id = tweet_id
+        for _ in range(50):
+            p_rels = store._query(expr=
+                f"record_type = 'tweet_relation' AND ( (tweet_id = '{curr_id}' AND relation_type IN ('reply_to', 'thread_parent')) OR (target_tweet_id = '{curr_id}' AND relation_type = 'thread_child') )",
+                limit=10
+            )
+            if not p_rels:
+                break
+            
+            next_parent = None
+            for r in p_rels:
+                all_relations.append(r)
+                related_ids.add(r["tweet_id"])
+                related_ids.add(r["target_tweet_id"])
+                if r.get("relation_type") in ("reply_to", "thread_parent") and r.get("tweet_id") == curr_id:
+                    next_parent = r.get("target_tweet_id")
+                elif r.get("relation_type") == "thread_child" and r.get("target_tweet_id") == curr_id:
+                    next_parent = r.get("tweet_id")
+            
+            if not next_parent or next_parent == curr_id:
+                break
+            curr_id = next_parent
+
+        c_rels = store._query(expr=
+            f"record_type = 'tweet_relation' AND ( (target_tweet_id = '{tweet_id}' AND relation_type IN ('reply_to', 'thread_parent')) OR (tweet_id = '{tweet_id}' AND relation_type = 'thread_child') )",
             limit=100
         )
-        
-        related_ids = {tweet_id}
-        for r in relations:
+        child_candidates = set()
+        for r in c_rels:
+            all_relations.append(r)
             related_ids.add(r["tweet_id"])
             related_ids.add(r["target_tweet_id"])
-            
-        child_candidates = set()
-        for r in relations:
             if r.get("relation_type") in ("reply_to", "thread_parent") and r.get("target_tweet_id") == tweet_id:
                 child_candidates.add(r.get("tweet_id"))
             elif r.get("relation_type") == "thread_child" and r.get("tweet_id") == tweet_id:
                 child_candidates.add(r.get("target_tweet_id"))
                 
-        sub_relations = []
         if child_candidates:
             child_id_list = ", ".join(f"'{cid}'" for cid in child_candidates if cid)
-            sub_relations = store._query(expr=
+            sub_rels = store._query(expr=
                 f"record_type = 'tweet_relation' AND target_tweet_id IN ({child_id_list})",
                 limit=100
             )
-            for sr in sub_relations:
+            for sr in sub_rels:
+                all_relations.append(sr)
                 related_ids.add(sr["tweet_id"])
                 related_ids.add(sr["target_tweet_id"])
-                
-        all_relations = relations + sub_relations
         
         id_list = ", ".join(f"'{tid}'" for tid in related_ids)
         objs = store._query(expr=f"record_type = 'tweet_object' AND tweet_id IN ({id_list})", limit=100)
@@ -527,24 +548,37 @@ def api_tweet_thread(
         )
         main_tweet["local_quote_count"] = len(set(r.get("tweet_id") for r in quote_rows if r.get("tweet_id")))
         
-        parents, children_map = [], {}
+        parents = []
+        curr_id = tweet_id
         seen_parents = set()
-        
+        while True:
+            next_parent = None
+            for r in all_relations:
+                rel_type = r.get("relation_type")
+                src = r.get("tweet_id")
+                tgt = r.get("target_tweet_id")
+                
+                if src == curr_id and rel_type in ("reply_to", "thread_parent"):
+                    next_parent = tgt
+                    break
+                elif tgt == curr_id and rel_type == "thread_child":
+                    next_parent = src
+                    break
+                    
+            if next_parent and next_parent in formatted and next_parent not in seen_parents:
+                parents.append(formatted[next_parent])
+                seen_parents.add(next_parent)
+                curr_id = next_parent
+            else:
+                break
+
+        children_map = {}
         for r in all_relations:
             rel_type = r.get("relation_type")
             src = r.get("tweet_id")
             tgt = r.get("target_tweet_id")
             
-            if src == tweet_id and rel_type in ("reply_to", "thread_parent"):
-                if tgt in formatted and tgt not in seen_parents:
-                    parents.append(formatted[tgt])
-                    seen_parents.add(tgt)
-            elif tgt == tweet_id and rel_type == "thread_child":
-                if src in formatted and src not in seen_parents:
-                    parents.append(formatted[src])
-                    seen_parents.add(src)
-                    
-            elif tgt == tweet_id and rel_type in ("reply_to", "thread_parent"):
+            if tgt == tweet_id and rel_type in ("reply_to", "thread_parent"):
                 if src in formatted and src not in children_map:
                     children_map[src] = formatted[src]
                     children_map[src]["op_replies"] = []

@@ -1,3 +1,8 @@
+- 2026-07-30 (Detail View Thread Fix)
+  - Fixed an issue where the detail view only fetched the immediate parent of a tweet.
+  - Modified `api_tweet_thread` in `tweetxvault/web/routes/tweets.py` to recursively fetch the thread hierarchy up to the root (max 50 levels).
+  - Updated the logic for constructing the `parents` array to traverse the relation graph upwards, correctly rendering the entire historical thread chain.
+
 - 2026-07-29 (Rich Search Input Capsules)
   - Implemented Discord/Twitter-style search bar operator capsules in `tweetxvault/web/index.html`.
   - Replaced `<input type="text">` with a `contenteditable` component for inline text formatting.
