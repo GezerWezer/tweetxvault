@@ -20,6 +20,8 @@ Planning note (2026-03-15):
 
 ## Comprehensive non-sync test audit (2026-07-30)
 
+- [x] Restore the Web UI basic/advanced configuration split after the coverage pass
+  accidentally classified every editable setting as always visible.
 - [x] Remove obsolete embedding/vector surfaces and their redundant tests.
 - [x] Add focused configuration, SQLite storage, migration, media-tag, Gemini-tagging,
   tag-CLI, extractor, interactive-progress, and web-daemon coverage.

@@ -204,17 +204,39 @@ def test_config_ui_schema_only_references_real_fields_and_masks_secrets() -> Non
         section, field = path.split(".", 1)
         return section in config_dump and field in config_dump[section]
 
-    exposed = set(schema["whitelist"])
+    basic = set(schema["whitelist"])
     blocked = set(schema["blacklist"])
+    editable = {
+        f"{section}.{field}" for section, fields in config_dump.items() for field in fields
+    } - blocked
+    advanced = editable - basic
 
-    assert exposed
-    assert exposed.isdisjoint(blocked)
-    assert all(exists(path) for path in exposed | blocked)
-    assert set(schema["full_width"]) <= exposed
-    assert set(schema["types"]) <= exposed
+    assert basic
+    assert basic.isdisjoint(blocked)
+    assert all(exists(path) for path in basic | blocked)
+    assert set(schema["full_width"]) <= editable
+    assert set(schema["types"]) <= editable
     assert schema["types"]["auth.auth_token"] == "password"
     assert schema["types"]["auth.ct0"] == "password"
     assert schema["types"]["tagging.api_key"] == "password"
     assert "web.password_hash" in blocked
-    assert all(path in schema["labels"] for path in exposed)
-    assert all(path in schema["descriptions"] for path in exposed)
+    assert all(path in schema["labels"] for path in editable)
+    assert all(path in schema["descriptions"] for path in editable)
+    assert {
+        "auth.browser",
+        "auth.browser_profile",
+        "auth.browser_profile_path",
+        "auth.firefox_profile_path",
+        "sync.page_delay",
+        "sync.detail_delay",
+        "sync.max_retries",
+        "sync.backoff_base",
+        "sync.detail_max_retries",
+        "sync.detail_backoff_base",
+        "sync.cooldown_threshold",
+        "sync.cooldown_duration",
+        "sync.timeout",
+        "sync.max_linked_depth",
+        "database.cache_size_kb",
+        "database.mmap_size_bytes",
+    } <= advanced

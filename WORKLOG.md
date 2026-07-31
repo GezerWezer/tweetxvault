@@ -1,3 +1,12 @@
+- 2026-07-31 (Web config advanced-toggle regression and tagging latency investigation)
+  - Restored the original basic-field whitelist so browser/profile, sync-tuning, and
+    database settings are revealed only when the Web UI Advanced toggle is enabled.
+  - Corrected config and browser-JavaScript regressions to treat `whitelist` as the
+    always-visible basic set and prove the toggle reveals only advanced fields.
+  - Traced a production 503 retry delay of roughly 72 minutes to the audit-added Gemini
+    request pacer: with `tagging.rpd = 20`, `86400 / 20` spaces attempts by 4,320 seconds,
+    overriding the displayed 15-second retry delay. No tagging behavior changed yet.
+
 - 2026-07-30 (Comprehensive non-sync test audit and implementation)
   - Created `comprehensive-non-sync-tests` from merged `main`; syncing implementation and
     `tests/test_sync.py` were deliberately left unchanged.

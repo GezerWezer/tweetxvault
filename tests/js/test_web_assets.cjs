@@ -678,7 +678,11 @@ test('config and stats requests update their matching UI state', async () => {
                 };
             }
             if (url === '/api/config') {
-                return { web: { host: '127.0.0.1', port: 8000 } };
+                return {
+                    auth: { auth_token: 'masked' },
+                    sync: { page_delay: 2 },
+                    web: { host: '127.0.0.1', port: 8000 },
+                };
             }
             return { latest_sync: '2026-07-30T00:00:00Z' };
         },
@@ -693,6 +697,10 @@ test('config and stats requests update their matching UI state', async () => {
     await app.fetchConfig();
     assert.equal(app.configData.web.port, 8000);
     assert.equal(app.isFieldVisible('web', 'host'), true);
+    assert.equal(app.isFieldVisible('auth', 'auth_token'), false);
+    assert.equal(app.isFieldVisible('sync', 'page_delay'), false);
+    app.showAdvancedConfig = true;
+    assert.equal(app.isFieldVisible('sync', 'page_delay'), true);
     assert.equal(app.isFieldVisible('auth', 'auth_token'), false);
     assert.equal(app.getFieldType('web', 'port'), 'number');
     assert.equal(app.isFieldFullWidth('web', 'host'), true);
