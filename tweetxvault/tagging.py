@@ -2,6 +2,7 @@ import asyncio
 import json
 import time
 from collections import defaultdict
+from dataclasses import dataclass
 from typing import Any
 
 from google import genai
@@ -9,8 +10,10 @@ from google.genai import types
 from PIL import Image
 from pydantic import BaseModel, Field, ValidationError
 from rich.console import Console
+from rich.text import Text
 
 from .config import AppConfig, XDGPaths
+from .rpd import RpdStatus, get_rpd_status, reserve_rpd_request
 from .storage.backend import ArchiveStore
 
 TAGGING_SYSTEM_PROMPT = """You will be provided with a tweet (including its author, handle,
@@ -50,31 +53,28 @@ class TagResult(BaseModel):
     tags: list[str] = Field(min_length=2, max_length=5)
 
 
+@dataclass(frozen=True, slots=True)
+class TaggingRunResult:
+    processed: int = 0
+    tagged: int = 0
+    batches: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class _TweetTagContext:
+    tweet_id: str
+    tweet_type: str
+    author_display_name: str
+    author_username: str
+    text: str
+
+
 _THINKING_BUDGETS = {
     "none": 0,
     "low": 1024,
     "medium": 4096,
     "high": 8192,
 }
-
-
-class _RequestPacer:
-    """Space model requests so a configured daily request budget is respected."""
-
-    def __init__(self, requests_per_day: int | None) -> None:
-        self.interval = (
-            86_400 / requests_per_day if requests_per_day and requests_per_day > 0 else 0.0
-        )
-        self.last_request_at: float | None = None
-
-    async def wait(self) -> None:
-        now = time.monotonic()
-        if self.interval and self.last_request_at is not None:
-            delay = self.interval - (now - self.last_request_at)
-            if delay > 0:
-                await asyncio.sleep(delay)
-                now += delay
-        self.last_request_at = now
 
 
 def _safe_error(error: BaseException, api_key: str | None) -> str:
@@ -114,6 +114,50 @@ def _mark_failed(store: ArchiveStore, tweet_ids: list[str]) -> None:
     store.conn.commit()
 
 
+def _print_rpd_exhausted(console: Console, status: RpdStatus, model: str) -> None:
+    reset_at = status.reset_at.strftime("%Y-%m-%d %H:%M %Z")
+    console.print(
+        Text(
+            f"Gemini daily request limit reached for {model} "
+            f"({status.used}/{status.limit}). No further requests will be sent until "
+            f"{reset_at}.",
+            style="yellow",
+        )
+    )
+
+
+def _print_rpd_storage_error(
+    console: Console,
+    error: BaseException,
+    api_key: str | None,
+) -> None:
+    message = (
+        "Could not update Gemini daily request usage; request not sent: "
+        f"{_safe_error(error, api_key)}"
+    )
+    console.print(Text(message, style="red"))
+
+
+def _print_tag_preview(
+    console: Console,
+    context: _TweetTagContext,
+    *,
+    description: str,
+    tags: list[str],
+) -> None:
+    author = context.author_display_name
+    if context.author_username:
+        author = (
+            f"{author} (@{context.author_username})" if author else f"@{context.author_username}"
+        )
+    console.print(Text(f"Tweet {context.tweet_id} ({context.tweet_type})", style="bold"))
+    if author:
+        console.print(Text(f"Author: {author}"))
+    console.print(Text(f"Text: {context.text}"))
+    console.print(Text(f"Description: {description}"))
+    console.print(Text(f"Tags: {', '.join(tags)}"))
+
+
 async def tag_media_tweets(
     store: ArchiveStore,
     config: AppConfig,
@@ -122,7 +166,7 @@ async def tag_media_tweets(
     tweet_ids: list[str],
     model_override: str | None = None,
     *,
-    _pacer: _RequestPacer | None = None,
+    dry_run: bool = False,
 ) -> int:
     tag_config = config.tagging
     if not tag_config.enabled or not tag_config.api_key:
@@ -131,6 +175,23 @@ async def tag_media_tweets(
 
     if not tweet_ids:
         return 0
+    if dry_run and len(tweet_ids) != 1:
+        raise ValueError("Test tag generation requires exactly one tweet")
+
+    model_name = model_override or tag_config.model
+    if tag_config.rpd is not None:
+        try:
+            rpd_status = get_rpd_status(
+                store,
+                model=model_name,
+                limit=tag_config.rpd,
+            )
+        except Exception as error:
+            _print_rpd_storage_error(console, error, tag_config.api_key)
+            return 0
+        if not rpd_status.allowed:
+            _print_rpd_exhausted(console, rpd_status, model_name)
+            return 0
 
     try:
         client = genai.Client(api_key=tag_config.api_key)
@@ -139,8 +200,6 @@ async def tag_media_tweets(
             f"[red]Could not initialize Gemini: {_safe_error(error, tag_config.api_key)}[/red]"
         )
         return 0
-
-    pacer = _pacer or _RequestPacer(tag_config.rpd)
 
     try:
         for f in client.files.list():
@@ -156,6 +215,7 @@ async def tag_media_tweets(
 
     all_media: dict[str, list[dict[str, Any]]] = defaultdict(list)
     tweet_objs: dict[str, dict[str, Any]] = {}
+    tweet_contexts: dict[str, _TweetTagContext] = {}
 
     for tid in tweet_ids:
         media_rows = store.conn.execute(
@@ -214,6 +274,14 @@ async def tag_media_tweets(
                 tweet_type = "Quote Tweet"
             elif legacy.get("in_reply_to_status_id_str"):
                 tweet_type = "Reply"
+
+            tweet_contexts[tid] = _TweetTagContext(
+                tweet_id=tid,
+                tweet_type=tweet_type,
+                author_display_name=author_name,
+                author_username=author_handle,
+                text=text,
+            )
 
             tweet_text = (
                 f"[ID: {tid}]\n"
@@ -312,29 +380,46 @@ async def tag_media_tweets(
             )
             return 0
 
-        model_name = model_override or tag_config.model
-        console.print(f"Generating tags for {len(tweet_ids)} tweets using {model_name}...")
+        console.print(Text(f"Generating tags for {len(tweet_ids)} tweets using {model_name}..."))
 
         response = None
         use_search = tag_config.google_search
         for attempt in range(5):
-            try:
-                config_args = {
-                    "response_mime_type": "application/json",
-                    "response_schema": list[TagResult],
-                }
-                if use_search:
-                    config_args["tools"] = [{"google_search": {}}]
-                thinking_config = _thinking_config(tag_config.thinking_level)
-                if thinking_config is not None:
-                    config_args["thinking_config"] = thinking_config
+            config_args = {
+                "http_options": types.HttpOptions(
+                    retry_options=types.HttpRetryOptions(attempts=1),
+                ),
+                "response_mime_type": "application/json",
+                "response_schema": list[TagResult],
+            }
+            if use_search:
+                config_args["tools"] = [{"google_search": {}}]
+            thinking_config = _thinking_config(tag_config.thinking_level)
+            if thinking_config is not None:
+                config_args["thinking_config"] = thinking_config
+            generation_config = types.GenerateContentConfig(**config_args)
 
-                await pacer.wait()
+            reservation = None
+            if tag_config.rpd is not None:
+                try:
+                    reservation = reserve_rpd_request(
+                        store,
+                        model=model_name,
+                        limit=tag_config.rpd,
+                    )
+                except Exception as error:
+                    _print_rpd_storage_error(console, error, tag_config.api_key)
+                    return 0
+                if not reservation.allowed:
+                    _print_rpd_exhausted(console, reservation, model_name)
+                    return 0
+
+            try:
                 response = await asyncio.to_thread(
                     client.models.generate_content,
                     model=model_name,
                     contents=generation_parts,
-                    config=types.GenerateContentConfig(**config_args),
+                    config=generation_config,
                 )
                 break
             except Exception as error:
@@ -361,6 +446,9 @@ async def tag_media_tweets(
                     marker in error_text for marker in ("429", "503", "RESOURCE_EXHAUSTED")
                 )
                 if is_retryable and attempt < 4:
+                    if reservation is not None and reservation.remaining == 0:
+                        _print_rpd_exhausted(console, reservation, model_name)
+                        return 0
                     delay = 15 * (2**attempt)
                     reason = (
                         "429"
@@ -374,6 +462,9 @@ async def tag_media_tweets(
                     await asyncio.sleep(delay)
                 elif "400" in error_text or "INVALID_ARGUMENT" in error_text:
                     if len(tweet_ids) > 1:
+                        if reservation is not None and reservation.remaining == 0:
+                            _print_rpd_exhausted(console, reservation, model_name)
+                            return 0
                         mid = len(tweet_ids) // 2
                         console.print(
                             f"[yellow]Gemini rejected the payload (400) for batch "
@@ -388,7 +479,7 @@ async def tag_media_tweets(
                             console,
                             tweet_ids[:mid],
                             model_override,
-                            _pacer=pacer,
+                            dry_run=dry_run,
                         )
                         total += await tag_media_tweets(
                             store,
@@ -397,14 +488,19 @@ async def tag_media_tweets(
                             console,
                             tweet_ids[mid:],
                             model_override,
-                            _pacer=pacer,
+                            dry_run=dry_run,
                         )
                         return total
                     console.print(
                         "[red]Gemini rejected the payload (400 INVALID_ARGUMENT). "
-                        "Marking tweet as failed.[/red]"
+                        + (
+                            "Test result was not saved.[/red]"
+                            if dry_run
+                            else "Marking tweet as failed.[/red]"
+                        )
                     )
-                    _mark_failed(store, tweet_ids)
+                    if not dry_run:
+                        _mark_failed(store, tweet_ids)
                     return 0
                 else:
                     raise error
@@ -420,6 +516,9 @@ async def tag_media_tweets(
                     reason = str(response.candidates[0].finish_reason)
 
             if len(tweet_ids) > 1:
+                if reservation is not None and reservation.remaining == 0:
+                    _print_rpd_exhausted(console, reservation, model_name)
+                    return 0
                 mid = len(tweet_ids) // 2
                 console.print(
                     f"[yellow]Gemini returned an empty response (Reason: {reason}) "
@@ -434,7 +533,7 @@ async def tag_media_tweets(
                     console,
                     tweet_ids[:mid],
                     model_override,
-                    _pacer=pacer,
+                    dry_run=dry_run,
                 )
                 total += await tag_media_tweets(
                     store,
@@ -443,14 +542,19 @@ async def tag_media_tweets(
                     console,
                     tweet_ids[mid:],
                     model_override,
-                    _pacer=pacer,
+                    dry_run=dry_run,
                 )
                 return total
             console.print(
                 f"[red]Gemini returned an empty response (Reason: {reason}). "
-                "Marking tweet as failed.[/red]"
+                + (
+                    "Test result was not saved.[/red]"
+                    if dry_run
+                    else "Marking tweet as failed.[/red]"
+                )
             )
-            _mark_failed(store, tweet_ids)
+            if not dry_run:
+                _mark_failed(store, tweet_ids)
             return 0
 
         try:
@@ -478,10 +582,23 @@ async def tag_media_tweets(
             if result.id not in tweet_ids:
                 continue
 
+            normalized_tags = [tag.strip().title() for tag in result.tags]
+            if dry_run:
+                context = tweet_contexts.get(result.id)
+                if context is not None:
+                    _print_tag_preview(
+                        console,
+                        context,
+                        description=result.description,
+                        tags=normalized_tags,
+                    )
+                    tagged_count += 1
+                continue
+
             payload = json.dumps(
                 {
                     "description": result.description,
-                    "tags": [tag.strip().title() for tag in result.tags],
+                    "tags": normalized_tags,
                 }
             )
             store.conn.execute(
@@ -499,8 +616,18 @@ async def tag_media_tweets(
             )
             tagged_count += 1
 
-        store.conn.commit()
-        console.print(f"[green]Successfully tagged {tagged_count} tweets![/green]")
+        if dry_run:
+            tweet_label = "tweet" if tagged_count == 1 else "tweets"
+            console.print(
+                Text(
+                    f"Generated tags for {tagged_count} {tweet_label} in test mode; "
+                    "no media tags were saved.",
+                    style="green",
+                )
+            )
+        else:
+            store.conn.commit()
+            console.print(f"[green]Successfully tagged {tagged_count} tweets![/green]")
         return tagged_count
 
     except Exception as error:
@@ -518,3 +645,54 @@ async def tag_media_tweets(
                 client.files.delete(name=video.name)
             except Exception:
                 pass
+
+
+async def tag_pending_media_tweets(
+    store: ArchiveStore,
+    config: AppConfig,
+    paths: XDGPaths,
+    console: Console,
+    *,
+    limit: int | None = None,
+    batch_override: bool = False,
+    model_override: str | None = None,
+    dry_run: bool = False,
+) -> TaggingRunResult:
+    """Tag pending media tweets until work, quota, or the run limit is exhausted."""
+    if limit is not None and limit < 1:
+        raise ValueError("Tagging limit must be a positive integer")
+
+    batch_size = config.tagging.limit if config.tagging.batch or batch_override else 1
+    effective_limit = 1 if dry_run else limit
+    processed = 0
+    tagged = 0
+    batches = 0
+
+    while effective_limit is None or processed < effective_limit:
+        selection_limit = batch_size
+        if effective_limit is not None:
+            selection_limit = min(selection_limit, effective_limit - processed)
+        if dry_run:
+            selection_limit = 1
+
+        tweet_ids = store.get_eligible_tweets_for_tagging(limit=selection_limit)
+        if not tweet_ids:
+            break
+
+        processed += len(tweet_ids)
+        tagged_batch = await tag_media_tweets(
+            store=store,
+            config=config,
+            paths=paths,
+            console=console,
+            tweet_ids=tweet_ids,
+            model_override=model_override,
+            dry_run=dry_run,
+        )
+        batches += 1
+        tagged += tagged_batch
+
+        if dry_run or tagged_batch < len(tweet_ids) or len(tweet_ids) < selection_limit:
+            break
+
+    return TaggingRunResult(processed=processed, tagged=tagged, batches=batches)

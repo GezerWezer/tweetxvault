@@ -14,6 +14,7 @@ from rich.console import Console
 
 from tweetxvault import tagging
 from tweetxvault.config import AppConfig, TaggingConfig
+from tweetxvault.rpd import get_rpd_status, reserve_rpd_request
 
 
 class FakeStore:
@@ -34,7 +35,9 @@ class FakeStore:
                 author_username TEXT,
                 text TEXT,
                 enrichment_state TEXT,
-                updated_at TEXT
+                updated_at TEXT,
+                key TEXT,
+                value TEXT
             )
             """
         )
@@ -100,6 +103,18 @@ class FakeStore:
             "SELECT * FROM archive WHERE record_type = 'media_tag' AND tweet_id = ?",
             (tweet_id,),
         ).fetchone()
+
+
+class PendingTagStore:
+    def __init__(self, tweet_ids: list[str]) -> None:
+        self.remaining = list(tweet_ids)
+        self.selection_limits: list[int] = []
+
+    def get_eligible_tweets_for_tagging(self, *, limit: int) -> list[str]:
+        self.selection_limits.append(limit)
+        selected = self.remaining[:limit]
+        del self.remaining[: len(selected)]
+        return selected
 
 
 class FakeFiles:
@@ -187,6 +202,24 @@ class FailingTagConnection:
         self.connection.rollback()
 
 
+class FailingReservationConnection:
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self.connection = connection
+        self.rollbacks = 0
+
+    def execute(self, sql: str, parameters: tuple[object, ...] = ()) -> sqlite3.Cursor:
+        if sql.strip() == "BEGIN IMMEDIATE":
+            raise sqlite3.OperationalError("quota storage failed for top-secret-api-key")
+        return self.connection.execute(sql, parameters)
+
+    def commit(self) -> None:
+        self.connection.commit()
+
+    def rollback(self) -> None:
+        self.rollbacks += 1
+        self.connection.rollback()
+
+
 class TrackingImage:
     def __init__(self) -> None:
         self.loaded = False
@@ -249,6 +282,186 @@ def successful_result(tweet_id: str = "1") -> list[dict[str, object]]:
             "tags": ["deadlock", "ivy (deadlock)"],
         }
     ]
+
+
+def rpd_used(store: FakeStore, *, model: str = "gemini-default", limit: int = 100) -> int:
+    return get_rpd_status(store, model=model, limit=limit).used
+
+
+@pytest.mark.asyncio
+async def test_pending_tagging_loops_through_full_and_short_batches(
+    monkeypatch: pytest.MonkeyPatch,
+    paths,
+) -> None:
+    store = PendingTagStore(["1", "2", "3", "4", "5"])
+    calls: list[dict[str, Any]] = []
+
+    async def fake_tag_media_tweets(**kwargs: Any) -> int:
+        calls.append(kwargs)
+        return len(kwargs["tweet_ids"])
+
+    monkeypatch.setattr(tagging, "tag_media_tweets", fake_tag_media_tweets)
+    console, _ = make_console()
+
+    result = await tagging.tag_pending_media_tweets(
+        store,
+        make_config(batch=True, limit=2),
+        paths,
+        console,
+    )
+
+    assert result == tagging.TaggingRunResult(processed=5, tagged=5, batches=3)
+    assert store.selection_limits == [2, 2, 2]
+    assert [call["tweet_ids"] for call in calls] == [["1", "2"], ["3", "4"], ["5"]]
+
+
+@pytest.mark.asyncio
+async def test_pending_tagging_total_limit_clamps_the_final_batch(
+    monkeypatch: pytest.MonkeyPatch,
+    paths,
+) -> None:
+    store = PendingTagStore([str(index) for index in range(1, 9)])
+    selected_batches: list[list[str]] = []
+
+    async def fake_tag_media_tweets(**kwargs: Any) -> int:
+        selected_batches.append(kwargs["tweet_ids"])
+        return len(kwargs["tweet_ids"])
+
+    monkeypatch.setattr(tagging, "tag_media_tweets", fake_tag_media_tweets)
+    console, _ = make_console()
+
+    result = await tagging.tag_pending_media_tweets(
+        store,
+        make_config(batch=True, limit=3),
+        paths,
+        console,
+        limit=5,
+    )
+
+    assert result == tagging.TaggingRunResult(processed=5, tagged=5, batches=2)
+    assert store.selection_limits == [3, 2]
+    assert selected_batches == [["1", "2", "3"], ["4", "5"]]
+    assert store.remaining == ["6", "7", "8"]
+
+
+@pytest.mark.asyncio
+async def test_pending_tagging_batch_override_enables_configured_batch_size(
+    monkeypatch: pytest.MonkeyPatch,
+    paths,
+) -> None:
+    store = PendingTagStore(["1", "2", "3", "4", "5"])
+    selected_batches: list[list[str]] = []
+
+    async def fake_tag_media_tweets(**kwargs: Any) -> int:
+        selected_batches.append(kwargs["tweet_ids"])
+        return len(kwargs["tweet_ids"])
+
+    monkeypatch.setattr(tagging, "tag_media_tweets", fake_tag_media_tweets)
+    console, _ = make_console()
+
+    result = await tagging.tag_pending_media_tweets(
+        store,
+        make_config(batch=False, limit=3),
+        paths,
+        console,
+        batch_override=True,
+    )
+
+    assert result == tagging.TaggingRunResult(processed=5, tagged=5, batches=2)
+    assert store.selection_limits == [3, 3]
+    assert selected_batches == [["1", "2", "3"], ["4", "5"]]
+
+
+@pytest.mark.asyncio
+async def test_pending_tagging_without_batching_processes_one_tweet_per_request(
+    monkeypatch: pytest.MonkeyPatch,
+    paths,
+) -> None:
+    store = PendingTagStore(["1", "2", "3"])
+    selected_batches: list[list[str]] = []
+
+    async def fake_tag_media_tweets(**kwargs: Any) -> int:
+        selected_batches.append(kwargs["tweet_ids"])
+        return len(kwargs["tweet_ids"])
+
+    monkeypatch.setattr(tagging, "tag_media_tweets", fake_tag_media_tweets)
+    console, _ = make_console()
+
+    result = await tagging.tag_pending_media_tweets(
+        store,
+        make_config(batch=False, limit=20),
+        paths,
+        console,
+    )
+
+    assert result == tagging.TaggingRunResult(processed=3, tagged=3, batches=3)
+    assert store.selection_limits == [1, 1, 1, 1]
+    assert selected_batches == [["1"], ["2"], ["3"]]
+
+
+@pytest.mark.parametrize("tagged_batch", [0, 2])
+@pytest.mark.asyncio
+async def test_pending_tagging_stops_after_zero_or_partial_batch(
+    monkeypatch: pytest.MonkeyPatch,
+    paths,
+    tagged_batch: int,
+) -> None:
+    store = PendingTagStore(["1", "2", "3", "4", "5", "6"])
+    calls: list[list[str]] = []
+
+    async def fake_tag_media_tweets(**kwargs: Any) -> int:
+        calls.append(kwargs["tweet_ids"])
+        return tagged_batch
+
+    monkeypatch.setattr(tagging, "tag_media_tweets", fake_tag_media_tweets)
+    console, _ = make_console()
+
+    result = await tagging.tag_pending_media_tweets(
+        store,
+        make_config(batch=True, limit=3),
+        paths,
+        console,
+    )
+
+    assert result == tagging.TaggingRunResult(processed=3, tagged=tagged_batch, batches=1)
+    assert store.selection_limits == [3]
+    assert calls == [["1", "2", "3"]]
+    assert store.remaining == ["4", "5", "6"]
+
+
+@pytest.mark.asyncio
+async def test_pending_tagging_dry_run_forces_one_tweet_and_one_batch(
+    monkeypatch: pytest.MonkeyPatch,
+    paths,
+) -> None:
+    store = PendingTagStore(["1", "2", "3"])
+    calls: list[dict[str, Any]] = []
+
+    async def fake_tag_media_tweets(**kwargs: Any) -> int:
+        calls.append(kwargs)
+        return 1
+
+    monkeypatch.setattr(tagging, "tag_media_tweets", fake_tag_media_tweets)
+    console, _ = make_console()
+
+    result = await tagging.tag_pending_media_tweets(
+        store,
+        make_config(batch=True, limit=20),
+        paths,
+        console,
+        limit=10,
+        batch_override=True,
+        model_override="gemini-test",
+        dry_run=True,
+    )
+
+    assert result == tagging.TaggingRunResult(processed=1, tagged=1, batches=1)
+    assert store.selection_limits == [1]
+    assert len(calls) == 1
+    assert calls[0]["tweet_ids"] == ["1"]
+    assert calls[0]["model_override"] == "gemini-test"
+    assert calls[0]["dry_run"] is True
+    assert store.remaining == ["2", "3"]
 
 
 @pytest.mark.parametrize(
@@ -472,6 +685,156 @@ async def test_reply_context_and_empty_existing_tags_are_in_prompt(
     assert "None yet (create new tags as needed)." in string_parts
 
 
+@pytest.mark.asyncio
+async def test_dry_run_prints_validated_preview_without_saving_and_counts_rpd(
+    monkeypatch: pytest.MonkeyPatch,
+    paths,
+) -> None:
+    store = FakeStore()
+    store.add_tweet(
+        "42",
+        text="A locally archived tweet",
+        raw_json=json.dumps({"legacy": {"in_reply_to_status_id_str": "41"}}),
+        author_display_name="Preview Author",
+        author_username="preview_user",
+    )
+    store.add_media("42", local_path="preview/photo.png")
+    write_image(paths.data_dir / "preview" / "photo.png")
+    client = FakeClient(
+        [
+            response(
+                [
+                    {
+                        "id": "42",
+                        "description": "A validated media description.",
+                        "tags": ["  deadLOCK ", "ivy (deadLOCK)"],
+                        "raw_debug": "RAW_RESPONSE_SENTINEL",
+                    }
+                ]
+            )
+        ]
+    )
+    monkeypatch.setattr(tagging.genai, "Client", lambda **kwargs: client)
+    console, output = make_console()
+
+    assert (
+        await tagging.tag_media_tweets(
+            store,
+            make_config(rpd=5),
+            paths,
+            console,
+            ["42"],
+            dry_run=True,
+        )
+        == 1
+    )
+
+    preview = output.getvalue()
+    assert "Tweet 42 (Reply)" in preview
+    assert "Author: Preview Author (@preview_user)" in preview
+    assert "Text: A locally archived tweet" in preview
+    assert "Description: A validated media description." in preview
+    assert "Tags: Deadlock, Ivy (Deadlock)" in preview
+    assert "RAW_RESPONSE_SENTINEL" not in preview
+    assert "no media tags were saved" in preview
+    assert store.media_tag("42") is None
+    assert rpd_used(store, limit=5) == 1
+
+
+@pytest.mark.asyncio
+async def test_dry_run_does_not_overwrite_an_existing_media_tag(
+    monkeypatch: pytest.MonkeyPatch,
+    paths,
+) -> None:
+    store = FakeStore()
+    prepare_photo(store, paths.data_dir)
+    original_payload = json.dumps({"description": "Original description", "tags": ["Original Tag"]})
+    store.conn.execute(
+        "INSERT INTO archive "
+        "(row_key, record_type, tweet_id, raw_json, enrichment_state, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        ("media_tag:1", "media_tag", "1", original_payload, "done", "original-time"),
+    )
+    store.conn.commit()
+    client = FakeClient([response(successful_result())])
+    monkeypatch.setattr(tagging.genai, "Client", lambda **kwargs: client)
+    console, _ = make_console()
+
+    assert (
+        await tagging.tag_media_tweets(
+            store,
+            make_config(),
+            paths,
+            console,
+            ["1"],
+            dry_run=True,
+        )
+        == 1
+    )
+
+    row = store.media_tag("1")
+    assert row is not None
+    assert row["raw_json"] == original_payload
+    assert row["enrichment_state"] == "done"
+    assert row["updated_at"] == "original-time"
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [RuntimeError("400 INVALID_ARGUMENT"), empty_response()],
+)
+@pytest.mark.asyncio
+async def test_dry_run_model_rejection_does_not_create_a_failure_marker(
+    monkeypatch: pytest.MonkeyPatch,
+    paths,
+    outcome: object,
+) -> None:
+    store = FakeStore()
+    prepare_photo(store, paths.data_dir)
+    client = FakeClient([outcome])
+    monkeypatch.setattr(tagging.genai, "Client", lambda **kwargs: client)
+    console, output = make_console()
+
+    assert (
+        await tagging.tag_media_tweets(
+            store,
+            make_config(rpd=5),
+            paths,
+            console,
+            ["1"],
+            dry_run=True,
+        )
+        == 0
+    )
+
+    assert store.media_tag("1") is None
+    assert rpd_used(store, limit=5) == 1
+    assert "Test result was not saved" in output.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_dry_run_rejects_multiple_tweet_ids_before_client_creation(
+    monkeypatch: pytest.MonkeyPatch,
+    paths,
+) -> None:
+    monkeypatch.setattr(
+        tagging.genai,
+        "Client",
+        lambda **kwargs: pytest.fail(f"client created unexpectedly: {kwargs}"),
+    )
+    console, _ = make_console()
+
+    with pytest.raises(ValueError, match="requires exactly one tweet"):
+        await tagging.tag_media_tweets(
+            FakeStore(),
+            make_config(),
+            paths,
+            console,
+            ["1", "2"],
+            dry_run=True,
+        )
+
+
 @pytest.mark.parametrize("media_type", ["video", "animated_gif"])
 @pytest.mark.asyncio
 async def test_video_media_types_upload_poll_and_delete(
@@ -600,6 +963,86 @@ async def test_generation_config_wires_grounding_schema_and_thinking_level(
         assert request_config.thinking_config.thinking_budget == 4096
 
 
+@pytest.mark.asyncio
+async def test_local_generation_config_failure_does_not_consume_rpd(
+    monkeypatch: pytest.MonkeyPatch,
+    paths,
+) -> None:
+    store = FakeStore()
+    prepare_photo(store, paths.data_dir)
+    client = FakeClient([])
+    monkeypatch.setattr(tagging.genai, "Client", lambda **kwargs: client)
+    monkeypatch.setattr(
+        tagging.types,
+        "GenerateContentConfig",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("local config failure")),
+    )
+    console, output = make_console()
+
+    assert await tagging.tag_media_tweets(store, make_config(rpd=5), paths, console, ["1"]) == 0
+    assert client.models.calls == []
+    assert rpd_used(store, limit=5) == 0
+    assert "local config failure" in output.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_generation_disables_sdk_retries_and_unlimited_mode_writes_no_quota_state(
+    monkeypatch: pytest.MonkeyPatch,
+    paths,
+) -> None:
+    store = FakeStore()
+    prepare_photo(store, paths.data_dir)
+    client = FakeClient([response(successful_result())])
+    monkeypatch.setattr(tagging.genai, "Client", lambda **kwargs: client)
+    console, _ = make_console()
+
+    assert await tagging.tag_media_tweets(store, make_config(rpd=None), paths, console, ["1"]) == 1
+    assert len(client.models.calls) == 1
+    request_config = client.models.calls[0]["config"]
+    assert request_config.http_options.retry_options.attempts == 1
+    assert (
+        store.conn.execute(
+            "SELECT count(*) FROM archive WHERE row_key LIKE 'metadata:gemini_rpd:%'"
+        ).fetchone()[0]
+        == 0
+    )
+
+
+@pytest.mark.asyncio
+async def test_successful_multi_tweet_batch_costs_one_request(
+    monkeypatch: pytest.MonkeyPatch,
+    paths,
+) -> None:
+    store = FakeStore()
+    prepare_photo(store, paths.data_dir, "1")
+    prepare_photo(store, paths.data_dir, "2")
+    client = FakeClient(
+        [
+            response(
+                [
+                    successful_result("1")[0],
+                    successful_result("2")[0],
+                ]
+            )
+        ]
+    )
+    monkeypatch.setattr(tagging.genai, "Client", lambda **kwargs: client)
+    console, _ = make_console()
+
+    assert (
+        await tagging.tag_media_tweets(
+            store,
+            make_config(rpd=5),
+            paths,
+            console,
+            ["1", "2"],
+        )
+        == 2
+    )
+    assert len(client.models.calls) == 1
+    assert rpd_used(store, limit=5) == 1
+
+
 @pytest.mark.parametrize(
     "error_text",
     [
@@ -658,7 +1101,7 @@ async def test_grounding_failures_retry_immediately_without_search(
     ],
 )
 @pytest.mark.asyncio
-async def test_retryable_generation_errors_use_exponential_backoff(
+async def test_retryable_generation_errors_use_only_exponential_backoff(
     monkeypatch: pytest.MonkeyPatch,
     paths,
     error_text: str,
@@ -682,9 +1125,91 @@ async def test_retryable_generation_errors_use_exponential_backoff(
     monkeypatch.setattr(tagging.asyncio, "sleep", fake_sleep)
     console, output = make_console()
 
-    assert await tagging.tag_media_tweets(store, make_config(), paths, console, ["1"]) == 1
+    assert (
+        await tagging.tag_media_tweets(
+            store,
+            make_config(rpd=20),
+            paths,
+            console,
+            ["1"],
+        )
+        == 1
+    )
     assert sleeps == [15, 30]
+    assert len(client.models.calls) == 3
+    assert rpd_used(store, limit=20) == 3
     assert f"Gemini API busy ({reason})" in output.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_rpd_cap_reached_mid_retry_skips_next_sleep_and_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+    paths,
+) -> None:
+    store = FakeStore()
+    prepare_photo(store, paths.data_dir)
+    client = FakeClient(
+        [
+            RuntimeError("503 busy"),
+            RuntimeError("503 still busy"),
+            response(successful_result()),
+        ]
+    )
+    monkeypatch.setattr(tagging.genai, "Client", lambda **kwargs: client)
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr(tagging.asyncio, "sleep", fake_sleep)
+    console, output = make_console()
+
+    assert await tagging.tag_media_tweets(store, make_config(rpd=2), paths, console, ["1"]) == 0
+    assert len(client.models.calls) == 2
+    assert sleeps == [15]
+    assert rpd_used(store, limit=2) == 2
+    assert store.media_tag("1") is None
+    assert "daily request limit reached" in output.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_grounding_fallback_stops_at_cap_without_sleep_or_failure_marker(
+    monkeypatch: pytest.MonkeyPatch,
+    paths,
+) -> None:
+    store = FakeStore()
+    prepare_photo(store, paths.data_dir)
+    client = FakeClient(
+        [
+            RuntimeError("400 grounding incompatible"),
+            response(successful_result()),
+        ]
+    )
+    monkeypatch.setattr(tagging.genai, "Client", lambda **kwargs: client)
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr(tagging.asyncio, "sleep", fake_sleep)
+    console, output = make_console()
+
+    assert (
+        await tagging.tag_media_tweets(
+            store,
+            make_config(google_search=True, rpd=1),
+            paths,
+            console,
+            ["1"],
+        )
+        == 0
+    )
+    assert len(client.models.calls) == 1
+    assert sleeps == []
+    assert rpd_used(store, limit=1) == 1
+    assert store.media_tag("1") is None
+    assert "Retrying immediately without Search" in output.getvalue()
+    assert "daily request limit reached" in output.getvalue()
 
 
 @pytest.mark.asyncio
@@ -747,6 +1272,139 @@ async def test_invalid_argument_batch_is_recursively_split_and_model_is_preserve
     assert store.media_tag("1")["enrichment_state"] == "done"
     assert store.media_tag("2")["enrichment_state"] == "done"
     assert "Splitting into batches of 1 and 1" in output.getvalue()
+
+
+@pytest.mark.parametrize(
+    "parent_outcome",
+    [RuntimeError("400 INVALID_ARGUMENT payload too large"), empty_response()],
+)
+@pytest.mark.asyncio
+async def test_recursive_split_stops_at_cap_without_marking_unattempted_child_failed(
+    monkeypatch: pytest.MonkeyPatch,
+    paths,
+    parent_outcome: object,
+) -> None:
+    store = FakeStore()
+    prepare_photo(store, paths.data_dir, "1")
+    prepare_photo(store, paths.data_dir, "2")
+    client = FakeClient(
+        [
+            parent_outcome,
+            response(successful_result("1")),
+        ]
+    )
+    client_creations = 0
+
+    def make_client(**kwargs: Any) -> FakeClient:
+        nonlocal client_creations
+        client_creations += 1
+        return client
+
+    monkeypatch.setattr(tagging.genai, "Client", make_client)
+    console, output = make_console()
+
+    assert (
+        await tagging.tag_media_tweets(
+            store,
+            make_config(rpd=2),
+            paths,
+            console,
+            ["1", "2"],
+        )
+        == 1
+    )
+    assert client_creations == 2
+    assert len(client.models.calls) == 2
+    assert rpd_used(store, limit=2) == 2
+    assert store.media_tag("1")["enrichment_state"] == "done"
+    assert store.media_tag("2") is None
+    assert "daily request limit reached" in output.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_already_exhausted_rpd_preflight_does_not_create_client(
+    monkeypatch: pytest.MonkeyPatch,
+    paths,
+) -> None:
+    store = FakeStore()
+    prepare_photo(store, paths.data_dir)
+    assert reserve_rpd_request(store, model="gemini-default", limit=1).allowed
+    client_creations = 0
+
+    def make_client(**kwargs: Any) -> FakeClient:
+        nonlocal client_creations
+        client_creations += 1
+        return FakeClient([response(successful_result())])
+
+    monkeypatch.setattr(tagging.genai, "Client", make_client)
+    console, output = make_console()
+
+    assert await tagging.tag_media_tweets(store, make_config(rpd=1), paths, console, ["1"]) == 0
+    assert client_creations == 0
+    assert rpd_used(store, limit=1) == 1
+    assert store.media_tag("1") is None
+    assert "daily request limit reached" in output.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_model_override_uses_an_independent_rpd_counter(
+    monkeypatch: pytest.MonkeyPatch,
+    paths,
+) -> None:
+    store = FakeStore()
+    prepare_photo(store, paths.data_dir, "1")
+    prepare_photo(store, paths.data_dir, "2")
+    client = FakeClient(
+        [
+            response(successful_result("1")),
+            response(successful_result("2")),
+        ]
+    )
+    monkeypatch.setattr(tagging.genai, "Client", lambda **kwargs: client)
+    console, _ = make_console()
+    config = make_config(rpd=1)
+
+    assert (
+        await tagging.tag_media_tweets(
+            store,
+            config,
+            paths,
+            console,
+            ["1"],
+            model_override="gemini-override",
+        )
+        == 1
+    )
+    assert await tagging.tag_media_tweets(store, config, paths, console, ["2"]) == 1
+    assert [call["model"] for call in client.models.calls] == [
+        "gemini-override",
+        "gemini-default",
+    ]
+    assert rpd_used(store, model="gemini-override", limit=1) == 1
+    assert rpd_used(store, model="gemini-default", limit=1) == 1
+
+
+@pytest.mark.asyncio
+async def test_rpd_reservation_failure_fails_closed_and_redacts_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+    paths,
+) -> None:
+    store = FakeStore()
+    prepare_photo(store, paths.data_dir)
+    underlying_connection = store.conn
+    failing_connection = FailingReservationConnection(underlying_connection)
+    store.conn = failing_connection
+    client = FakeClient([response(successful_result())])
+    monkeypatch.setattr(tagging.genai, "Client", lambda **kwargs: client)
+    console, output = make_console()
+
+    assert await tagging.tag_media_tweets(store, make_config(rpd=1), paths, console, ["1"]) == 0
+    assert client.models.calls == []
+    assert failing_connection.rollbacks == 1
+    assert store.media_tag("1") is None
+    assert "request not sent" in output.getvalue()
+    assert "top-secret-api-key" not in output.getvalue()
+    assert "[REDACTED]" in output.getvalue()
 
 
 @pytest.mark.asyncio
@@ -935,39 +1593,3 @@ async def test_tag_schema_rejects_out_of_contract_tag_counts(
 
     assert await tagging.tag_media_tweets(store, make_config(), paths, console, ["1"]) == 0
     assert store.media_tag("1") is None
-
-
-@pytest.mark.asyncio
-async def test_rpd_paces_multiple_generation_requests(
-    monkeypatch: pytest.MonkeyPatch,
-    paths,
-) -> None:
-    store = FakeStore()
-    prepare_photo(store, paths.data_dir)
-    client = FakeClient(
-        [
-            RuntimeError("400 grounding incompatible"),
-            response(successful_result()),
-        ]
-    )
-    monkeypatch.setattr(tagging.genai, "Client", lambda **kwargs: client)
-    monkeypatch.setattr(tagging.time, "monotonic", lambda: 100.0)
-    sleeps: list[float] = []
-
-    async def fake_sleep(delay: float) -> None:
-        sleeps.append(delay)
-
-    monkeypatch.setattr(tagging.asyncio, "sleep", fake_sleep)
-    console, _ = make_console()
-
-    assert (
-        await tagging.tag_media_tweets(
-            store,
-            make_config(google_search=True, rpd=86_400),
-            paths,
-            console,
-            ["1"],
-        )
-        == 1
-    )
-    assert sleeps == [1.0]

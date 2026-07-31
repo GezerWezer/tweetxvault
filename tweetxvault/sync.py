@@ -113,7 +113,17 @@ class SyncFollowupPlan:
 
     @property
     def enabled(self) -> bool:
-        return any((self.enrich, self.articles, self.media, self.unfurl, self.threads, self.tagging, self.retry_failed))
+        return any(
+            (
+                self.enrich,
+                self.articles,
+                self.media,
+                self.unfurl,
+                self.threads,
+                self.tagging,
+                self.retry_failed,
+            )
+        )
 
 
 class ProcessLock:
@@ -580,45 +590,17 @@ async def _run_followup_tagging(
     paths: XDGPaths,
     console: Console,
 ):
-    from tweetxvault.tagging import tag_media_tweets
     from tweetxvault.jobs import locked_archive_job
-    import math
-    from datetime import datetime
+    from tweetxvault.tagging import tag_pending_media_tweets
 
     async with locked_archive_job(config=config, paths=paths, console=console) as job:
-        limit = config.tagging.limit if config.tagging.batch else 1
-        total_tagged = 0
-        
-        while True:
-            if config.tagging.rpd is not None:
-                start_of_day = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-                tagged_today = job.store.conn.execute(
-                    "SELECT count(*) FROM archive WHERE record_type = 'media_tag' AND CAST(updated_at AS REAL) >= ?", 
-                    (start_of_day,)
-                ).fetchone()[0]
-                
-                requests_today = math.ceil(tagged_today / limit) if limit > 0 else 0
-                if requests_today >= config.tagging.rpd:
-                    console.print(f"[yellow]Daily tagging limit reached ({requests_today}/{config.tagging.rpd} requests).[/yellow]")
-                    break
-                    
-            tweet_ids = job.store.get_eligible_tweets_for_tagging(limit=limit)
-            if not tweet_ids:
-                break
-                
-            tagged_batch = await tag_media_tweets(
-                store=job.store,
-                config=config,
-                paths=paths,
-                console=console,
-                tweet_ids=tweet_ids,
-            )
-            total_tagged += tagged_batch
-            
-            if tagged_batch == 0 or len(tweet_ids) < limit:
-                break
-                
-        return total_tagged
+        result = await tag_pending_media_tweets(
+            store=job.store,
+            config=config,
+            paths=paths,
+            console=console,
+        )
+        return result.tagged
 
 
 async def _run_auto_followups(
@@ -662,10 +644,11 @@ async def _run_auto_followups(
                 f"{result.pending_enrichment} pending",
             )
 
-    if plan.enrich: # only resurrect if enrich is enabled
+    if plan.enrich:  # only resurrect if enrich is enabled
         _log_sync_followup(console, "running resurrect dead tweets")
         try:
             from tweetxvault.archive_import import resurrect_dead_tweets
+
             result = await resurrect_dead_tweets(
                 limit=None if plan.retry_failed else 200,
                 config=config,
@@ -806,7 +789,6 @@ async def _run_auto_followups(
                 console,
                 f"tagging: {tagged_count} tagged",
             )
-
 
 
 async def _sync_collection_ready(
