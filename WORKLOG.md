@@ -1,3 +1,23 @@
+- 2026-07-29 (Rich Search Input Capsules)
+  - Implemented Discord/Twitter-style search bar operator capsules in `tweetxvault/web/index.html`.
+  - Replaced `<input type="text">` with a `contenteditable` component for inline text formatting.
+  - Added custom `formatRichText` and `restoreCaret` DOM parser logic in `tweetxvault/web/static/js/autocomplete.js` to parse operators (`tag:`, `has:`, etc.) dynamically into Completed, Incomplete, and Invalid states.
+  - Enforced strict validation for `tag:` operator against `globalTags` to ensure non-existent tags render as invalid.
+  - Enforced strict validation for `from:` and `to:` operators using a local `knownAuthors` cache and an async background fetch `validateAuthorAsync` to prevent unverified usernames from displaying as completed capsules.
+  - Fixed multi-word tag validation by accurately stripping outer quotes before verifying against cached operator state.
+  - Added "Multi-Word Quote Suppression" by dynamically hiding quotes via `.hidden-quote` CSS class without removing them from `textContent`. Fixed inline-block baseline shift causing searchbar height expansion by explicitly applying `vertical-align: bottom`.
+  - Fixed a backend 500 error in `/api/authors/search` by adding a graceful SQLite fallback query for legacy databases missing the `author_display_name` column.
+  - Reduced capsule font size (0.9em) for a tighter layout and implemented `.negative-capsule` red styling for negated operators (e.g. `-tag:`).
+  - Removed custom text selection highlights to respect native OS contrast colors.
+  - Added bold matching text highlights for tag autocomplete dropdown options.
+  - Implemented an interactive Calendar Date Picker UI in the autocomplete dropdown for `since:` and `until:` operators.
+  - Refined Date Picker visual design to seamlessly match Twitter/X design language (circular date pills, subtle today ring indicator, clean typography, custom arrow controls).
+  - Fixed search dropdown keyboard navigation to automatically scroll focused option into view when using Up/Down arrow keys.
+  - Refined dropdown rendering for sub-categories (`filter:`, `has:`) to only display the sub-category value rather than redundantly repeating the prefix.
+  - Removed `filter:nativeretweets` option from search suggestions as requested.
+  - Removed `min_faves:` and `min_retweets:` search options as requested.
+  - Styled capsules in `styles.css` matching Twitter design system tokens.
+
 - 2026-07-29 (Theme Updates)
   - Replaced 'Nord' and 'Material Ocean' themes with 'Flexoki Light' and 'Flexoki Dark' respectively in `tweetxvault/web/static/js/themes.js`.
   - Adapted Flexoki color scheme (by Steph Ango) values for background, text, muted, accent, and danger colors, along with 8 accent color options.

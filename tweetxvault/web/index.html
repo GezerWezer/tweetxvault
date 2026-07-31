@@ -63,15 +63,35 @@
 
             <div class="p-4 border-b border-[var(--border-color)] relative" x-data="searchAutocomplete()" @click.away="showDropdown = false">
                 <div class="relative w-full">
-                    <input type="text" x-model="searchQuery" @input="handleInput" @focus="showDropdown = true; handleInput()" @keydown.enter="search(); showDropdown = false" @keydown.up.prevent="moveUp" @keydown.down.prevent="moveDown" @keydown.tab.prevent="selectOption" x-ref="searchInput" placeholder="Search..." class="w-full bg-[var(--bg-secondary)] text-[var(--text-primary)] rounded-full py-2 pl-4 pr-10 focus:outline-none focus:ring-1 focus:ring-[var(--accent-color)] placeholder-gray-500 border border-[var(--input-border)]">
-                    <button x-show="searchQuery" @click="searchQuery = ''; search()" class="absolute right-3 top-1/2 -translate-y-1/2 p-1 bg-[var(--text-secondary)] rounded-full hover:bg-[var(--text-primary)] transition">
+                    <div contenteditable="true" spellcheck="false" autocorrect="off"
+                         @input="handleInput" 
+                         @focus="showDropdown = true; handleInput()" 
+                         @keydown.enter.prevent="search(); showDropdown = false; $el.blur()" 
+                         @keydown.up.prevent="moveUp" 
+                         @keydown.down.prevent="moveDown" 
+                         @keydown.tab.prevent="selectOption" 
+                         @compositionstart="isComposing = true"
+                         @compositionend="isComposing = false; handleInput()"
+                         @paste="setTimeout(() => handleInput(), 0)"
+                         x-ref="searchInput" 
+                         :class="{'empty-content': searchQuery.length === 0}"
+                         data-placeholder="Search..." 
+                         class="rich-search-input w-full bg-[var(--bg-secondary)] text-[var(--text-primary)] rounded-full py-2 pl-4 pr-10 focus:outline-none focus:ring-1 focus:ring-[var(--accent-color)] border border-[var(--input-border)] whitespace-pre-wrap overflow-hidden block min-h-[38px] leading-relaxed"></div>
+                    <button x-show="searchQuery" @click="searchQuery = ''; $refs.searchInput.innerHTML = ''; search()" class="absolute right-3 top-1/2 -translate-y-1/2 p-1 bg-[var(--text-secondary)] rounded-full hover:bg-[var(--text-primary)] transition z-10">
                         <svg viewBox="0 0 24 24" class="w-3 h-3 fill-[var(--bg-primary)]"><path d="M13.414 12l5.793-5.793c.39-.39.39-1.023 0-1.414s-1.023-.39-1.414 0L12 10.586 6.207 4.793c-.39-.39-1.023-.39-1.414 0s-.39 1.023 0 1.414L10.586 12l-5.793 5.793c-.39.39-.39 1.023 0 1.414.195.195.45.293.707.293s.512-.098.707-.293L12 13.414l5.793 5.793c.195.195.45.293.707.293s.512-.098.707-.293c.39-.39.39-1.023 0-1.414L13.414 12z"></path></svg>
                     </button>
                 </div>
                 
-                <div x-show="showDropdown && options.length > 0" x-transition.opacity.duration.100ms class="absolute top-full left-4 right-4 mt-1 bg-[var(--dropdown-bg)] border border-[var(--border-color)] rounded-xl shadow-[0_0_15px_rgba(255,255,255,0.1)] overflow-y-auto max-h-[50vh] z-50 py-2">
+                <div x-ref="dropdownMenu" x-show="showDropdown && options.length > 0" x-transition.opacity.duration.100ms class="absolute top-full left-4 right-4 mt-1 bg-[var(--dropdown-bg)] border border-[var(--border-color)] rounded-xl shadow-[0_0_15px_rgba(255,255,255,0.1)] overflow-y-auto max-h-[50vh] z-50 py-2">
                     <template x-for="(opt, index) in options" :key="index">
-                        <div @click="selectOptionIndex(index)" @mouseenter="selectedIndex = index" :class="{'bg-[var(--bg-tertiary)]': selectedIndex === index}" class="px-4 py-3 cursor-pointer flex transition justify-between items-center">
+                        <div @click="!opt.isDatePicker && selectOptionIndex(index)" 
+                             @mouseenter="!opt.isDatePicker && (selectedIndex = index)" 
+                             :class="{
+                                 'bg-[var(--bg-tertiary)]': !opt.isDatePicker && selectedIndex === index,
+                                 'px-4 py-3 cursor-pointer flex transition justify-between items-center': !opt.isDatePicker,
+                                 'p-3': opt.isDatePicker
+                             }" 
+                             class="transition">
                             <template x-if="opt.isAuthor">
                                 <div class="flex items-center space-x-3 w-full py-1">
                                     <div class="w-10 h-10 rounded-full flex-shrink-0 relative bg-[var(--gray-700)] flex items-center justify-center font-bold text-[var(--white-icon)] uppercase overflow-hidden">
@@ -84,21 +104,67 @@
                                     </div>
                                 </div>
                             </template>
-                            <template x-if="!opt.isAuthor && !opt.isTag">
-                                <div class="flex flex-col justify-center">
-                                    <div class="flex items-center space-x-2">
-                                        <span class="text-[var(--text-primary)] font-bold" x-text="opt.prefix"></span>
-                                        <span class="text-[var(--text-secondary)]" x-text="opt.value || opt.desc"></span>
-                                    </div>
-                                    <div class="text-[var(--text-secondary)] text-sm" x-show="opt.value" x-text="opt.desc"></div>
+                            <template x-if="!opt.isAuthor && !opt.isTag && !opt.isDatePicker">
+                                <div class="flex flex-col justify-center w-full">
+                                    <template x-if="opt.value">
+                                        <div>
+                                            <div class="text-[var(--text-primary)] font-bold" x-text="opt.value"></div>
+                                            <div class="text-[var(--text-secondary)] text-sm mt-0.5" x-text="opt.desc"></div>
+                                        </div>
+                                    </template>
+                                    <template x-if="!opt.value">
+                                        <div>
+                                            <div class="flex items-center space-x-2">
+                                                <span class="text-[var(--text-primary)] font-bold" x-text="opt.prefix"></span>
+                                                <span class="text-[var(--text-secondary)]" x-text="opt.desc"></span>
+                                            </div>
+                                        </div>
+                                    </template>
                                 </div>
                             </template>
                             <template x-if="opt.isTag">
                                 <div class="flex w-full justify-between items-center">
                                     <div class="flex items-center space-x-2">
-                                        <span class="text-[var(--text-primary)]" x-text="opt.value"></span>
+                                        <span class="text-[var(--text-primary)]" x-html="highlightMatch(opt.value, opt.query)"></span>
                                     </div>
                                     <span class="text-[var(--text-secondary)] text-sm bg-[var(--bg-tertiary)] px-2 py-0.5 rounded-full font-medium" x-text="opt.count"></span>
+                                </div>
+                            </template>
+                            <template x-if="opt.isDatePicker">
+                                <div class="w-full text-[var(--text-primary)] select-none" @mousedown.prevent>
+                                    <!-- Header -->
+                                    <div class="flex justify-between items-center mb-3 px-1">
+                                        <button type="button" @click.stop="dpPrevMonth()" class="w-8 h-8 rounded-full flex items-center justify-center text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-secondary)] transition-colors">
+                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"></path></svg>
+                                        </button>
+                                        <div class="font-bold text-[15px] text-[var(--text-primary)] tracking-wide" x-text="new Date(dpYear, dpMonth, 1).toLocaleString('default', { month: 'long', year: 'numeric' })"></div>
+                                        <button type="button" @click.stop="dpNextMonth()" class="w-8 h-8 rounded-full flex items-center justify-center text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-secondary)] transition-colors">
+                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"></path></svg>
+                                        </button>
+                                    </div>
+
+                                    <!-- Weekday Headers -->
+                                    <div class="grid grid-cols-7 text-center mb-1 pb-1 border-b border-[var(--border-color)]">
+                                        <template x-for="day in ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa']">
+                                            <div class="text-[12px] font-bold text-[var(--text-secondary)] py-1" x-text="day"></div>
+                                        </template>
+                                    </div>
+
+                                    <!-- Days Grid -->
+                                    <div class="grid grid-cols-7 gap-y-1 text-center py-1">
+                                        <template x-for="dayObj in dpGetDays()">
+                                            <button type="button"
+                                                class="w-8 h-8 mx-auto flex items-center justify-center cursor-pointer transition-all rounded-full text-[13px] font-medium focus:outline-none"
+                                                :class="{
+                                                    'bg-[var(--accent-color)] text-white font-bold shadow-sm': dayObj.dateStr === opt.val,
+                                                    'border border-[var(--accent-color)] text-[var(--accent-color)] font-semibold hover:bg-[var(--bg-secondary)]': dayObj.isToday && dayObj.dateStr !== opt.val,
+                                                    'text-[var(--text-primary)] hover:bg-[var(--bg-secondary)]': dayObj.isCurrentMonth && dayObj.dateStr !== opt.val && !dayObj.isToday,
+                                                    'text-[var(--text-secondary)] opacity-30 hover:opacity-100 hover:bg-[var(--hover-bg)]': !dayObj.isCurrentMonth && dayObj.dateStr !== opt.val
+                                                }"
+                                                @click.stop="dpSelectDate(dayObj.dateStr, opt)"
+                                                x-text="dayObj.day"></button>
+                                        </template>
+                                    </div>
                                 </div>
                             </template>
                         </div>

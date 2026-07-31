@@ -257,10 +257,10 @@ function tweetApp() {
             });
             
             this.fetchStats();
+            this.fetchGlobalTags();
             
             this.$watch('showSettingsModal', val => {
                 if (val) {
-                    this.fetchGlobalTags();
                     this.fetchConfig();
                 }
             });

@@ -2965,8 +2965,23 @@ class ArchiveStore:
             LIMIT ?
         """
         pattern = f"%{query}%"
-        rows = self.conn.execute(sql, (pattern, pattern, limit)).fetchall()
-        return [{"id": r["author_id"], "username": r["author_username"], "display_name": r["author_display_name"]} for r in rows]
+        try:
+            rows = self.conn.execute(sql, (pattern, pattern, limit)).fetchall()
+            return [{"id": r["author_id"], "username": r["author_username"], "display_name": r["author_display_name"]} for r in rows]
+        except Exception as e:
+            if "no such column" in str(e).lower() or "author_display_name" in str(e).lower():
+                fallback_sql = """
+                    SELECT DISTINCT author_id, author_username
+                    FROM archive
+                    WHERE record_type = 'tweet' 
+                      AND author_username IS NOT NULL
+                      AND LOWER(author_username) LIKE LOWER(?)
+                    ORDER BY author_username ASC
+                    LIMIT ?
+                """
+                rows = self.conn.execute(fallback_sql, (pattern, limit)).fetchall()
+                return [{"id": r["author_id"], "username": r["author_username"], "display_name": r["author_username"]} for r in rows]
+            raise
 
 
     def search_fts(
