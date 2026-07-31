@@ -462,10 +462,8 @@ function tweetApp() {
         closePanel() {
             this.panelStack = [];
             this.panelMode = null;
-            this.$nextTick(() => {
-                this.panelThreadData = null;
-                this.panelQuotesList = [];
-            });
+            this.panelThreadData = null;
+            this.panelQuotesList = [];
         },
 
         panelGoBack() {
@@ -529,8 +527,8 @@ function tweetApp() {
                 }
                 this.panelMode = 'thread';
                 this.panelLoadingThread = true;
+                this.panelThreadData = null;
                 this.$nextTick(() => {
-                    this.panelThreadData = null;
                     if (this.$refs.detailPanel) this.$refs.detailPanel.scrollTop = 0;
                 });
                 try {
@@ -555,9 +553,7 @@ function tweetApp() {
             }
             this.viewMode = 'thread';
             this.loadingThread = true;
-            this.$nextTick(() => {
-                this.threadData = null;
-            });
+            this.threadData = null;
             window.scrollTo(0, 0);
 
             if (!fromPopState) {
@@ -902,8 +898,9 @@ function tweetApp() {
         },
         
         getInitial(tweet) {
-            if (tweet.author && tweet.author.display_name) return tweet.author.display_name.charAt(0);
-            if (tweet.author && tweet.author.username) return tweet.author.username.charAt(0);
+            if (!tweet || !tweet.author) return '?';
+            if (tweet.author.display_name) return tweet.author.display_name.charAt(0);
+            if (tweet.author.username) return tweet.author.username.charAt(0);
             return '?';
         },
 
@@ -1113,7 +1110,7 @@ function tweetApp() {
         },
 
         getReplyTo(tweet) {
-            if (!tweet.raw_json) return null;
+            if (!tweet || !tweet.raw_json) return null;
             if (tweet.raw_json.legacy && tweet.raw_json.legacy.in_reply_to_screen_name) return tweet.raw_json.legacy.in_reply_to_screen_name;
             if (tweet.raw_json.in_reply_to_screen_name) return tweet.raw_json.in_reply_to_screen_name;
             return null;
@@ -1270,7 +1267,7 @@ function tweetApp() {
         },
 
         getQuoteTweet(tweet) {
-            if (!tweet.raw_json) return null;
+            if (!tweet || !tweet.raw_json) return null;
             const quote = tweet.raw_json.quoted_status_result?.result;
             if (quote?.__typename === 'TweetWithVisibilityResults') {
                 if (quote.birdwatch_pivot && quote.tweet) {
@@ -1334,6 +1331,7 @@ function tweetApp() {
         },
 
         formatText(tweet, forceFull = false) {
+            if (!tweet) return '';
             let text = tweet.text || '';
             const raw = tweet.raw_json;
             

@@ -246,7 +246,7 @@
                                                 <span class="font-bold text-[var(--text-primary)] truncate" x-text="getQuoteAuthor(getQuoteTweet(tweet)).name"></span>
                                                 <span class="text-[var(--text-secondary)] truncate" x-text="'@' + getQuoteAuthor(getQuoteTweet(tweet)).screen_name"></span>
                                                 <span class="text-[var(--text-secondary)]">·</span>
-                                                <span class="text-[var(--text-secondary)]" x-text="formatDate(getQuoteTweet(tweet).legacy?.created_at || getQuoteTweet(tweet).created_at)"></span>
+                                                <span class="text-[var(--text-secondary)]" x-text="formatDate(getQuoteTweet(tweet)?.legacy?.created_at || getQuoteTweet(tweet)?.created_at)"></span>
                                             </div>
                                             
                                             <template x-if="getReplyTo({raw_json: getQuoteTweet(tweet)})">
@@ -357,34 +357,34 @@
                         <div x-html="renderMediaGrid(threadData.main.media)" @click.stop></div>
 
                         <!-- Quote Tweet -->
-                        <template x-if="getQuoteTweet(threadData.main)">
+                        <template x-if="getQuoteTweet(threadData?.main)">
                             <div>
-                                <template x-if="isTombstone(getQuoteTweet(threadData.main))">
-                                    <div class="mt-3 bg-[var(--bg-secondary)] rounded-xl p-4 text-[15px] text-[var(--text-secondary)]" x-text="getQuoteText(getQuoteTweet(threadData.main))"></div>
+                                <template x-if="isTombstone(getQuoteTweet(threadData?.main))">
+                                    <div class="mt-3 bg-[var(--bg-secondary)] rounded-xl p-4 text-[15px] text-[var(--text-secondary)]" x-text="getQuoteText(getQuoteTweet(threadData?.main))"></div>
                                 </template>
-                                <template x-if="!isTombstone(getQuoteTweet(threadData.main))">
-                                    <div class="mt-3 border border-[var(--border-color)] rounded-xl p-3 hover-bg transition cursor-pointer" @click.stop="openThread(getQuoteTweet(threadData.main).rest_id || getQuoteTweet(threadData.main).id_str)">
+                                <template x-if="!isTombstone(getQuoteTweet(threadData?.main))">
+                                    <div class="mt-3 border border-[var(--border-color)] rounded-xl p-3 hover-bg transition cursor-pointer" @click.stop="openThread(getQuoteTweet(threadData?.main).rest_id || getQuoteTweet(threadData?.main).id_str)">
                                         <div class="flex items-center space-x-1 text-[15px] mb-1">
                                             <div class="w-5 h-5 rounded-full flex-shrink-0 relative bg-[var(--gray-700)] flex items-center justify-center font-bold text-[var(--white-icon)] uppercase text-xs overflow-hidden">
-                                                <span x-text="getQuoteAuthor(getQuoteTweet(threadData.main)).initial"></span>
-                                                <img :src="'/api/avatar/' + getQuoteAuthor(getQuoteTweet(threadData.main)).id" @error="$el.style.display='none'" class="absolute inset-0 w-full h-full object-cover z-10" loading="lazy">
+                                                <span x-text="getQuoteAuthor(getQuoteTweet(threadData?.main)).initial"></span>
+                                                <img :src="'/api/avatar/' + getQuoteAuthor(getQuoteTweet(threadData?.main)).id" @error="$el.style.display='none'" class="absolute inset-0 w-full h-full object-cover z-10" loading="lazy">
                                             </div>
-                                            <span class="font-bold text-[var(--text-primary)] truncate" x-text="getQuoteAuthor(getQuoteTweet(threadData.main)).name"></span>
-                                            <span class="text-[var(--text-secondary)] truncate" x-text="'@' + getQuoteAuthor(getQuoteTweet(threadData.main)).screen_name"></span>
+                                            <span class="font-bold text-[var(--text-primary)] truncate" x-text="getQuoteAuthor(getQuoteTweet(threadData?.main)).name"></span>
+                                            <span class="text-[var(--text-secondary)] truncate" x-text="'@' + getQuoteAuthor(getQuoteTweet(threadData?.main)).screen_name"></span>
                                             <span class="text-[var(--text-secondary)]">·</span>
-                                            <span class="text-[var(--text-secondary)]" x-text="formatDate(getQuoteTweet(threadData.main).legacy?.created_at || getQuoteTweet(threadData.main).created_at)"></span>
+                                            <span class="text-[var(--text-secondary)]" x-text="formatDate(getQuoteTweet(threadData?.main)?.legacy?.created_at || getQuoteTweet(threadData?.main)?.created_at)"></span>
                                         </div>
                                         
-                                        <template x-if="getReplyTo({raw_json: getQuoteTweet(threadData.main)})">
+                                        <template x-if="getReplyTo({raw_json: getQuoteTweet(threadData?.main)})">
                                             <div class="text-[15px] text-[var(--text-secondary)] mb-1">
-                                                Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo({raw_json: getQuoteTweet(threadData.main)}))" x-text="'@' + getReplyTo({raw_json: getQuoteTweet(threadData.main)})"></span>
+                                                Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo({raw_json: getQuoteTweet(threadData?.main)}))" x-text="'@' + getReplyTo({raw_json: getQuoteTweet(threadData?.main)})"></span>
                                             </div>
                                         </template>
 
-                                        <div class="text-[15px] whitespace-pre-wrap leading-normal break-words" x-html="formatText({text: getQuoteText(getQuoteTweet(threadData.main)), raw_json: getQuoteTweet(threadData.main)})" @click="handleTextClick($event)"></div>
-                                        <div x-html="renderCard({raw_json: getQuoteTweet(threadData.main)})" @click.stop></div>
-                                        <div x-html="renderMediaGrid(threadData.main.qt_media)" @click.stop></div>
-                                        <div x-html="renderCommunityNote(getQuoteTweet(threadData.main), true)" @click.stop></div>
+                                        <div class="text-[15px] whitespace-pre-wrap leading-normal break-words" x-html="formatText({text: getQuoteText(getQuoteTweet(threadData?.main)), raw_json: getQuoteTweet(threadData?.main)})" @click="handleTextClick($event)"></div>
+                                        <div x-html="renderCard({raw_json: getQuoteTweet(threadData?.main)})" @click.stop></div>
+                                        <div x-html="renderMediaGrid(threadData?.main?.qt_media)" @click.stop></div>
+                                        <div x-html="renderCommunityNote(getQuoteTweet(threadData?.main), true)" @click.stop></div>
                                     </div>
                                 </template>
                             </div>
@@ -436,7 +436,7 @@
                                         </div>
                                     </div>
 
-                                    <template x-if="getReplyTo(child) && getReplyTo(child) !== (threadData.main.author.username)">
+                                    <template x-if="getReplyTo(child) && getReplyTo(child) !== (threadData?.main?.author?.username)">
                                         <div class="text-[15px] text-[#71767b] mb-1">
                                             Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo(child))" x-text="'@' + getReplyTo(child)"></span>
                                         </div>
@@ -660,32 +660,32 @@
                         <div x-html="renderMediaGrid(panelThreadData.main.media)" @click.stop></div>
 
                         <!-- Quote Tweet -->
-                        <template x-if="getQuoteTweet(panelThreadData.main)">
+                        <template x-if="getQuoteTweet(panelThreadData?.main)">
                             <div>
-                                <template x-if="isTombstone(getQuoteTweet(panelThreadData.main))">
-                                    <div class="mt-3 bg-[var(--bg-secondary)] rounded-xl p-4 text-[15px] text-[var(--text-secondary)]" x-text="getQuoteText(getQuoteTweet(panelThreadData.main))"></div>
+                                <template x-if="isTombstone(getQuoteTweet(panelThreadData?.main))">
+                                    <div class="mt-3 bg-[var(--bg-secondary)] rounded-xl p-4 text-[15px] text-[var(--text-secondary)]" x-text="getQuoteText(getQuoteTweet(panelThreadData?.main))"></div>
                                 </template>
-                                <template x-if="!isTombstone(getQuoteTweet(panelThreadData.main))">
-                                    <div class="mt-3 border border-[var(--border-color)] rounded-xl p-3 hover-bg transition cursor-pointer" @click.stop="openThread(getQuoteTweet(panelThreadData.main).rest_id || getQuoteTweet(panelThreadData.main).id_str, false, true)">
+                                <template x-if="!isTombstone(getQuoteTweet(panelThreadData?.main))">
+                                    <div class="mt-3 border border-[var(--border-color)] rounded-xl p-3 hover-bg transition cursor-pointer" @click.stop="openThread(getQuoteTweet(panelThreadData?.main).rest_id || getQuoteTweet(panelThreadData?.main).id_str, false, true)">
                                         <div class="flex items-center space-x-1 text-[15px] mb-1">
                                             <div class="w-5 h-5 rounded-full flex-shrink-0 relative bg-[var(--gray-700)] flex items-center justify-center font-bold text-[var(--white-icon)] uppercase text-xs overflow-hidden">
-                                                <span x-text="getQuoteAuthor(getQuoteTweet(panelThreadData.main)).initial"></span>
-                                                <img :src="'/api/avatar/' + getQuoteAuthor(getQuoteTweet(panelThreadData.main)).id" @error="$el.style.display='none'" class="absolute inset-0 w-full h-full object-cover z-10" loading="lazy">
+                                                <span x-text="getQuoteAuthor(getQuoteTweet(panelThreadData?.main)).initial"></span>
+                                                <img :src="'/api/avatar/' + getQuoteAuthor(getQuoteTweet(panelThreadData?.main)).id" @error="$el.style.display='none'" class="absolute inset-0 w-full h-full object-cover z-10" loading="lazy">
                                             </div>
-                                            <span class="font-bold text-[var(--text-primary)] truncate" x-text="getQuoteAuthor(getQuoteTweet(panelThreadData.main)).name"></span>
-                                            <span class="text-[var(--text-secondary)] truncate" x-text="'@' + getQuoteAuthor(getQuoteTweet(panelThreadData.main)).screen_name"></span>
+                                            <span class="font-bold text-[var(--text-primary)] truncate" x-text="getQuoteAuthor(getQuoteTweet(panelThreadData?.main)).name"></span>
+                                            <span class="text-[var(--text-secondary)] truncate" x-text="'@' + getQuoteAuthor(getQuoteTweet(panelThreadData?.main)).screen_name"></span>
                                             <span class="text-[var(--text-secondary)]">·</span>
-                                            <span class="text-[var(--text-secondary)]" x-text="formatDate(getQuoteTweet(panelThreadData.main).legacy?.created_at || getQuoteTweet(panelThreadData.main).created_at)"></span>
+                                            <span class="text-[var(--text-secondary)]" x-text="formatDate(getQuoteTweet(panelThreadData?.main)?.legacy?.created_at || getQuoteTweet(panelThreadData?.main)?.created_at)"></span>
                                         </div>
-                                        <template x-if="getReplyTo({raw_json: getQuoteTweet(panelThreadData.main)})">
+                                        <template x-if="getReplyTo({raw_json: getQuoteTweet(panelThreadData?.main)})">
                                             <div class="text-[15px] text-[var(--text-secondary)] mb-1">
-                                                Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo({raw_json: getQuoteTweet(panelThreadData.main)}))" x-text="'@' + getReplyTo({raw_json: getQuoteTweet(panelThreadData.main)})"></span>
+                                                Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo({raw_json: getQuoteTweet(panelThreadData?.main)}))" x-text="'@' + getReplyTo({raw_json: getQuoteTweet(panelThreadData?.main)})"></span>
                                             </div>
                                         </template>
-                                        <div class="text-[15px] whitespace-pre-wrap leading-normal break-words" x-html="formatText({text: getQuoteText(getQuoteTweet(panelThreadData.main)), raw_json: getQuoteTweet(panelThreadData.main)})" @click="handleTextClick($event)"></div>
-                                        <div x-html="renderCard({raw_json: getQuoteTweet(panelThreadData.main)})" @click.stop></div>
-                                        <div x-html="renderMediaGrid(panelThreadData.main.qt_media)" @click.stop></div>
-                                        <div x-html="renderCommunityNote(getQuoteTweet(panelThreadData.main), true)" @click.stop></div>
+                                        <div class="text-[15px] whitespace-pre-wrap leading-normal break-words" x-html="formatText({text: getQuoteText(getQuoteTweet(panelThreadData?.main)), raw_json: getQuoteTweet(panelThreadData?.main)})" @click="handleTextClick($event)"></div>
+                                        <div x-html="renderCard({raw_json: getQuoteTweet(panelThreadData?.main)})" @click.stop></div>
+                                        <div x-html="renderMediaGrid(panelThreadData?.main?.qt_media)" @click.stop></div>
+                                        <div x-html="renderCommunityNote(getQuoteTweet(panelThreadData?.main), true)" @click.stop></div>
                                     </div>
                                 </template>
                             </div>
@@ -731,7 +731,7 @@
                                             </div>
                                         </div>
                                     </div>
-                                    <template x-if="getReplyTo(child) && getReplyTo(child) !== (panelThreadData.main.author.username)">
+                                    <template x-if="getReplyTo(child) && getReplyTo(child) !== (panelThreadData?.main?.author?.username)">
                                         <div class="text-[15px] text-[var(--text-secondary)] mb-1">
                                             Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo(child))" x-text="'@' + getReplyTo(child)"></span>
                                         </div>
@@ -1304,13 +1304,13 @@
                             <p class="text-sm text-[var(--text-secondary)] mb-4">Choose a display font.</p>
                             <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
                                 <template x-for="f in [
-                                    {key: 'system', label: 'System Default', family: '-apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif'},
-                                    {key: 'inter', label: 'Inter', family: '\"Inter\", sans-serif'},
-                                    {key: 'roboto', label: 'Roboto', family: '\"Roboto\", sans-serif'},
-                                    {key: 'jakarta', label: 'Plus Jakarta Sans', family: '\"Plus Jakarta Sans\", sans-serif'},
-                                    {key: 'outfit', label: 'Outfit', family: '\"Outfit\", sans-serif'},
-                                    {key: 'nunito', label: 'Nunito', family: '\"Nunito\", sans-serif'},
-                                    {key: 'jetbrains', label: 'JetBrains Mono', family: '\"JetBrains Mono\", monospace'}
+                                    {key: 'system', label: 'System Default', family: '-apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, Helvetica, Arial, sans-serif'},
+                                    {key: 'inter', label: 'Inter', family: '\'Inter\', sans-serif'},
+                                    {key: 'roboto', label: 'Roboto', family: '\'Roboto\', sans-serif'},
+                                    {key: 'jakarta', label: 'Plus Jakarta Sans', family: '\'Plus Jakarta Sans\', sans-serif'},
+                                    {key: 'outfit', label: 'Outfit', family: '\'Outfit\', sans-serif'},
+                                    {key: 'nunito', label: 'Nunito', family: '\'Nunito\', sans-serif'},
+                                    {key: 'jetbrains', label: 'JetBrains Mono', family: '\'JetBrains Mono\', monospace'}
                                 ]" :key="f.key">
                                     <button @click="setFont(f.key, f.family, f.label)"
                                             :class="fontFamily === f.key ? 'border-[var(--accent-color)] bg-[var(--bg-tertiary)]' : 'border-[var(--border-color)] hover:bg-[var(--bg-tertiary)]'"
