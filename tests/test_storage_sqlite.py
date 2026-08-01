@@ -796,6 +796,40 @@ def test_migration_backup_failure_leaves_original_unchanged_and_no_artifacts(
     assert list(tmp_path.glob("*.bak.tmp")) == []
 
 
+def test_enrichment_selector_omits_sql_limit_when_unbounded(paths) -> None:
+    store = open_archive_store(paths, create=True)
+    assert store is not None
+    with store.conn:
+        store.conn.executemany(
+            "INSERT INTO archive (row_key, record_type, tweet_id, enrichment_state) "
+            "VALUES (?, 'tweet_object', ?, 'pending')",
+            [(f"tweet_object:{tweet_id}", str(tweet_id)) for tweet_id in range(1, 5)],
+        )
+    statements: list[str] = []
+    store.conn.set_trace_callback(statements.append)
+
+    unbounded = store.list_tweet_objects_for_enrichment(
+        limit=None,
+        now="2026-01-01T00:00:00+00:00",
+    )
+    limited = store.list_tweet_objects_for_enrichment(
+        limit=2,
+        now="2026-01-01T00:00:00+00:00",
+    )
+
+    store.conn.set_trace_callback(None)
+    selects = [
+        statement
+        for statement in statements
+        if statement.startswith("SELECT") and "enrichment_state" in statement
+    ]
+    assert len(unbounded) == 4
+    assert len(limited) == 2
+    assert "LIMIT" not in selects[0]
+    assert "LIMIT 2" in selects[1]
+    store.close()
+
+
 def test_due_resurrection_query_orders_and_limits_in_sql(paths) -> None:
     store = open_archive_store(paths, create=True)
     assert store is not None

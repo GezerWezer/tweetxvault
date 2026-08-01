@@ -221,6 +221,14 @@ def _extract_raw_tweet_results_from_content(content: dict[str, Any]) -> list[dic
     return [result for result, _entry_id in _extract_raw_tweet_result_entries(content, None)]
 
 
+def _entry_id_targets_tweet(entry_id: str | None, tweet_id: str) -> bool:
+    """Return whether a timeline entry identifies the requested tweet."""
+    if not entry_id:
+        return False
+    direct_entry_id = f"tweet-{tweet_id}"
+    return entry_id == direct_entry_id or entry_id.endswith(f"-{direct_entry_id}")
+
+
 def _extract_tweet_results_from_content(content: dict[str, Any]) -> list[dict[str, Any]]:
     return [
         unwrapped
@@ -339,7 +347,7 @@ def parse_tweet_detail_response(
                 raw_result=result,
             )
             result_id = str(result.get("rest_id") or raw_result.get("rest_id") or "")
-            entry_matches = result_entry_id == f"tweet-{focal_tweet_id}"
+            entry_matches = _entry_id_targets_tweet(result_entry_id, focal_tweet_id)
             if result_id == focal_tweet_id or (not result_id and entry_matches):
                 return FocalTweetDetailResult(
                     kind=FocalResultKind.EXPLICIT_UNAVAILABLE,

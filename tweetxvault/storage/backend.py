@@ -166,6 +166,8 @@ class ArchiveStats:
     collections: list[ArchiveCollectionStats] = field(default_factory=list)
     pending_enrichment_count: int = 0
     transient_enrichment_failure_count: int = 0
+    transient_enrichment_due_count: int = 0
+    transient_enrichment_delayed_count: int = 0
     terminal_enrichment_count: int = 0
     resurrected_enrichment_count: int = 0
     done_enrichment_count: int = 0
@@ -3595,6 +3597,8 @@ class ArchiveStore:
 
         pending_enrichment_count = 0
         transient_enrichment_failure_count = 0
+        transient_enrichment_due_count = 0
+        transient_enrichment_delayed_count = 0
         terminal_enrichment_count = 0
         resurrected_enrichment_count = 0
         done_enrichment_count = 0
@@ -3611,6 +3615,11 @@ class ArchiveStore:
                 pending_enrichment_count += 1
             elif enrichment_state == "transient_failure":
                 transient_enrichment_failure_count += 1
+                next_retry_at = row.get("enrichment_next_retry_at")
+                if not next_retry_at or next_retry_at <= stats_now:
+                    transient_enrichment_due_count += 1
+                else:
+                    transient_enrichment_delayed_count += 1
             elif enrichment_state == "terminal_unavailable":
                 terminal_enrichment_count += 1
                 reason = row.get("enrichment_reason")
@@ -3756,6 +3765,8 @@ class ArchiveStore:
             collections=ordered_collections,
             pending_enrichment_count=pending_enrichment_count,
             transient_enrichment_failure_count=transient_enrichment_failure_count,
+            transient_enrichment_due_count=transient_enrichment_due_count,
+            transient_enrichment_delayed_count=transient_enrichment_delayed_count,
             terminal_enrichment_count=terminal_enrichment_count,
             resurrected_enrichment_count=resurrected_enrichment_count,
             done_enrichment_count=done_enrichment_count,

@@ -1,3 +1,20 @@
+- 2026-08-01 (Nested TweetDetail tombstones and full enrichment snapshots)
+  - Matched focal tombstones from direct `tweet-<id>` entries and boundary-safe nested
+    `*-tweet-<id>` entries while preserving explicit nonmatching `rest_id` precedence, original
+    GraphQL details, reason classification, and the three-absence circuit breaker.
+  - Removed the internal 500-row enrichment page. Bare `import enrich` now selects one stable,
+    command-start snapshot without a SQL limit; explicit `--limit N`, rate pacing, deterministic
+    ordering, 100-write flushes, interruption durability, and the 200-request resurrection budget
+    remain unchanged.
+  - Split transient enrichment status into due and delayed counts, added a clear delayed-only
+    result, and documented full-queue progress/runtime behavior and normal-sync separation.
+  - Added parser, nested-reason, circuit-breaker, 1,200-row unbounded/limited queue, SQL-limit,
+    stable-snapshot, progress, batching, interruption, CLI-help, and status regressions.
+  - Validation passed the full pytest suite, repository-wide Ruff lint, scoped Ruff format for
+    every changed Python file, compileall, `git diff --check`, and all 18 browser-asset tests.
+    No configured archive database was opened or modified; the production transient rows remain
+    untouched and will follow their existing retry schedules.
+
 - 2026-08-01 (Remove sync-stage database delays)
   - Changed current schema-v3 opens to trust the cheap `PRAGMA user_version` result and skip
     quick checks, column/index inspection, FTS setup, timestamp backfills, backups, and legacy

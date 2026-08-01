@@ -463,6 +463,20 @@ def _print_archive_followup(console: Console, result: Any) -> None:
     pending_untouched = getattr(result, "pending_untouched", result.pending_enrichment)
     transient_due = getattr(result, "transient_due", 0)
     transient_delayed = getattr(result, "transient_delayed", 0)
+    selected = getattr(
+        result,
+        "selected",
+        result.detail_lookups
+        + result.detail_terminal_unavailable
+        + result.detail_transient_failures,
+    )
+    if selected == 0 and pending_untouched == 0 and transient_due == 0:
+        console.print("No archive enrichment rows are currently due.", highlight=False)
+        if transient_delayed:
+            console.print(
+                f"{transient_delayed:,} transient failures remain scheduled for later retry.",
+                highlight=False,
+            )
     console.print(
         "detail enrichment: "
         f"{result.detail_lookups} refreshed, "
@@ -1437,7 +1451,7 @@ def import_x_archive_command(
 
 @import_app.command(
     "enrich",
-    help="Continue pending TweetDetail follow-up for an imported archive.",
+    help="Process every archive TweetDetail row eligible when the command starts.",
 )
 def import_archive_enrich(
     limit: Annotated[
@@ -1828,7 +1842,8 @@ def stats_archive() -> None:
             "Archive enrich (TweetDetail)",
             (
                 f"{stats.pending_enrichment_count} pending, "
-                f"{stats.transient_enrichment_failure_count} retryable failures, "
+                f"{getattr(stats, 'transient_enrichment_due_count', 0)} transient due, "
+                f"{getattr(stats, 'transient_enrichment_delayed_count', 0)} transient delayed, "
                 f"{getattr(stats, 'retryable_unavailable_count', stats.terminal_enrichment_count)} "
                 "retryable unavailable, "
                 f"{getattr(stats, 'permanent_unavailable_count', 0)} permanent unavailable, "

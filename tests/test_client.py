@@ -25,6 +25,7 @@ from tweetxvault.client.base import (
 )
 from tweetxvault.client.timelines import (
     FocalResultKind,
+    _entry_id_targets_tweet,
     build_bookmarks_url,
     build_likes_url,
     build_tweet_detail_url,
@@ -196,6 +197,113 @@ def test_parse_tweet_detail_matches_focal_tombstone_by_exact_entry_id() -> None:
     assert focal.is_explicitly_unavailable
     assert focal.unavailable.reason == "suspended_account"
     assert focal.unavailable.raw_result is unavailable
+
+
+@pytest.mark.parametrize(
+    ("entry_id", "expected"),
+    [
+        (None, False),
+        ("tweet-123", True),
+        ("conversationthread-123-tweet-123", True),
+        ("conversationthread-999-tweet-123", True),
+        ("some-other-module-tweet-123", True),
+        ("tweet-1234", False),
+        ("conversationthread-123-tweet-1234", False),
+        ("conversationthread-123-tweet-999", False),
+        ("not-a-tweet-123-extra", False),
+    ],
+)
+def test_entry_id_targets_tweet_uses_exact_suffix_boundaries(
+    entry_id: str | None,
+    expected: bool,
+) -> None:
+    assert _entry_id_targets_tweet(entry_id, "123") is expected
+
+
+@pytest.mark.parametrize(
+    ("entry_id", "message", "expected_reason"),
+    [
+        ("conversationthread-123-tweet-123", "These posts are protected.", "protected_account"),
+        (
+            "conversationthread-999-tweet-123",
+            "This account is suspended.",
+            "suspended_account",
+        ),
+        (
+            "some-other-module-tweet-123",
+            "This account doesn't exist.",
+            "account_missing",
+        ),
+        (
+            "conversationthread-123-tweet-123",
+            "This Post was deleted by the Post author.",
+            "deleted_by_author",
+        ),
+        (
+            "conversationthread-123-tweet-123",
+            "Dieses Posting ist nicht verfügbar.",
+            "unavailable_unknown",
+        ),
+    ],
+)
+def test_parse_tweet_detail_matches_nested_focal_tombstones_and_preserves_details(
+    entry_id: str,
+    message: str,
+    expected_reason: str,
+) -> None:
+    unavailable = {
+        "__typename": "TweetTombstone",
+        "tombstone": {"text": {"text": message}},
+    }
+
+    focal = parse_tweet_detail_response(
+        _detail_payload([_detail_entry(entry_id, unavailable)]),
+        "123",
+    )
+
+    assert focal.kind == FocalResultKind.EXPLICIT_UNAVAILABLE
+    assert focal.unavailable is not None
+    assert focal.unavailable.tweet_id == "123"
+    assert focal.unavailable.typename == "TweetTombstone"
+    assert focal.unavailable.reason == expected_reason
+    assert focal.unavailable.detail == message
+    assert focal.unavailable.raw_result is unavailable
+
+
+@pytest.mark.parametrize(
+    "entry_id",
+    [
+        "conversationthread-123-tweet-999",
+        "conversationthread-1-tweet-1234",
+    ],
+)
+def test_parse_tweet_detail_rejects_unrelated_nested_tombstones(entry_id: str) -> None:
+    unavailable = {
+        "__typename": "TweetTombstone",
+        "tombstone": {"text": {"text": "This account is suspended."}},
+    }
+
+    focal = parse_tweet_detail_response(
+        _detail_payload([_detail_entry(entry_id, unavailable)]),
+        "123",
+    )
+
+    assert focal.kind == FocalResultKind.ABSENT
+
+
+def test_parse_tweet_detail_explicit_nonmatching_id_wins_over_nested_entry_match() -> None:
+    unavailable = {
+        "__typename": "TweetTombstone",
+        "rest_id": "999",
+        "tombstone": {"text": {"text": "This account is suspended."}},
+    }
+
+    focal = parse_tweet_detail_response(
+        _detail_payload([_detail_entry("conversationthread-1-tweet-123", unavailable)]),
+        "123",
+    )
+
+    assert focal.kind == FocalResultKind.ABSENT
 
 
 def test_parse_tweet_detail_prefers_available_focal_over_unrelated_tombstones() -> None:

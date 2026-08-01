@@ -268,10 +268,14 @@ uv run tweetxvault media download
 uv run tweetxvault unfurl
 ```
 
-The bare `import enrich` command processes every currently eligible initial-enrichment row;
-use `--limit N` for a bounded continuation run. The other commands in that follow-up path
-also support `--limit`. `media download` and `unfurl` additionally support
-`--retry-failed` if you want to revisit rows that previously failed.
+The bare `import enrich` command takes one stable snapshot of every initial-enrichment row
+eligible when the command starts, then processes each selected tweet once. Use `--limit N` for
+a bounded continuation run. Its progress total is the complete selected queue, while completed
+writes are still committed every 100 attempts. A large queue can take hours because TweetDetail
+rate-limit pacing remains active. Normal sync never runs this initial-enrichment queue; it only
+runs the separate, bounded resurrection pass. The other commands in that follow-up path also
+support `--limit`. `media download` and `unfurl` additionally support `--retry-failed` if you
+want to revisit rows that previously failed.
 
 ### Importing an X archive
 
@@ -294,11 +298,11 @@ uv run tweetxvault import x-archive ~/Downloads/twitter-archive.zip --regen --sa
 # Continue pending TweetDetail follow-up later without re-reading the archive ZIP
 uv run tweetxvault import enrich
 
-# Or run the follow-up in bounded batches
-uv run tweetxvault import enrich --limit 500
+# Or restrict the selected snapshot explicitly
+uv run tweetxvault import enrich --limit 200
 ```
 
-The importer maps authored tweets, deleted authored tweets, likes, and exported `tweets_media/` files into the same SQLite archive used by live sync. It applies the same archive-owner guardrail as sync, runs bulk live `tweets` / `likes` reconciliation when auth is available, and then drains all currently eligible sparse TweetDetail rows by default. Progress is committed in batches. If enrichment is interrupted, the local archive import remains complete and the command prints `tweetxvault import enrich` as the continuation command.
+The importer maps authored tweets, deleted authored tweets, likes, and exported `tweets_media/` files into the same SQLite archive used by live sync. It applies the same archive-owner guardrail as sync, runs bulk live `tweets` / `likes` reconciliation when auth is available, and then processes the stable snapshot of sparse TweetDetail rows eligible at the start of that phase. Progress is committed in batches. If enrichment is interrupted, the local archive import remains complete and the command prints `tweetxvault import enrich` as the continuation command.
 
 Import follow-up options:
 - Default import runs the TweetDetail pass for **all currently eligible** sparse tweets after bulk live reconciliation.

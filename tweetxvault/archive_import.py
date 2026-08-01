@@ -62,7 +62,6 @@ _MANIFEST_ASSIGNMENT_RE = re.compile(r"^\s*window\.__THAR_CONFIG\s*=\s*", re.DOT
 _AUTHORED_IMPORT_PREFETCH_CHUNK = 50
 _LIKE_IMPORT_PREFETCH_CHUNK = 200
 _DETAIL_ENRICH_WRITE_BATCH = 100
-_DETAIL_ENRICH_PAGE_SIZE = 500
 _T = TypeVar("_T")
 
 
@@ -1015,6 +1014,7 @@ async def _run_archive_followup(
     transport: httpx.AsyncBaseTransport | None,
     console: Console,
     status: Callable[[str], None] | None = None,
+    enrichment_started_at: str | None = None,
 ) -> ArchiveEnrichResult:
     warnings: list[str] = []
     if reconcile_live:
@@ -1039,44 +1039,30 @@ async def _run_archive_followup(
     if resolved_auth is not None:
         try:
             absence_tracker = _FocalAbsenceTracker()
-            page_limit = detail_limit if detail_limit is not None else _DETAIL_ENRICH_PAGE_SIZE
-            while True:
-                page = await _enrich_pending_rows(
-                    limit=page_limit,
-                    config=config,
-                    paths=paths,
-                    auth_bundle=resolved_auth,
-                    transport=transport,
-                    console=console,
-                    status=status,
-                    absence_tracker=absence_tracker,
+            enrichment_result = await _enrich_pending_rows(
+                limit=detail_limit,
+                config=config,
+                paths=paths,
+                auth_bundle=resolved_auth,
+                transport=transport,
+                console=console,
+                status=status,
+                absence_tracker=absence_tracker,
+                started_at=enrichment_started_at,
+            )
+            if isinstance(enrichment_result, tuple):
+                completed, unavailable, transient, remaining = enrichment_result
+                enrichment_result = ArchiveEnrichResult(
+                    detail_lookups=completed,
+                    detail_terminal_unavailable=unavailable,
+                    detail_transient_failures=transient,
+                    pending_enrichment=remaining,
+                    selected=completed + unavailable + transient,
+                    completed=completed,
+                    classified_unavailable=unavailable,
+                    transient_failures=transient,
+                    pending_untouched=remaining,
                 )
-                if isinstance(page, tuple):
-                    completed, unavailable, transient, remaining = page
-                    page = ArchiveEnrichResult(
-                        detail_lookups=completed,
-                        detail_terminal_unavailable=unavailable,
-                        detail_transient_failures=transient,
-                        pending_enrichment=remaining,
-                        selected=completed + unavailable + transient,
-                        completed=completed,
-                        classified_unavailable=unavailable,
-                        transient_failures=transient,
-                        pending_untouched=remaining,
-                    )
-                enrichment_result.selected += page.selected
-                enrichment_result.completed += page.completed
-                enrichment_result.classified_unavailable += page.classified_unavailable
-                enrichment_result.transient_failures += page.transient_failures
-                enrichment_result.detail_lookups += page.detail_lookups
-                enrichment_result.detail_terminal_unavailable += page.detail_terminal_unavailable
-                enrichment_result.detail_transient_failures += page.detail_transient_failures
-                enrichment_result.pending_enrichment = page.pending_enrichment
-                enrichment_result.pending_untouched = page.pending_untouched
-                enrichment_result.transient_due = page.transient_due
-                enrichment_result.transient_delayed = page.transient_delayed
-                if detail_limit is not None or page.selected < page_limit:
-                    break
         except Exception as exc:
             async with locked_archive_job(config=config, paths=paths) as job:
                 remaining = job.store.count_incomplete_initial_enrichment()
@@ -1089,12 +1075,12 @@ async def _run_archive_followup(
     return enrichment_result
 
 
-def _archive_enrich_counts(store: ArchiveStore) -> ArchiveEnrichResult:
+def _archive_enrich_counts(store: ArchiveStore, *, now: str | None = None) -> ArchiveEnrichResult:
     return ArchiveEnrichResult(
         pending_enrichment=store.count_incomplete_initial_enrichment(),
         pending_untouched=store.count_pending_initial_enrichment(),
-        transient_due=store.count_due_transient_enrichment(),
-        transient_delayed=store.count_delayed_transient_enrichment(),
+        transient_due=store.count_due_transient_enrichment(now),
+        transient_delayed=store.count_delayed_transient_enrichment(now),
     )
 
 
@@ -1108,6 +1094,7 @@ async def _enrich_pending_rows(
     console: Console,
     status: Callable[[str], None] | None = None,
     absence_tracker: _FocalAbsenceTracker | None = None,
+    started_at: str | None = None,
 ) -> ArchiveEnrichResult:
     if limit is not None and limit <= 0:
         async with locked_archive_job(config=config, paths=paths, console=console) as job:
@@ -1115,12 +1102,19 @@ async def _enrich_pending_rows(
 
     async with locked_archive_job(config=config, paths=paths, console=console) as job:
         store = job.store
-        selection_limit = _DETAIL_ENRICH_PAGE_SIZE if limit is None else limit
-        rows = store.list_tweet_objects_for_enrichment(limit=selection_limit)
+        selection_started_at = started_at or utc_now()
+        rows = store.list_tweet_objects_for_enrichment(limit=limit, now=selection_started_at)
         desc_type = "eligible sparse tweets"
         if not rows:
-            _emit_status(status, f"no {desc_type} available")
-            return _archive_enrich_counts(store)
+            result = _archive_enrich_counts(store, now=selection_started_at)
+            _emit_status(status, "no archive enrichment rows are currently due")
+            if result.transient_delayed:
+                _emit_status(
+                    status,
+                    f"{result.transient_delayed:,} transient failures remain scheduled "
+                    "for later retry",
+                )
+            return result
         limit_suffix = "" if limit is None else f" (limit {limit})"
         _emit_status(status, f"detail enrichment over {len(rows)} {desc_type}{limit_suffix}")
         query_store = QueryIdStore(paths)
@@ -1506,6 +1500,7 @@ async def enrich_imported_archive(
     console: Console | None = None,
 ) -> ArchiveEnrichResult:
     config, paths = resolve_job_context(config=config, paths=paths)
+    enrichment_started_at = utc_now()
     console = console or Console(stderr=True)
     status = _status_printer(console, "archive enrich")
     runner_console = _runner_console(console)
@@ -1535,6 +1530,7 @@ async def enrich_imported_archive(
             transport=transport,
             console=runner_console,
             status=status,
+            enrichment_started_at=enrichment_started_at,
         )
     except (KeyboardInterrupt, asyncio.CancelledError) as exc:
         async with locked_archive_job(config=config, paths=paths) as job:

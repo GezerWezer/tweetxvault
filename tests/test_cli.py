@@ -173,10 +173,16 @@ def test_import_x_archive_help_describes_sample_limit() -> None:
 
 
 def test_import_enrich_help_has_no_default_limit() -> None:
-    result = runner.invoke(cli.app, ["import", "enrich", "--help"])
+    result = runner.invoke(
+        cli.app,
+        ["import", "enrich", "--help"],
+        env={"COLUMNS": "160"},
+    )
 
     assert result.exit_code == 0
+    assert "eligible when the command starts" in " ".join(result.stdout.split())
     assert "--limit" in result.stdout
+    assert "Omit to process every currently eligible row" in " ".join(result.stdout.split())
     assert "[default: 200]" not in result.stdout
 
 
@@ -1209,6 +1215,32 @@ def test_import_x_archive_interrupt_reports_completed_import_and_continuation(
     assert "tweetxvault import enrich" in output
 
 
+def test_archive_followup_explains_when_only_delayed_transient_rows_remain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    buffer = StringIO()
+    _capture_console(monkeypatch, buffer)
+    console = cli._configure_logging()
+    result = SimpleNamespace(
+        reconciled_collections=[],
+        selected=0,
+        detail_lookups=0,
+        detail_terminal_unavailable=0,
+        detail_transient_failures=0,
+        pending_enrichment=2_827,
+        pending_untouched=0,
+        transient_due=0,
+        transient_delayed=2_827,
+        warnings=[],
+    )
+
+    cli._print_archive_followup(console, result)
+
+    output = buffer.getvalue()
+    assert "No archive enrichment rows are currently due." in output
+    assert "2,827 transient failures remain scheduled for later retry." in output
+
+
 def test_import_x_archive_enrich_reuses_existing_import(paths, monkeypatch, tmp_path: Path) -> None:
     buffer = StringIO()
     _capture_console(monkeypatch, buffer)
@@ -1539,6 +1571,8 @@ def test_stats_archive_renders_summary_tables(paths, monkeypatch) -> None:
                 ],
                 pending_enrichment_count=2,
                 transient_enrichment_failure_count=1,
+                transient_enrichment_due_count=1,
+                transient_enrichment_delayed_count=0,
                 terminal_enrichment_count=3,
                 retryable_unavailable_count=2,
                 permanent_unavailable_count=1,
@@ -1579,7 +1613,7 @@ def test_stats_archive_renders_summary_tables(paths, monkeypatch) -> None:
     assert "Follow-Up" in normalized
     assert "Archive enrich (TweetDetail)" in normalized
     assert (
-        "2 pending, 1 retryable failures, 2 retryable unavailable, "
+        "2 pending, 1 transient due, 0 transient delayed, 2 retryable unavailable, "
         "1 permanent unavailable, 1 resurrected, 4 done"
     ) in normalized
     assert "Tweet resurrection" in normalized

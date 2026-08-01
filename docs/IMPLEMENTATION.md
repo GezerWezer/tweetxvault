@@ -11,6 +11,17 @@ Hard constraints:
 
 Definition of done: passes `uv run ruff format --check`, `uv run ruff check`, and `uv run pytest`.
 
+## Nested tombstone matching and full enrichment snapshots (2026-08-01)
+
+- [x] Match direct and nested `*-tweet-<id>` entry IDs with exact suffix boundaries.
+- [x] Preserve explicit nonmatching `rest_id` precedence and structured tombstone details.
+- [x] Keep the three-response focal-absence breaker and reset it for nested tombstones.
+- [x] Remove the internal 500-row page and select one stable eligible snapshot per command.
+- [x] Preserve explicit limits, deterministic SQL ordering, rate pacing, and 100-write flushes.
+- [x] Split initial-enrichment transient status into due and delayed counts.
+- [x] Update CLI help and README behavior documentation.
+- [x] Pass focused parser/enrichment/status tests and full repository validation.
+
 ## Remove sync-stage database delays (2026-08-01)
 
 - [x] Make current-schema database opens return after the schema-version check.
@@ -54,8 +65,8 @@ Definition of done: passes `uv run ruff format --check`, `uv run ruff check`, an
   ambiguous focal absences without converting those rows into confirmed tombstones.
 - [x] Preserve stronger unavailable reasons and keep same-author probes/boosts due across
   resurrection budget boundaries.
-- [x] Apply ordering, exclusion, and limits in SQL and drain uncapped enrichment in bounded
-  pages.
+- [x] Apply ordering, exclusion, and optional limits in SQL and process uncapped enrichment from
+  one stable eligible snapshot.
 - [x] Advance SQLite to schema v3 with a validated atomic backup, sequential migration stages,
   unknown-reason preservation, scheduler normalization, ranked repair, and surfaced reporting.
 - [x] Add `repair legacy-tombstones` with dry-run, limit, and optional timeline-capture scanning.

@@ -357,12 +357,25 @@ def test_archive_stats_reports_followup_work(paths) -> None:
         enrichment_http_status=None,
         enrichment_reason=None,
     )
+    store._merge_records(
+        [
+            store._record(
+                row_key="tweet_object:500",
+                record_type="tweet_object",
+                tweet_id="500",
+                enrichment_state="transient_failure",
+                enrichment_next_retry_at="9999-12-31T23:59:59+00:00",
+            )
+        ]
+    )
     store._delete("row_key = 'tweet_object:300'")
 
     stats = store.archive_stats()
 
     assert stats.pending_enrichment_count == 1
-    assert stats.transient_enrichment_failure_count == 1
+    assert stats.transient_enrichment_failure_count == 2
+    assert stats.transient_enrichment_due_count == 1
+    assert stats.transient_enrichment_delayed_count == 1
     assert stats.terminal_enrichment_count == 0
     assert stats.done_enrichment_count == 1
     assert stats.missing_tweet_object_count == 1
