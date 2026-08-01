@@ -8,7 +8,7 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -86,6 +86,31 @@ class _PageBuffer:
     pending_tweets: dict[str, TimelineTweet] = field(default_factory=dict)
     existing_rows: dict[str, dict[str, Any] | None] = field(default_factory=dict)
 
+    def checkpoint(
+        self,
+    ) -> tuple[
+        dict[str, dict[str, Any]],
+        dict[str, TimelineTweet],
+        dict[str, dict[str, Any] | None],
+    ]:
+        return self.records.copy(), self.pending_tweets.copy(), self.existing_rows.copy()
+
+    def restore(
+        self,
+        checkpoint: tuple[
+            dict[str, dict[str, Any]],
+            dict[str, TimelineTweet],
+            dict[str, dict[str, Any] | None],
+        ],
+    ) -> None:
+        records, pending_tweets, existing_rows = checkpoint
+        self.records.clear()
+        self.records.update(records)
+        self.pending_tweets.clear()
+        self.pending_tweets.update(pending_tweets)
+        self.existing_rows.clear()
+        self.existing_rows.update(existing_rows)
+
 
 @dataclass(slots=True)
 class _RecordContext:
@@ -99,6 +124,18 @@ class _RecordContext:
 class RehydrateResult:
     tweets_updated: int = 0
     secondary_records: int = 0
+
+
+@dataclass(slots=True)
+class MigrationReport:
+    from_version: int
+    to_version: int
+    backup_path: Path
+    legacy_terminal_rows_scanned: int = 0
+    content_rows_repaired: int = 0
+    author_rows_repaired: int = 0
+    rows_still_missing_author: int = 0
+    rows_without_richer_source: int = 0
 
 
 @dataclass(slots=True)
@@ -132,6 +169,9 @@ class ArchiveStats:
     terminal_enrichment_count: int = 0
     resurrected_enrichment_count: int = 0
     done_enrichment_count: int = 0
+    retryable_unavailable_count: int = 0
+    permanent_unavailable_count: int = 0
+    due_resurrection_count: int = 0
     preview_article_count: int = 0
     missing_tweet_object_count: int = 0
     expanded_thread_target_count: int = 0
@@ -166,6 +206,11 @@ ARCHIVE_COLUMNS = [
     "enrichment_checked_at",
     "enrichment_http_status",
     "enrichment_reason",
+    "enrichment_detail",
+    "enrichment_retry_count",
+    "enrichment_next_retry_at",
+    "enrichment_first_unavailable_at",
+    "enrichment_retry_eligible",
     "raw_json",
     "first_seen_at",
     "last_seen_at",
@@ -217,6 +262,8 @@ ARCHIVE_COLUMNS = [
     "import_completed_at",
     "warnings_json",
     "counts_json",
+    "enrichment_followup_status",
+    "enrichment_aborted_reason",
     "last_head_tweet_id",
     "backfill_cursor",
     "backfill_incomplete",
@@ -225,13 +272,46 @@ ARCHIVE_COLUMNS = [
     "value",
 ]
 
+SCHEMA_VERSION = 3
+COLUMN_TYPES = {
+    field: (
+        "TEXT PRIMARY KEY"
+        if field == "row_key"
+        else "INTEGER"
+        if field
+        in {
+            "created_at_ts",
+            "enrichment_retry_count",
+            "enrichment_retry_eligible",
+        }
+        else "TEXT"
+    )
+    for field in ARCHIVE_COLUMNS
+}
+ENRICHMENT_INDEXES = {
+    "idx_archive_enrichment_due": (
+        "record_type, enrichment_state, enrichment_retry_eligible, enrichment_next_retry_at"
+    ),
+    "idx_archive_dead_author": (
+        "record_type, enrichment_state, author_id, enrichment_retry_eligible, "
+        "enrichment_next_retry_at"
+    ),
+    "idx_archive_resurrection_reason_due": (
+        "record_type, enrichment_state, enrichment_retry_eligible, enrichment_reason, "
+        "enrichment_next_retry_at"
+    ),
+    "idx_archive_capture_target": "record_type, cursor_in, captured_at DESC",
+}
+
 SECONDARY_RECORD_TYPES = ("tweet_object", "tweet_relation", "media", "url", "url_ref", "article")
 LIVE_SOURCE = "live_graphql"
 ARCHIVE_SOURCE = "x_archive"
+AVAILABLE_ENRICHMENT_STATES = ("done", "resurrected")
 SEARCH_KIND_POST = "post"
 SEARCH_KIND_ARTICLE = "article"
 SEARCH_COLLECTION_ORDER = ("bookmark", "like", "tweet")
 SEARCH_TEXT_FIELD = "text"
+_UNSET = object()
 
 
 class ArchiveStore:
@@ -239,6 +319,7 @@ class ArchiveStore:
 
     def __init__(self, db_path: Path, *, create: bool, config: AppConfig | None = None) -> None:
         self.db_path = db_path
+        self.migration_report: MigrationReport | None = None
         if create:
             db_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -258,143 +339,596 @@ class ArchiveStore:
         self.conn.execute(f"PRAGMA cache_size = -{cache_size_kb}")  # Negative for kibibytes
         self.conn.execute(f"PRAGMA mmap_size = {mmap_size_bytes}")
 
-        if create:
-            self._migrate_schema()
+        if create or db_path.exists():
+            try:
+                self._migrate_schema()
+            except BaseException:
+                self.conn.close()
+                raise
 
     def _migrate_schema(self) -> None:
-        cols = []
-        for f in ARCHIVE_COLUMNS:
-            ctype = "TEXT"
-            if f == "row_key":
-                ctype = "TEXT PRIMARY KEY"
-            elif f == "created_at_ts":
-                ctype = "INTEGER"
-            cols.append(f"{f} {ctype}")
+        table_existed = self._archive_table_exists()
+        current_version = self._get_schema_version()
+        if current_version > SCHEMA_VERSION:
+            raise RuntimeError(
+                f"Archive schema version {current_version} is newer than this build supports "
+                f"({SCHEMA_VERSION})."
+            )
+        missing_columns = set(ARCHIVE_COLUMNS) - self._archive_column_names()
+        requires_migration = table_existed and (
+            current_version < SCHEMA_VERSION or bool(missing_columns)
+        )
+        col_def = ", ".join(f"{name} {COLUMN_TYPES[name]}" for name in ARCHIVE_COLUMNS)
+        if not table_existed:
+            with self.conn:
+                self.conn.execute(f"CREATE TABLE archive ({col_def})")
+                self._backfill_created_at_timestamps()
+                self._create_fts_schema()
+                self._create_archive_indexes()
+                self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            self._require_quick_check("after schema creation")
+            return
 
-        col_def = ", ".join(cols)
-        with self.conn:
-            self.conn.execute(f"CREATE TABLE IF NOT EXISTS archive ({col_def})")
-            had_fts = (
-                self.conn.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'archive_fts'"
-                ).fetchone()
-                is not None
+        if not requires_migration:
+            with self.conn:
+                self._backfill_created_at_timestamps()
+                self._create_fts_schema()
+                self._create_archive_indexes()
+            self._require_quick_check("after schema check")
+            return
+
+        self._require_quick_check("before migration")
+        before_counts = self._row_counts_by_type()
+        sample_keys = [
+            row[0]
+            for row in self.conn.execute(
+                "SELECT row_key FROM archive ORDER BY row_key LIMIT 5"
+            ).fetchall()
+        ]
+        backup_path = self._backup_before_migration(SCHEMA_VERSION)
+
+        version = current_version
+        if version < 1 or missing_columns:
+            with self.conn:
+                self._migrate_to_v1()
+                if version < 1:
+                    self.conn.execute("PRAGMA user_version = 1")
+                    version = 1
+        if version < 2:
+            with self.conn:
+                self._migrate_to_v2_enrichment_scheduler()
+                self.conn.execute("PRAGMA user_version = 2")
+            version = 2
+        if version < 3 or missing_columns:
+            with self.conn:
+                repair_counts = self._migrate_to_v3_resurrection_repairs()
+                self._validate_migration(before_counts, sample_keys)
+                self.conn.execute("PRAGMA user_version = 3")
+            self.migration_report = MigrationReport(
+                from_version=current_version,
+                to_version=SCHEMA_VERSION,
+                backup_path=backup_path,
+                **repair_counts,
             )
 
-            # Migrate created_at_ts backfill
-            try:
-                self.conn.execute("ALTER TABLE archive ADD COLUMN created_at_ts INTEGER")
-                print("Backfilling created_at_ts... this may take a few minutes on large archives.")
-                rows = self.conn.execute(
-                    "SELECT row_key, created_at FROM archive "
-                    "WHERE created_at IS NOT NULL AND created_at_ts IS NULL"
-                ).fetchall()
-                if rows:
-                    updates = []
-                    for r in rows:
-                        dt = _parse_created_at(r[1])
-                        if dt:
-                            updates.append((int(dt.timestamp()), r[0]))
-                    if updates:
-                        self.conn.executemany(
-                            "UPDATE archive SET created_at_ts = ? WHERE row_key = ?", updates
-                        )
-            except sqlite3.OperationalError:
-                pass  # Column already exists
+        self._require_quick_check("after migration")
 
-            # Backfill any remaining NULL created_at_ts rows
-            remaining = self.conn.execute(
-                "SELECT row_key, created_at FROM archive "
-                "WHERE created_at IS NOT NULL AND created_at_ts IS NULL"
+    def _migrate_to_v1(self) -> None:
+        self._add_missing_archive_columns()
+        self._backfill_created_at_timestamps()
+        self._create_fts_schema()
+        self._create_archive_indexes()
+
+    def _migrate_to_v2_enrichment_scheduler(self) -> None:
+        self._add_missing_archive_columns()
+        self._backfill_enrichment_scheduler()
+        self._create_archive_indexes()
+
+    def _migrate_to_v3_resurrection_repairs(self) -> dict[str, int]:
+        self._add_missing_archive_columns()
+        self._backfill_enrichment_scheduler()
+        self._clear_available_enrichment_scheduler()
+        self._create_archive_indexes()
+        return self._repair_legacy_terminal_rows()
+
+    def _archive_table_exists(self) -> bool:
+        return (
+            self.conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'archive'"
+            ).fetchone()
+            is not None
+        )
+
+    def _get_schema_version(self) -> int:
+        return int(self.conn.execute("PRAGMA user_version").fetchone()[0])
+
+    def _archive_column_names(self) -> set[str]:
+        if not self._archive_table_exists():
+            return set()
+        return {row[1] for row in self.conn.execute("PRAGMA table_info(archive)").fetchall()}
+
+    def _add_missing_archive_columns(self) -> None:
+        existing = self._archive_column_names()
+        for column in ARCHIVE_COLUMNS:
+            if column in existing:
+                continue
+            column_type = COLUMN_TYPES.get(column)
+            if column_type is None:
+                raise ValueError(f"Unknown archive column: {column}")
+            if column == "row_key":
+                raise RuntimeError("Existing archive table is missing its row_key primary key.")
+            self.conn.execute(f"ALTER TABLE archive ADD COLUMN {column} {column_type}")
+
+    def _require_quick_check(self, stage: str) -> None:
+        result = self.conn.execute("PRAGMA quick_check").fetchone()[0]
+        if result != "ok":
+            raise RuntimeError(f"SQLite quick_check failed {stage}: {result}")
+
+    def _row_counts_by_type(self) -> dict[str | None, int]:
+        return {
+            row[0]: int(row[1])
+            for row in self.conn.execute(
+                "SELECT record_type, COUNT(*) FROM archive GROUP BY record_type"
             ).fetchall()
-            if remaining:
-                print(f"Backfilling {len(remaining)} rows with missing created_at_ts...")
-                updates = []
-                for r in remaining:
-                    dt = _parse_created_at(r[1])
-                    if dt:
-                        updates.append((int(dt.timestamp()), r[0]))
-                if updates:
-                    self.conn.executemany(
-                        "UPDATE archive SET created_at_ts = ? WHERE row_key = ?", updates
+        }
+
+    def _backup_before_migration(self, target_version: int) -> Path:
+        timestamp = datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%SZ")
+        backup_path = self.db_path.with_name(
+            f"{self.db_path.name}.pre-schema-v{target_version}.{timestamp}.bak"
+        )
+        suffix = 1
+        temporary_path = backup_path.with_suffix(f"{backup_path.suffix}.tmp")
+        while backup_path.exists() or temporary_path.exists():
+            backup_path = self.db_path.with_name(
+                f"{self.db_path.name}.pre-schema-v{target_version}.{timestamp}.{suffix}.bak"
+            )
+            temporary_path = backup_path.with_suffix(f"{backup_path.suffix}.tmp")
+            suffix += 1
+        destination: sqlite3.Connection | None = None
+        try:
+            destination = sqlite3.connect(temporary_path)
+            self.conn.backup(destination)
+            destination.close()
+            destination = None
+            validation = sqlite3.connect(temporary_path)
+            try:
+                check = validation.execute("PRAGMA quick_check").fetchone()[0]
+            finally:
+                validation.close()
+            if check != "ok":
+                raise RuntimeError(f"SQLite backup quick_check failed: {check}")
+            temporary_path.replace(backup_path)
+        except Exception as exc:
+            if temporary_path.exists():
+                temporary_path.unlink()
+            raise RuntimeError(
+                f"Failed to create validated pre-migration backup at {backup_path}."
+            ) from exc
+        finally:
+            if destination is not None:
+                try:
+                    destination.close()
+                except sqlite3.Error:
+                    pass
+        return backup_path
+
+    def _backfill_created_at_timestamps(self) -> None:
+        remaining = self.conn.execute(
+            "SELECT row_key, created_at FROM archive "
+            "WHERE created_at IS NOT NULL AND created_at_ts IS NULL"
+        ).fetchall()
+        updates = []
+        for row in remaining:
+            created_at = _parse_created_at(row[1])
+            if created_at is not None:
+                updates.append((int(created_at.timestamp()), row[0]))
+        if updates:
+            self.conn.executemany("UPDATE archive SET created_at_ts = ? WHERE row_key = ?", updates)
+
+    def _create_fts_schema(self) -> None:
+        had_fts = (
+            self.conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'archive_fts'"
+            ).fetchone()
+            is not None
+        )
+        self.conn.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS archive_fts USING fts5(
+                author_username, author_display_name, text, note_tweet_text,
+                content='archive', content_rowid='rowid'
+            )
+        """)
+        self.conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS archive_ad AFTER DELETE ON archive BEGIN
+          INSERT INTO archive_fts(
+            archive_fts, rowid, author_username, author_display_name, text, note_tweet_text
+          ) VALUES(
+            'delete', old.rowid, old.author_username, old.author_display_name,
+            old.text, old.note_tweet_text
+          );
+        END;
+        """)
+        self.conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS archive_ai AFTER INSERT ON archive BEGIN
+          INSERT INTO archive_fts(
+            rowid, author_username, author_display_name, text, note_tweet_text
+          ) VALUES(
+            new.rowid, new.author_username, new.author_display_name,
+            new.text, new.note_tweet_text
+          );
+        END;
+        """)
+        self.conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS archive_au AFTER UPDATE ON archive BEGIN
+          INSERT INTO archive_fts(
+            archive_fts, rowid, author_username, author_display_name, text, note_tweet_text
+          ) VALUES(
+            'delete', old.rowid, old.author_username, old.author_display_name,
+            old.text, old.note_tweet_text
+          );
+          INSERT INTO archive_fts(
+            rowid, author_username, author_display_name, text, note_tweet_text
+          ) VALUES(
+            new.rowid, new.author_username, new.author_display_name,
+            new.text, new.note_tweet_text
+          );
+        END;
+        """)
+        if not had_fts:
+            self.conn.execute("INSERT INTO archive_fts(archive_fts) VALUES('rebuild')")
+
+    def _create_archive_indexes(self) -> None:
+        index_sql = {
+            "idx_archive_tweet_id": "tweet_id",
+            "idx_archive_target_tweet_id": "target_tweet_id",
+            "idx_archive_sort": (
+                "collection_type, created_at_ts DESC, CAST(sort_index AS INTEGER) DESC"
+            ),
+            "idx_archive_record_sort": (
+                "record_type, collection_type, created_at_ts DESC, tweet_id DESC"
+            ),
+            "idx_archive_record_page": (
+                "record_type, created_at_ts DESC, CAST(sort_index AS INTEGER) DESC, tweet_id DESC"
+            ),
+            "idx_archive_record_collection_page": (
+                "record_type, collection_type, created_at_ts DESC, "
+                "CAST(sort_index AS INTEGER) DESC, tweet_id DESC"
+            ),
+            **ENRICHMENT_INDEXES,
+        }
+        for name, columns in index_sql.items():
+            self.conn.execute(f"CREATE INDEX IF NOT EXISTS {name} ON archive({columns})")
+
+    def _backfill_enrichment_scheduler(self) -> None:
+        now = utc_now()
+        self._preserve_unknown_enrichment_reasons()
+        self.conn.execute(
+            "UPDATE archive SET enrichment_reason = 'archive_deleted', "
+            "enrichment_retry_eligible = 0, enrichment_next_retry_at = NULL, "
+            "enrichment_retry_count = COALESCE(enrichment_retry_count, 0), "
+            "enrichment_first_unavailable_at = COALESCE("
+            "enrichment_first_unavailable_at, enrichment_checked_at, ?) "
+            "WHERE record_type = 'tweet_object' AND enrichment_state = 'terminal_unavailable' "
+            "AND deleted_at IS NOT NULL",
+            (now,),
+        )
+        self.conn.execute(
+            "UPDATE archive SET enrichment_reason = 'archive_deleted', "
+            "enrichment_retry_eligible = 0, enrichment_next_retry_at = NULL, "
+            "enrichment_retry_count = COALESCE(enrichment_retry_count, 0), "
+            "enrichment_first_unavailable_at = COALESCE("
+            "enrichment_first_unavailable_at, enrichment_checked_at, ?) "
+            "WHERE record_type = 'tweet_object' AND enrichment_state = 'terminal_unavailable' "
+            "AND source = ? AND LOWER(COALESCE(enrichment_reason, '')) = 'deleted'",
+            (now, ARCHIVE_SOURCE),
+        )
+        self.conn.execute(
+            "UPDATE archive SET enrichment_reason = 'deleted_by_author', "
+            "enrichment_retry_eligible = 0, enrichment_next_retry_at = NULL, "
+            "enrichment_retry_count = COALESCE(enrichment_retry_count, 0), "
+            "enrichment_first_unavailable_at = COALESCE("
+            "enrichment_first_unavailable_at, enrichment_checked_at, ?) "
+            "WHERE record_type = 'tweet_object' AND enrichment_state = 'terminal_unavailable' "
+            "AND LOWER(COALESCE(enrichment_reason, '')) IN "
+            "('deleted_by_author', 'deleted by author')",
+            (now,),
+        )
+        permanent = "('archive_deleted', 'deleted_by_author')"
+        normalized = (
+            "('archive_deleted', 'deleted_by_author', 'protected_account', "
+            "'suspended_account', 'account_missing', 'withheld', 'not_found', "
+            "'unavailable_unknown')"
+        )
+        self.conn.execute(
+            "UPDATE archive SET "
+            f"enrichment_reason = CASE WHEN enrichment_reason IN {normalized} "
+            "THEN enrichment_reason ELSE 'unavailable_unknown' END, "
+            "enrichment_retry_count = COALESCE(enrichment_retry_count, 0), "
+            "enrichment_first_unavailable_at = COALESCE("
+            "enrichment_first_unavailable_at, enrichment_checked_at, ?), "
+            f"enrichment_retry_eligible = CASE WHEN enrichment_reason IN {permanent} "
+            "THEN 0 ELSE 1 END, "
+            f"enrichment_next_retry_at = CASE WHEN enrichment_reason IN {permanent} "
+            "THEN NULL ELSE COALESCE(enrichment_next_retry_at, enrichment_checked_at, ?) END "
+            "WHERE record_type = 'tweet_object' AND enrichment_state = 'terminal_unavailable'",
+            (now, now),
+        )
+        self.conn.execute(
+            "UPDATE archive SET enrichment_retry_count = COALESCE(enrichment_retry_count, 0), "
+            "enrichment_next_retry_at = COALESCE(enrichment_next_retry_at, ?) "
+            "WHERE record_type = 'tweet_object' AND enrichment_state = 'transient_failure'",
+            (now,),
+        )
+
+    def _preserve_unknown_enrichment_reasons(self) -> None:
+        normalized = {
+            "archive_deleted",
+            "deleted",
+            "deleted by author",
+            "deleted_by_author",
+            "protected_account",
+            "suspended_account",
+            "account_missing",
+            "withheld",
+            "not_found",
+            "unavailable_unknown",
+        }
+        rows = self.conn.execute(
+            "SELECT row_key, enrichment_reason, enrichment_detail FROM archive "
+            "WHERE record_type = 'tweet_object' "
+            "AND enrichment_state = 'terminal_unavailable' "
+            "AND enrichment_reason IS NOT NULL AND enrichment_reason != ''"
+        ).fetchall()
+        updates: list[tuple[str, str]] = []
+        for row_key, reason, detail in rows:
+            if str(reason).casefold() in normalized:
+                continue
+            diagnostic = f"Legacy enrichment reason: {reason}"
+            preserved_detail = str(detail) if detail else ""
+            if diagnostic not in preserved_detail:
+                preserved_detail = (
+                    f"{preserved_detail}\n{diagnostic}" if preserved_detail else diagnostic
+                )
+            updates.append((preserved_detail, row_key))
+        if updates:
+            self.conn.executemany(
+                "UPDATE archive SET enrichment_detail = ? WHERE row_key = ?",
+                updates,
+            )
+
+    def _clear_available_enrichment_scheduler(self) -> None:
+        available_states = ", ".join(_expr_quote(state) for state in AVAILABLE_ENRICHMENT_STATES)
+        self.conn.execute(
+            "UPDATE archive SET enrichment_reason = NULL, enrichment_detail = NULL, "
+            "enrichment_retry_count = 0, enrichment_next_retry_at = NULL, "
+            "enrichment_first_unavailable_at = NULL, enrichment_retry_eligible = 0 "
+            "WHERE record_type = 'tweet_object' "
+            f"AND enrichment_state IN ({available_states})"
+        )
+
+    def _legacy_recovery_quality(self, values: tuple[Any, ...]) -> tuple[int, int]:
+        text, author_id, username, display_name, created_at = values[:5]
+        conversation_id, lang, note_text, raw_json, source = (
+            values[6],
+            values[7],
+            values[8],
+            values[9],
+            values[10],
+        )
+        content_score = sum(
+            (
+                50 if author_id else 0,
+                20 if text else 0,
+                8 if username else 0,
+                5 if display_name else 0,
+                4 if created_at else 0,
+                3 if conversation_id else 0,
+                2 if lang else 0,
+                6 if note_text else 0,
+                10 if raw_json and "__tombstone__" not in str(raw_json) else 0,
+            )
+        )
+        return content_score, 1 if source == LIVE_SOURCE else 0
+
+    def _tweet_recovery_values(
+        self,
+        tweet: TimelineTweet,
+        *,
+        source: str,
+    ) -> tuple[Any, ...]:
+        legacy = tweet.raw_json.get("legacy") or {}
+        created_at = _parse_created_at(tweet.created_at)
+        return (
+            tweet.text,
+            tweet.author_id,
+            tweet.author_username,
+            tweet.author_display_name,
+            tweet.created_at,
+            int(created_at.timestamp()) if created_at else None,
+            legacy.get("conversation_id_str"),
+            legacy.get("lang"),
+            extract_note_tweet_text(tweet.raw_json),
+            self._json_value(tweet.raw_json),
+            source,
+        )
+
+    def _repair_legacy_terminal_rows(
+        self,
+        *,
+        limit: int | None = None,
+        scan_timeline_captures: bool = False,
+        dry_run: bool = False,
+    ) -> dict[str, int]:
+        query = (
+            "SELECT row_key, tweet_id FROM archive "
+            "WHERE record_type = 'tweet_object' AND enrichment_state = 'terminal_unavailable' "
+            "AND COALESCE(text, '') = '' AND author_id IS NULL "
+            "AND raw_json LIKE '%__tombstone__%' ORDER BY tweet_id"
+        )
+        params: tuple[int, ...] = ()
+        if limit is not None:
+            query += " LIMIT ?"
+            params = (limit,)
+        suspicious = self.conn.execute(query, params).fetchall()
+        target_ids = {str(row[1]) for row in suspicious}
+        deep_candidates: dict[str, list[tuple[Any, ...]]] = {}
+        if scan_timeline_captures and target_ids:
+            timeline_captures = self.conn.execute(
+                "SELECT raw_json, source FROM archive WHERE record_type = 'raw_capture' "
+                "AND operation IN ('Bookmarks', 'Likes', 'UserTweets') "
+                "AND raw_json IS NOT NULL ORDER BY captured_at DESC"
+            ).fetchall()
+            for raw_json, source in timeline_captures:
+                try:
+                    payload = json.loads(raw_json)
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                for tweet in parse_tweet_detail_tweets(payload):
+                    if tweet.tweet_id not in target_ids:
+                        continue
+                    deep_candidates.setdefault(tweet.tweet_id, []).append(
+                        self._tweet_recovery_values(
+                            tweet,
+                            source=str(source or LIVE_SOURCE),
+                        )
                     )
 
-            # Build FTS after column backfills so a legacy database cannot fire
-            # external-content delete triggers against an index that has no rows yet.
-            self.conn.execute("""
-                CREATE VIRTUAL TABLE IF NOT EXISTS archive_fts USING fts5(
-                    author_username, author_display_name, text, note_tweet_text,
-                    content='archive', content_rowid='rowid'
-                )
-            """)
-            self.conn.execute("""
-            CREATE TRIGGER IF NOT EXISTS archive_ad AFTER DELETE ON archive BEGIN
-              INSERT INTO archive_fts(
-                archive_fts, rowid, author_username, author_display_name, text, note_tweet_text
-              )
-              VALUES(
-                'delete', old.rowid, old.author_username, old.author_display_name,
-                old.text, old.note_tweet_text
-              );
-            END;
-            """)
-            self.conn.execute("""
-            CREATE TRIGGER IF NOT EXISTS archive_ai AFTER INSERT ON archive BEGIN
-              INSERT INTO archive_fts(
-                rowid, author_username, author_display_name, text, note_tweet_text
-              )
-              VALUES(
-                new.rowid, new.author_username, new.author_display_name,
-                new.text, new.note_tweet_text
-              );
-            END;
-            """)
-            self.conn.execute("""
-            CREATE TRIGGER IF NOT EXISTS archive_au AFTER UPDATE ON archive BEGIN
-              INSERT INTO archive_fts(
-                archive_fts, rowid, author_username, author_display_name, text, note_tweet_text
-              )
-              VALUES(
-                'delete', old.rowid, old.author_username, old.author_display_name,
-                old.text, old.note_tweet_text
-              );
-              INSERT INTO archive_fts(
-                rowid, author_username, author_display_name, text, note_tweet_text
-              )
-              VALUES(
-                new.rowid, new.author_username, new.author_display_name,
-                new.text, new.note_tweet_text
-              );
-            END;
-            """)
-            if not had_fts:
-                self.conn.execute("INSERT INTO archive_fts(archive_fts) VALUES('rebuild')")
+        recovered_rows = 0
+        content_repaired = 0
+        authors_repaired = 0
+        for row_key, tweet_id in suspicious:
+            memberships = self.conn.execute(
+                "SELECT text, author_id, author_username, author_display_name, created_at, "
+                "created_at_ts, conversation_id, lang, note_tweet_text, raw_json, source "
+                "FROM archive WHERE record_type = 'tweet' AND tweet_id = ? ",
+                (tweet_id,),
+            ).fetchall()
+            membership_values = [tuple(candidate) for candidate in memberships]
 
-            self.conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_archive_tweet_id ON archive(tweet_id)"
+            capture_values: list[tuple[Any, ...]] = []
+            captures = self.conn.execute(
+                "SELECT raw_json, source FROM archive WHERE record_type = 'raw_capture' "
+                "AND cursor_in = ? AND raw_json IS NOT NULL ORDER BY captured_at DESC",
+                (tweet_id,),
+            ).fetchall()
+            for capture in captures:
+                try:
+                    payload = json.loads(capture[0])
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                detail = next(
+                    (
+                        tweet
+                        for tweet in parse_tweet_detail_tweets(payload)
+                        if tweet.tweet_id == tweet_id
+                    ),
+                    None,
+                )
+                if detail is None:
+                    continue
+                capture_values.append(
+                    self._tweet_recovery_values(
+                        detail,
+                        source=str(capture[1] or LIVE_SOURCE),
+                    )
+                )
+
+            candidates = membership_values + capture_values + deep_candidates.get(str(tweet_id), [])
+            if not candidates:
+                continue
+            values = max(candidates, key=self._legacy_recovery_quality)
+            meaningful = bool(values[0] or values[1] or any(values[2:9]))
+            if not meaningful:
+                continue
+            if not dry_run:
+                self.conn.execute(
+                    "UPDATE archive SET text = COALESCE(?, text), "
+                    "author_id = COALESCE(?, author_id), "
+                    "author_username = COALESCE(?, author_username), "
+                    "author_display_name = COALESCE(?, author_display_name), "
+                    "created_at = COALESCE(?, created_at), "
+                    "created_at_ts = COALESCE(?, created_at_ts), "
+                    "conversation_id = COALESCE(?, conversation_id), "
+                    "lang = COALESCE(?, lang), "
+                    "note_tweet_text = COALESCE(?, note_tweet_text), "
+                    "raw_json = COALESCE(?, raw_json) "
+                    "WHERE row_key = ?",
+                    (*values[:10], row_key),
+                )
+            recovered_rows += 1
+            if values[0] or any(values[2:9]):
+                content_repaired += 1
+            if values[1]:
+                authors_repaired += 1
+
+        if dry_run:
+            current_missing = self.conn.execute(
+                "SELECT COUNT(*) FROM archive "
+                "WHERE record_type = 'tweet_object' "
+                "AND enrichment_state = 'terminal_unavailable' "
+                "AND author_id IS NULL AND raw_json LIKE '%__tombstone__%'"
+            ).fetchone()[0]
+            still_lacking_author = max(int(current_missing) - authors_repaired, 0)
+        else:
+            still_lacking_author = self.conn.execute(
+                "SELECT COUNT(*) FROM archive "
+                "WHERE record_type = 'tweet_object' "
+                "AND enrichment_state = 'terminal_unavailable' "
+                "AND author_id IS NULL AND raw_json LIKE '%__tombstone__%'"
+            ).fetchone()[0]
+        return {
+            "legacy_terminal_rows_scanned": len(suspicious),
+            "content_rows_repaired": content_repaired,
+            "author_rows_repaired": authors_repaired,
+            "rows_still_missing_author": int(still_lacking_author),
+            "rows_without_richer_source": len(suspicious) - recovered_rows,
+        }
+
+    def repair_legacy_terminal_rows(
+        self,
+        *,
+        limit: int | None = None,
+        scan_timeline_captures: bool = False,
+        dry_run: bool = False,
+    ) -> dict[str, int]:
+        with self.conn:
+            return self._repair_legacy_terminal_rows(
+                limit=limit,
+                scan_timeline_captures=scan_timeline_captures,
+                dry_run=dry_run,
             )
-            self.conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_archive_target_tweet_id ON archive(target_tweet_id)"
+
+    def _validate_migration(
+        self,
+        before_counts: dict[str | None, int],
+        sample_keys: list[str],
+    ) -> None:
+        self._require_quick_check("during migration validation")
+        after_counts = self._row_counts_by_type()
+        if before_counts != after_counts:
+            raise RuntimeError(
+                "Archive row counts changed during schema migration: "
+                f"before={before_counts!r}, after={after_counts!r}"
             )
-            self.conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_archive_sort "
-                "ON archive(collection_type, created_at_ts DESC, "
-                "CAST(sort_index AS INTEGER) DESC)"
-            )
-            self.conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_archive_record_sort "
-                "ON archive(record_type, collection_type, created_at_ts DESC, tweet_id DESC)"
-            )
-            self.conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_archive_record_page "
-                "ON archive(record_type, created_at_ts DESC, "
-                "CAST(sort_index AS INTEGER) DESC, tweet_id DESC)"
-            )
-            self.conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_archive_record_collection_page "
-                "ON archive(record_type, collection_type, created_at_ts DESC, "
-                "CAST(sort_index AS INTEGER) DESC, tweet_id DESC)"
-            )
+        missing = set(ARCHIVE_COLUMNS) - self._archive_column_names()
+        if missing:
+            raise RuntimeError(f"Archive migration left missing columns: {sorted(missing)}")
+        indexes = {
+            row[0]
+            for row in self.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index'"
+            ).fetchall()
+        }
+        missing_indexes = set(ENRICHMENT_INDEXES) - indexes
+        if missing_indexes:
+            raise RuntimeError(f"Archive migration left missing indexes: {sorted(missing_indexes)}")
+        for row_key in sample_keys:
+            if (
+                self.conn.execute("SELECT 1 FROM archive WHERE row_key = ?", (row_key,)).fetchone()
+                is None
+            ):
+                raise RuntimeError(f"Archive migration lost sampled row {row_key!r}.")
 
     def _query(
         self,
@@ -1004,6 +1538,8 @@ class ArchiveStore:
         import_completed_at: str | None = None,
         warnings: list[str] | None = None,
         counts: dict[str, Any] | None = None,
+        enrichment_followup_status: str | None = None,
+        enrichment_aborted_reason: str | None = None,
     ) -> None:
         existing = self.get_import_manifest(archive_digest)
         self.merge_rows(
@@ -1021,6 +1557,8 @@ class ArchiveStore:
                     status=status,
                     warnings_json=self._json_value(warnings or []),
                     counts_json=self._json_value(counts or {}),
+                    enrichment_followup_status=enrichment_followup_status,
+                    enrichment_aborted_reason=enrichment_aborted_reason,
                     updated_at=utc_now(),
                 )
             ]
@@ -1036,6 +1574,11 @@ class ArchiveStore:
         enrichment_checked_at: str | None = None,
         enrichment_http_status: int | None = None,
         enrichment_reason: str | None = None,
+        enrichment_detail: str | None = None,
+        enrichment_retry_count: int | None = None,
+        enrichment_next_retry_at: str | None = None,
+        enrichment_first_unavailable_at: str | None = None,
+        enrichment_retry_eligible: bool | None = None,
         cursor: _PageBuffer | None = None,
     ) -> dict[str, Any]:
         row_key = self._row_key_for_tweet_object(tweet.tweet_id)
@@ -1052,10 +1595,29 @@ class ArchiveStore:
                 200 if enrichment_http_status is None else enrichment_http_status
             )
             enrichment_reason = None
+            enrichment_detail = None
+            enrichment_retry_count = 0
+            enrichment_next_retry_at = None
+            enrichment_first_unavailable_at = None
+            enrichment_retry_eligible = False
         elif deleted_at and enrichment_state is None:
             enrichment_state = "terminal_unavailable"
             enrichment_checked_at = enrichment_checked_at or context.now
-            enrichment_reason = enrichment_reason or "deleted"
+            enrichment_reason = enrichment_reason or "archive_deleted"
+            enrichment_first_unavailable_at = enrichment_first_unavailable_at or context.now
+            enrichment_retry_count = enrichment_retry_count or 0
+            enrichment_retry_eligible = False
+
+        def merge_lifecycle(field_name: str, incoming: Any) -> Any:
+            if source == LIVE_SOURCE:
+                return incoming
+            return self._merge_by_source_precedence(
+                context,
+                field_name,
+                incoming,
+                prefer_incoming=prefer_incoming,
+            )
+
         return self._record_with_context(
             context,
             row_key=row_key,
@@ -1122,29 +1684,25 @@ class ArchiveStore:
                 tweet.note_tweet_text,
                 prefer_incoming=prefer_incoming,
             ),
-            enrichment_state=self._merge_by_source_precedence(
-                context,
-                "enrichment_state",
-                enrichment_state,
-                prefer_incoming=prefer_incoming,
+            enrichment_state=merge_lifecycle("enrichment_state", enrichment_state),
+            enrichment_checked_at=merge_lifecycle("enrichment_checked_at", enrichment_checked_at),
+            enrichment_http_status=merge_lifecycle(
+                "enrichment_http_status", enrichment_http_status
             ),
-            enrichment_checked_at=self._merge_by_source_precedence(
-                context,
-                "enrichment_checked_at",
-                enrichment_checked_at,
-                prefer_incoming=prefer_incoming,
+            enrichment_reason=merge_lifecycle("enrichment_reason", enrichment_reason),
+            enrichment_detail=merge_lifecycle("enrichment_detail", enrichment_detail),
+            enrichment_retry_count=merge_lifecycle(
+                "enrichment_retry_count", enrichment_retry_count
             ),
-            enrichment_http_status=self._merge_by_source_precedence(
-                context,
-                "enrichment_http_status",
-                enrichment_http_status,
-                prefer_incoming=prefer_incoming,
+            enrichment_next_retry_at=merge_lifecycle(
+                "enrichment_next_retry_at", enrichment_next_retry_at
             ),
-            enrichment_reason=self._merge_by_source_precedence(
-                context,
-                "enrichment_reason",
-                enrichment_reason,
-                prefer_incoming=prefer_incoming,
+            enrichment_first_unavailable_at=merge_lifecycle(
+                "enrichment_first_unavailable_at", enrichment_first_unavailable_at
+            ),
+            enrichment_retry_eligible=merge_lifecycle(
+                "enrichment_retry_eligible",
+                int(enrichment_retry_eligible) if enrichment_retry_eligible is not None else None,
             ),
             raw_json=self._merge_by_source_precedence(
                 context,
@@ -1824,56 +2382,244 @@ class ArchiveStore:
         return ids[:limit] if limit is not None else ids
 
     def list_tweet_objects_for_enrichment(
-        self, *, limit: int | None = None
+        self, *, limit: int | None = None, now: str | None = None
     ) -> list[dict[str, Any]]:
-        rows = self._query(
+        now = now or utc_now()
+        return self._query(
             expr="record_type = 'tweet_object' "
-            "AND (enrichment_state = 'pending' OR enrichment_state = 'transient_failure')",
-            cols=["tweet_id", "enrichment_checked_at"],
+            "AND (enrichment_state = 'pending' OR ("
+            "enrichment_state = 'transient_failure' AND ("
+            "enrichment_next_retry_at IS NULL OR "
+            f"enrichment_next_retry_at <= {_expr_quote(now)})))",
+            cols=[
+                "tweet_id",
+                "enrichment_checked_at",
+                "enrichment_next_retry_at",
+                "enrichment_retry_count",
+            ],
+            order_by=(
+                "COALESCE(enrichment_next_retry_at, '') ASC, "
+                "COALESCE(enrichment_checked_at, '') ASC, tweet_id ASC"
+            ),
+            limit=limit,
         )
-        rows.sort(
-            key=lambda row: (row.get("enrichment_checked_at") or "", row.get("tweet_id") or "")
-        )
-        return rows[:limit] if limit is not None else rows
 
     def count_tweet_objects_for_enrichment(self) -> int:
+        return self.count_incomplete_initial_enrichment()
+
+    def count_pending_initial_enrichment(self) -> int:
+        return self._count("record_type = 'tweet_object' AND enrichment_state = 'pending'")
+
+    def count_due_transient_enrichment(self, now: str | None = None) -> int:
+        now = now or utc_now()
+        return self._count(
+            "record_type = 'tweet_object' AND enrichment_state = 'transient_failure' "
+            "AND (enrichment_next_retry_at IS NULL OR "
+            f"enrichment_next_retry_at <= {_expr_quote(now)})"
+        )
+
+    def count_delayed_transient_enrichment(self, now: str | None = None) -> int:
+        now = now or utc_now()
+        return self._count(
+            "record_type = 'tweet_object' AND enrichment_state = 'transient_failure' "
+            "AND enrichment_next_retry_at IS NOT NULL AND "
+            f"enrichment_next_retry_at > {_expr_quote(now)}"
+        )
+
+    def count_incomplete_initial_enrichment(self) -> int:
         return self._count(
             "record_type = 'tweet_object' "
             "AND (enrichment_state = 'pending' OR enrichment_state = 'transient_failure')"
         )
 
+    def enrichment_status_counts(self) -> dict[str, int]:
+        return {
+            "pending_initial_enrichment": self.count_pending_initial_enrichment(),
+            "transient_initial_enrichment": self._count(
+                "record_type = 'tweet_object' AND enrichment_state = 'transient_failure'"
+            ),
+            "terminal_unavailable": self._count(
+                "record_type = 'tweet_object' AND enrichment_state = 'terminal_unavailable'"
+            ),
+            "retryable_unavailable": self._count(
+                "record_type = 'tweet_object' AND enrichment_state = 'terminal_unavailable' "
+                "AND enrichment_retry_eligible = 1 AND deleted_at IS NULL "
+                "AND enrichment_reason NOT IN ('archive_deleted', 'deleted_by_author')"
+            ),
+            "permanent_unavailable": self._count(
+                "record_type = 'tweet_object' AND enrichment_state = 'terminal_unavailable' "
+                "AND (deleted_at IS NOT NULL OR enrichment_retry_eligible = 0 OR "
+                "enrichment_reason IN ('archive_deleted', 'deleted_by_author'))"
+            ),
+            "done": self._count("record_type = 'tweet_object' AND enrichment_state = 'done'"),
+            "resurrected": self._count(
+                "record_type = 'tweet_object' AND enrichment_state = 'resurrected'"
+            ),
+        }
+
+    def list_due_resurrection_tweets(
+        self,
+        *,
+        reasons: set[str] | None = None,
+        exclude_tweet_ids: set[str] | None = None,
+        limit: int | None = None,
+        now: str | None = None,
+    ) -> list[dict[str, Any]]:
+        now = now or utc_now()
+        clauses = [
+            "record_type = 'tweet_object'",
+            "enrichment_state = 'terminal_unavailable'",
+            "enrichment_retry_eligible = 1",
+            "deleted_at IS NULL",
+            "enrichment_reason NOT IN ('archive_deleted', 'deleted_by_author')",
+            f"(enrichment_next_retry_at IS NULL OR enrichment_next_retry_at <= {_expr_quote(now)})",
+        ]
+        if reasons:
+            clauses.append(_expr_in("enrichment_reason", reasons))
+        if exclude_tweet_ids:
+            clauses.append(f"NOT {_expr_in('tweet_id', exclude_tweet_ids)}")
+        return self._query(
+            expr=_and_expr(*clauses),
+            cols=[
+                "tweet_id",
+                "author_id",
+                "enrichment_reason",
+                "enrichment_detail",
+                "enrichment_checked_at",
+                "enrichment_retry_count",
+                "enrichment_next_retry_at",
+            ],
+            order_by=(
+                "COALESCE(enrichment_next_retry_at, '') ASC, "
+                "COALESCE(enrichment_checked_at, '') ASC, tweet_id ASC"
+            ),
+            limit=limit,
+        )
+
+    def list_same_author_resurrection_tweets(
+        self,
+        author_id: str,
+        *,
+        exclude_tweet_ids: set[str] | None = None,
+        limit: int = 5,
+        due_only: bool = False,
+        now: str | None = None,
+    ) -> list[dict[str, Any]]:
+        now = now or utc_now()
+        clauses = [
+            "record_type = 'tweet_object'",
+            "enrichment_state = 'terminal_unavailable'",
+            "enrichment_retry_eligible = 1",
+            "deleted_at IS NULL",
+            f"author_id = {_expr_quote(author_id)}",
+            "enrichment_reason NOT IN ('archive_deleted', 'deleted_by_author')",
+        ]
+        if due_only:
+            clauses.append(
+                "(enrichment_next_retry_at IS NULL OR "
+                f"enrichment_next_retry_at <= {_expr_quote(now)})"
+            )
+        if exclude_tweet_ids:
+            clauses.append(f"NOT {_expr_in('tweet_id', exclude_tweet_ids)}")
+        return self._query(
+            expr=_and_expr(*clauses),
+            cols=[
+                "tweet_id",
+                "author_id",
+                "enrichment_reason",
+                "enrichment_detail",
+                "enrichment_checked_at",
+                "enrichment_retry_count",
+                "enrichment_next_retry_at",
+            ],
+            order_by=(
+                "COALESCE(enrichment_next_retry_at, '') ASC, "
+                "COALESCE(enrichment_checked_at, '') ASC, tweet_id ASC"
+            ),
+            limit=limit,
+        )
+
+    def mark_author_resurrection_due(
+        self, author_id: str, *, exclude_tweet_ids: set[str] | None = None
+    ) -> int:
+        clauses = [
+            "record_type = 'tweet_object'",
+            "enrichment_state = 'terminal_unavailable'",
+            "enrichment_retry_eligible = 1",
+            "deleted_at IS NULL",
+            "enrichment_reason NOT IN ('archive_deleted', 'deleted_by_author')",
+            f"author_id = {_expr_quote(author_id)}",
+        ]
+        if exclude_tweet_ids:
+            clauses.append(f"NOT {_expr_in('tweet_id', exclude_tweet_ids)}")
+        with self.conn:
+            cursor = self.conn.execute(
+                f"UPDATE archive SET enrichment_next_retry_at = ?, updated_at = ? "
+                f"WHERE {_and_expr(*clauses)}",
+                (utc_now(), utc_now()),
+            )
+        return cursor.rowcount
+
+    def mark_tweets_resurrection_due(
+        self,
+        tweet_ids: set[str],
+        *,
+        due_at: str | None = None,
+    ) -> int:
+        if not tweet_ids:
+            return 0
+        now = due_at or utc_now()
+        clauses = [
+            "record_type = 'tweet_object'",
+            "enrichment_state = 'terminal_unavailable'",
+            "enrichment_retry_eligible = 1",
+            "deleted_at IS NULL",
+            "enrichment_reason NOT IN ('archive_deleted', 'deleted_by_author')",
+            _expr_in("tweet_id", tweet_ids),
+        ]
+        with self.conn:
+            cursor = self.conn.execute(
+                f"UPDATE archive SET enrichment_next_retry_at = ?, updated_at = ? "
+                f"WHERE {_and_expr(*clauses)}",
+                (now, now),
+            )
+        return cursor.rowcount
+
+    def count_due_resurrection_tweets(self, now: str | None = None) -> int:
+        now = now or utc_now()
+        return self._count(
+            "record_type = 'tweet_object' "
+            "AND enrichment_state = 'terminal_unavailable' "
+            "AND enrichment_retry_eligible = 1 AND deleted_at IS NULL "
+            "AND enrichment_reason NOT IN ('archive_deleted', 'deleted_by_author') "
+            "AND (enrichment_next_retry_at IS NULL OR "
+            f"enrichment_next_retry_at <= {_expr_quote(now)})"
+        )
+
     def list_dead_tweets_for_resurrection(
         self, *, limit: int | None = None
     ) -> list[dict[str, Any]]:
-        rows = self._query(
-            expr="record_type = 'tweet_object' AND enrichment_state = 'terminal_unavailable'",
-            cols=["tweet_id", "enrichment_checked_at"],
-        )
-        rows.sort(
-            key=lambda row: (row.get("enrichment_checked_at") or "", row.get("tweet_id") or "")
-        )
-        return rows[:limit] if limit is not None else rows
+        return self.list_due_resurrection_tweets(limit=limit)
 
     def count_dead_tweets_for_resurrection(self) -> int:
-        return self._count(
-            "record_type = 'tweet_object' AND enrichment_state = 'terminal_unavailable'"
-        )
+        return self.count_due_resurrection_tweets()
 
     def get_eligible_tweets_for_tagging(self, *, limit: int = 20) -> list[str]:
         # Eligible posts have a saved membership, enriched object, media, and no tag row.
-        query = """
+        state_placeholders = ", ".join("?" for _state in AVAILABLE_ENRICHMENT_STATES)
+        query = f"""
             SELECT DISTINCT t.tweet_id
             FROM archive t
             JOIN archive o ON o.tweet_id = t.tweet_id AND o.record_type = 'tweet_object'
             JOIN archive m ON m.tweet_id = t.tweet_id AND m.record_type = 'media'
             LEFT JOIN archive tg ON tg.tweet_id = t.tweet_id AND tg.record_type = 'media_tag'
             WHERE t.record_type = 'tweet'
-              AND o.enrichment_state = 'done'
+              AND o.enrichment_state IN ({state_placeholders})
               AND tg.tweet_id IS NULL
             ORDER BY t.created_at_ts DESC, t.tweet_id DESC
             LIMIT ?
         """
-        rows = self.conn.execute(query, (limit,)).fetchall()
+        rows = self.conn.execute(query, (*AVAILABLE_ENRICHMENT_STATES, limit)).fetchall()
         return [row["tweet_id"] for row in rows]
 
     def delete_media_tag(self, tweet_id: str) -> None:
@@ -2036,6 +2782,11 @@ class ArchiveStore:
         enrichment_checked_at: str | None,
         enrichment_http_status: int | None,
         enrichment_reason: str | None,
+        enrichment_detail: str | None | object = _UNSET,
+        enrichment_retry_count: int | None | object = _UNSET,
+        enrichment_next_retry_at: str | None | object = _UNSET,
+        enrichment_first_unavailable_at: str | None | object = _UNSET,
+        enrichment_retry_eligible: bool | int | None | object = _UNSET,
         cursor: _PageBuffer | None = None,
     ) -> None:
         row = self._lookup_row(self._row_key_for_tweet_object(tweet_id), cursor=cursor)
@@ -2051,6 +2802,19 @@ class ArchiveStore:
                 "updated_at": utc_now(),
             }
         )
+        optional_updates = {
+            "enrichment_detail": enrichment_detail,
+            "enrichment_retry_count": enrichment_retry_count,
+            "enrichment_next_retry_at": enrichment_next_retry_at,
+            "enrichment_first_unavailable_at": enrichment_first_unavailable_at,
+            "enrichment_retry_eligible": enrichment_retry_eligible,
+        }
+        for field_name, value in optional_updates.items():
+            if value is _UNSET:
+                continue
+            if field_name == "enrichment_retry_eligible" and value is not None:
+                value = int(bool(value))
+            updated[field_name] = value
         self._queue_record(updated, cursor=cursor)
 
     def _refresh_tweet_records_for_detail(
@@ -2119,6 +2883,10 @@ class ArchiveStore:
     ) -> None:
         owns_buffer = cursor is None
         buffer = cursor or _PageBuffer()
+        existing = self._lookup_row(self._row_key_for_tweet_object(tweet.tweet_id), cursor=buffer)
+        was_terminal = (
+            existing is not None and existing.get("enrichment_state") == "terminal_unavailable"
+        )
         self.append_raw_capture(
             "TweetDetail",
             tweet.tweet_id,
@@ -2136,17 +2904,17 @@ class ArchiveStore:
             cursor=buffer,
         )
 
-        row = self._lookup_row(self._row_key_for_tweet_object(tweet.tweet_id), cursor=buffer)
-        state = "done"
-        if row and row.get("enrichment_state") == "terminal_unavailable":
-            state = "resurrected"
-
         self.update_tweet_object_enrichment(
             tweet.tweet_id,
-            enrichment_state=state,
+            enrichment_state="resurrected" if was_terminal else "done",
             enrichment_checked_at=utc_now(),
             enrichment_http_status=http_status,
             enrichment_reason=None,
+            enrichment_detail=None,
+            enrichment_retry_count=0,
+            enrichment_next_retry_at=None,
+            enrichment_first_unavailable_at=None,
+            enrichment_retry_eligible=False,
             cursor=buffer,
         )
         if owns_buffer:
@@ -2181,29 +2949,83 @@ class ArchiveStore:
         if owns_buffer:
             self._merge_records(list(buffer.records.values()))
 
-    def persist_terminal_unavailable_target(self, focal_tweet_id: str, operation: str) -> None:
-        buffer = _PageBuffer()
+    def persist_unavailable_tweet(
+        self,
+        *,
+        tweet_id: str,
+        operation: str,
+        raw_json: dict[str, Any],
+        http_status: int | None,
+        reason: str,
+        detail: str | None,
+        retry_eligible: bool,
+        next_retry_at: str | None,
+        retry_count: int | None = None,
+        checked_at: str | None = None,
+        cursor: _PageBuffer | None = None,
+    ) -> None:
+        owns_buffer = cursor is None
+        buffer = cursor or _PageBuffer()
+        checked_at = checked_at or utc_now()
         self.append_raw_capture(
             operation,
-            focal_tweet_id,
+            tweet_id,
             None,
-            404,
-            {"__tombstone__": True},
+            http_status or 0,
+            raw_json,
             source=LIVE_SOURCE,
             cursor=buffer,
         )
-        self._queue_record(
-            self._record(
+        row_key = self._row_key_for_tweet_object(tweet_id)
+        existing = self._lookup_row(row_key, cursor=buffer)
+        if existing is None:
+            existing = self._record(
                 record_type="tweet_object",
-                row_key=f"tweet_object:{focal_tweet_id}",
-                tweet_id=focal_tweet_id,
-                enrichment_state="terminal_unavailable",
-                raw_json=self._json_value({"__tombstone__": True}),
+                row_key=row_key,
+                tweet_id=tweet_id,
                 source=LIVE_SOURCE,
-            ),
-            cursor=buffer,
+                raw_json=self._json_value(raw_json),
+                first_seen_at=checked_at,
+                added_at=checked_at,
+            )
+        updated = dict(existing)
+        current_retry_count = int(updated.get("enrichment_retry_count") or 0)
+        updated.update(
+            {
+                "enrichment_state": "terminal_unavailable",
+                "enrichment_checked_at": checked_at,
+                "enrichment_http_status": http_status,
+                "enrichment_reason": reason,
+                "enrichment_detail": detail,
+                "enrichment_retry_count": (
+                    current_retry_count if retry_count is None else retry_count
+                ),
+                "enrichment_next_retry_at": next_retry_at,
+                "enrichment_first_unavailable_at": (
+                    updated.get("enrichment_first_unavailable_at") or checked_at
+                ),
+                "enrichment_retry_eligible": int(retry_eligible),
+                "updated_at": checked_at,
+            }
         )
-        self._merge_records(list(buffer.records.values()))
+        self._queue_record(updated, cursor=buffer)
+        if owns_buffer:
+            self._merge_records(list(buffer.records.values()))
+
+    def persist_terminal_unavailable_target(self, focal_tweet_id: str, operation: str) -> None:
+        from tweetxvault.resurrection import resurrection_retry_schedule
+
+        retry_eligible, next_retry_at = resurrection_retry_schedule("unavailable_unknown", 0)
+        self.persist_unavailable_tweet(
+            tweet_id=focal_tweet_id,
+            operation=operation,
+            raw_json={"__typename__": "TweetUnavailable"},
+            http_status=404,
+            reason="unavailable_unknown",
+            detail=None,
+            retry_eligible=retry_eligible,
+            next_retry_at=next_retry_at,
+        )
 
     def list_membership_tweet_ids(self, *, limit: int | None = None) -> list[str]:
         rows = self._query(expr="record_type = 'tweet'", cols=["tweet_id", "added_at"])
@@ -2724,7 +3546,15 @@ class ArchiveStore:
             ],
         )
         tweet_object_rows = self._query(
-            expr="record_type = 'tweet_object'", cols=["tweet_id", "enrichment_state"]
+            expr="record_type = 'tweet_object'",
+            cols=[
+                "tweet_id",
+                "deleted_at",
+                "enrichment_state",
+                "enrichment_reason",
+                "enrichment_retry_eligible",
+                "enrichment_next_retry_at",
+            ],
         )
         article_rows = self._query(expr="record_type = 'article'", cols=["status"])
         url_ref_rows = self._query(
@@ -2789,6 +3619,10 @@ class ArchiveStore:
         terminal_enrichment_count = 0
         resurrected_enrichment_count = 0
         done_enrichment_count = 0
+        retryable_unavailable_count = 0
+        permanent_unavailable_count = 0
+        due_resurrection_count = 0
+        stats_now = utc_now()
         for row in tweet_object_rows:
             tweet_id = row.get("tweet_id")
             if isinstance(tweet_id, str) and tweet_id:
@@ -2800,6 +3634,25 @@ class ArchiveStore:
                 transient_enrichment_failure_count += 1
             elif enrichment_state == "terminal_unavailable":
                 terminal_enrichment_count += 1
+                reason = row.get("enrichment_reason")
+                deleted_at = row.get("deleted_at")
+                retry_eligible = self._parse_bool(row.get("enrichment_retry_eligible"))
+                permanently_unavailable = (
+                    bool(deleted_at)
+                    or not retry_eligible
+                    or reason
+                    in {
+                        "archive_deleted",
+                        "deleted_by_author",
+                    }
+                )
+                if permanently_unavailable:
+                    permanent_unavailable_count += 1
+                else:
+                    retryable_unavailable_count += 1
+                    next_retry_at = row.get("enrichment_next_retry_at")
+                    if not next_retry_at or next_retry_at <= stats_now:
+                        due_resurrection_count += 1
             elif enrichment_state == "resurrected":
                 resurrected_enrichment_count += 1
             elif enrichment_state == "done":
@@ -2927,6 +3780,9 @@ class ArchiveStore:
             terminal_enrichment_count=terminal_enrichment_count,
             resurrected_enrichment_count=resurrected_enrichment_count,
             done_enrichment_count=done_enrichment_count,
+            retryable_unavailable_count=retryable_unavailable_count,
+            permanent_unavailable_count=permanent_unavailable_count,
+            due_resurrection_count=due_resurrection_count,
             preview_article_count=preview_article_count,
             missing_tweet_object_count=missing_tweet_object_count,
             expanded_thread_target_count=len(expanded_thread_targets),
@@ -3494,7 +4350,31 @@ def open_archive_store(
 ) -> ArchiveStore | None:
     if not create and not paths.database_path.exists():
         return None
+    migration_lock = None
+    if paths.database_path.exists() and _database_requires_schema_migration(paths.database_path):
+        from tweetxvault.sync import ProcessLock
+
+        migration_lock = ProcessLock(paths.lock_file)
+        migration_lock.acquire(reentrant=True)
     try:
         return ArchiveStore(paths.database_path, create=create, config=config)
     except FileNotFoundError:
         return None
+    finally:
+        if migration_lock is not None:
+            migration_lock.release()
+
+
+def _database_requires_schema_migration(db_path: Path) -> bool:
+    connection = sqlite3.connect(db_path)
+    try:
+        table_exists = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'archive'"
+        ).fetchone()
+        if table_exists is None:
+            return True
+        version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(archive)").fetchall()}
+        return version < SCHEMA_VERSION or bool(set(ARCHIVE_COLUMNS) - columns)
+    finally:
+        connection.close()

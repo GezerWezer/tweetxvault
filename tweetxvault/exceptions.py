@@ -7,8 +7,8 @@ class TweetXVaultError(RuntimeError):
     """Base exception for the project."""
 
 
-class TerminalUnavailableError(TweetXVaultError):
-    """Raised when a requested resource (like a tweet) is permanently unavailable."""
+class RepeatedFocalAbsenceError(TweetXVaultError):
+    """Raised when consecutive TweetDetail responses omit their requested focal tweet."""
 
 
 class ConfigError(TweetXVaultError):

@@ -135,6 +135,10 @@ async def locked_archive_job(
         store = open_archive_store(paths, create=False, config=config)
         if store is None:
             raise ConfigError("No local archive found.")
+        if console is not None:
+            from tweetxvault.reminders import print_archive_migration_report
+
+            print_archive_migration_report(console, store)
         tracker = ArchiveWriteTracker(store)
         job = LockedArchiveJob(
             config=config,

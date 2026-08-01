@@ -372,6 +372,60 @@ def test_archive_stats_reports_followup_work(paths) -> None:
     store.close()
 
 
+def test_live_timeline_ingestion_clears_terminal_scheduler_metadata(paths) -> None:
+    store = open_archive_store(paths, create=True)
+    assert store is not None
+    tweet = _complex_tweet("100")
+    store.persist_page(
+        operation="Bookmarks",
+        collection_type="bookmark",
+        cursor_in=None,
+        cursor_out=None,
+        http_status=200,
+        raw_json={"pass": 1},
+        tweets=[tweet],
+        last_head_tweet_id="100",
+        backfill_cursor=None,
+        backfill_incomplete=False,
+    )
+    store.persist_unavailable_tweet(
+        tweet_id="100",
+        operation="TweetDetail",
+        raw_json={"__typename": "TweetTombstone"},
+        http_status=200,
+        reason="protected_account",
+        detail="private",
+        retry_eligible=True,
+        next_retry_at="2030-01-01T00:00:00+00:00",
+        retry_count=3,
+        checked_at="2025-01-01T00:00:00+00:00",
+    )
+
+    store.persist_page(
+        operation="Bookmarks",
+        collection_type="bookmark",
+        cursor_in=None,
+        cursor_out=None,
+        http_status=200,
+        raw_json={"pass": 2},
+        tweets=[tweet],
+        last_head_tweet_id="100",
+        backfill_cursor=None,
+        backfill_incomplete=False,
+    )
+
+    row = store._get_row("tweet_object:100")
+    assert row is not None
+    assert row["enrichment_state"] == "done"
+    assert row["enrichment_reason"] is None
+    assert row["enrichment_detail"] is None
+    assert row["enrichment_retry_count"] == 0
+    assert row["enrichment_next_retry_at"] is None
+    assert row["enrichment_first_unavailable_at"] is None
+    assert row["enrichment_retry_eligible"] == 0
+    store.close()
+
+
 def test_archive_stats_bfs_depth(paths) -> None:
     store = open_archive_store(paths, create=True)
     assert store is not None

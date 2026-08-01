@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sys
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -250,8 +249,9 @@ async def test_run_auto_followups_continues_after_task_failure(
     console = Console(file=buffer, force_terminal=False, color_system=None)
     calls: list[str] = []
 
-    async def fail_enrich(**_kwargs):
-        calls.append("enrich")
+    async def fail_resurrection(**kwargs):
+        calls.append("resurrection")
+        assert kwargs["budget"] == 200
         raise RuntimeError("boom")
 
     async def ok_threads(**_kwargs):
@@ -270,7 +270,9 @@ async def test_run_auto_followups_continues_after_task_failure(
         calls.append("unfurl")
         return SimpleNamespace(processed=1, updated=1, failed=0)
 
-    monkeypatch.setattr(sync_module, "_run_followup_archive_enrich", fail_enrich)
+    import tweetxvault.resurrection as resurrection_module
+
+    monkeypatch.setattr(resurrection_module, "resurrect_due_tweets", fail_resurrection)
     monkeypatch.setattr(sync_module, "_run_followup_threads", ok_threads)
     monkeypatch.setattr(sync_module, "_run_followup_articles", ok_articles)
     monkeypatch.setattr(sync_module, "_run_followup_media", ok_media)
@@ -286,13 +288,48 @@ async def test_run_auto_followups_continues_after_task_failure(
         sleep=lambda _: asyncio.sleep(0),
     )
 
-    assert calls == ["enrich", "threads", "articles", "media", "unfurl"]
+    assert calls == ["threads", "resurrection", "articles", "media", "unfurl"]
     output = buffer.getvalue()
-    assert "sync follow-up: running archive enrich" in output
-    assert "sync follow-up archive enrich failed" in output
+    assert "archive enrich" not in output
+    assert "sync follow-up: running resurrection checks" in output
+    assert "sync follow-up resurrection failed" in output
     assert "sync follow-up: threads: 1 processed, 1 expanded, 0 skipped, 0 failed" in output
 
 
+@pytest.mark.asyncio
+async def test_run_auto_followups_only_reminds_about_incomplete_initial_enrichment(
+    paths, config: AppConfig, auth_bundle
+) -> None:
+    store = open_archive_store(paths, create=True, config=config)
+    assert store is not None
+    store._merge_records(
+        [
+            store._record(
+                row_key="tweet_object:pending",
+                record_type="tweet_object",
+                tweet_id="pending",
+                enrichment_state="pending",
+            )
+        ]
+    )
+    store.close()
+    buffer = StringIO()
+    console = Console(file=buffer, force_terminal=False, color_system=None)
+
+    await sync_module._run_auto_followups(
+        plan=sync_module.SyncFollowupPlan(enabled=False),
+        config=config,
+        paths=paths,
+        auth_bundle=auth_bundle,
+        transport=None,
+        console=console,
+        sleep=lambda _: asyncio.sleep(0),
+    )
+
+    output = buffer.getvalue()
+    assert "Archive enrichment is incomplete: 1 tweet remains." in output
+    assert "tweetxvault import enrich" in output
+    assert "running archive enrich" not in output
 
 
 @pytest.mark.asyncio
@@ -566,8 +603,6 @@ async def test_head_only_cannot_be_combined_with_backfill_modes(
             console=_console(),
             sleep=lambda _: asyncio.sleep(0),
         )
-
-
 
 
 @pytest.mark.asyncio

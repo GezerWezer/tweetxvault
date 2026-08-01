@@ -8,8 +8,13 @@ from typing import Annotated
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from rich.console import Console
 
 from tweetxvault.config import AppConfig, XDGPaths
+from tweetxvault.reminders import (
+    print_archive_migration_report,
+    print_pending_archive_enrichment_reminder,
+)
 from tweetxvault.storage import open_archive_store
 from tweetxvault.web.deps import server_state, verify_credentials
 from tweetxvault.web.routes.avatars import router as avatars_router
@@ -39,6 +44,9 @@ async def lifespan(app: FastAPI):
         if store is None:
             raise RuntimeError("Archive database not found")
         server_state["store"] = store
+        console = Console(stderr=True)
+        print_archive_migration_report(console, store)
+        print_pending_archive_enrichment_reminder(console, store)
         store.ensure_scalar_indexes()
         t = threading.Thread(
             target=_build_fts_in_background,

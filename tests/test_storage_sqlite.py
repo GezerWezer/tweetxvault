@@ -1,13 +1,20 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
 import pytest
 
+from tests.conftest import make_tweet_detail_response, make_tweet_result
 from tweetxvault.config import AppConfig, DatabaseConfig
 from tweetxvault.storage import open_archive_store
-from tweetxvault.storage.backend import ARCHIVE_COLUMNS, ArchiveStore
+from tweetxvault.storage.backend import (
+    ARCHIVE_COLUMNS,
+    COLUMN_TYPES,
+    SCHEMA_VERSION,
+    ArchiveStore,
+)
 
 CREATED_2012 = "Tue Oct 09 21:39:26 +0000 2012"
 CREATED_2024 = "Thu Apr 11 03:55:13 +0000 2024"
@@ -181,6 +188,507 @@ def test_created_at_ts_migration_backfills_and_is_idempotent(tmp_path: Path) -> 
     assert first_value == second_value == 1_349_818_766
     assert created_at_columns == 1
     second.close()
+
+
+def test_enrichment_scheduler_migration_is_backed_up_additive_and_idempotent(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "archive.db"
+    scheduler_columns = {
+        "enrichment_detail",
+        "enrichment_retry_count",
+        "enrichment_next_retry_at",
+        "enrichment_first_unavailable_at",
+        "enrichment_retry_eligible",
+    }
+    legacy_columns = [name for name in ARCHIVE_COLUMNS if name not in scheduler_columns]
+    definitions = []
+    for name in legacy_columns:
+        column_type = (
+            "TEXT PRIMARY KEY"
+            if name == "row_key"
+            else "INTEGER"
+            if name == "created_at_ts"
+            else "TEXT"
+        )
+        definitions.append(f"{name} {column_type}")
+    connection = sqlite3.connect(db_path)
+    connection.execute(f"CREATE TABLE archive ({', '.join(definitions)})")
+    connection.executemany(
+        """
+        INSERT INTO archive(
+            row_key, record_type, tweet_id, source, text, author_id,
+            enrichment_state, enrichment_checked_at, enrichment_reason,
+            deleted_at, raw_json, media_url, url, counts_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                "tweet:bookmark::1",
+                "tweet",
+                "1",
+                "live_graphql",
+                "searchable migration sentinel",
+                "101",
+                None,
+                None,
+                None,
+                None,
+                '{"id":"1","text":"unchanged"}',
+                None,
+                None,
+                None,
+            ),
+            (
+                "tweet_object:2",
+                "tweet_object",
+                "2",
+                "x_archive",
+                "",
+                None,
+                "pending",
+                None,
+                None,
+                None,
+                '{"id":"2"}',
+                None,
+                None,
+                None,
+            ),
+            (
+                "tweet_object:3",
+                "tweet_object",
+                "3",
+                "x_archive",
+                "",
+                None,
+                "transient_failure",
+                "2026-01-01T00:00:00+00:00",
+                "network",
+                None,
+                '{"id":"3"}',
+                None,
+                None,
+                None,
+            ),
+            (
+                "tweet_object:4",
+                "tweet_object",
+                "4",
+                "x_archive",
+                "deleted archive post",
+                "104",
+                "terminal_unavailable",
+                "2026-01-02T00:00:00+00:00",
+                "deleted",
+                "2026-01-02T00:00:00+00:00",
+                '{"id":"4"}',
+                None,
+                None,
+                None,
+            ),
+            (
+                "tweet_object:5",
+                "tweet_object",
+                "5",
+                "live_graphql",
+                "private post",
+                "105",
+                "terminal_unavailable",
+                "2026-01-03T00:00:00+00:00",
+                "TerminalUnavailableError",
+                None,
+                '{"id":"5"}',
+                None,
+                None,
+                None,
+            ),
+            (
+                "raw_capture:1",
+                "raw_capture",
+                None,
+                "live_graphql",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                '{"raw":true}',
+                None,
+                None,
+                None,
+            ),
+            (
+                "media:1:m",
+                "media",
+                "1",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                '{"media":true}',
+                "https://example.test/image.jpg",
+                None,
+                None,
+            ),
+            (
+                "url:u",
+                "url",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                '{"url":true}',
+                None,
+                "https://example.test",
+                None,
+            ),
+            (
+                "import_manifest:d",
+                "import_manifest",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                '{"likes":1}',
+            ),
+        ],
+    )
+    connection.commit()
+    connection.close()
+
+    first = ArchiveStore(db_path, create=True)
+    assert first.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    assert first.conn.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+    assert first._count() == 9
+    assert first.search_fts("sentinel")[0]["tweet_id"] == "1"
+    rich = first._get_row("tweet:bookmark::1")
+    assert rich is not None
+    assert rich["text"] == "searchable migration sentinel"
+    assert rich["author_id"] == "101"
+    assert rich["raw_json"] == '{"id":"1","text":"unchanged"}'
+    deleted = first._get_row("tweet_object:4")
+    assert deleted is not None
+    assert deleted["enrichment_reason"] == "archive_deleted"
+    assert deleted["enrichment_retry_eligible"] == 0
+    ambiguous = first._get_row("tweet_object:5")
+    assert ambiguous is not None
+    assert ambiguous["enrichment_reason"] == "unavailable_unknown"
+    assert ambiguous["enrichment_retry_eligible"] == 1
+    assert ambiguous["author_id"] == "105"
+    transient = first._get_row("tweet_object:3")
+    assert transient is not None
+    assert transient["enrichment_retry_count"] == 0
+    assert transient["enrichment_next_retry_at"] is not None
+    first.close()
+
+    backups = list(tmp_path.glob("archive.db.pre-schema-v3.*.bak"))
+    assert len(backups) == 1
+    second = ArchiveStore(db_path, create=True)
+    assert second._count() == 9
+    second.close()
+    assert list(tmp_path.glob("archive.db.pre-schema-v3.*.bak")) == backups
+
+
+def test_legacy_terminal_repair_prefers_rich_indexed_capture_and_reports_deferral(
+    paths, capsys
+) -> None:
+    store = open_archive_store(paths, create=True)
+    assert store is not None
+    rich_payload = make_tweet_detail_response(
+        [make_tweet_result("6", "recovered detail text", user_id="606")]
+    )
+    store._merge_records(
+        [
+            store._record(
+                row_key="tweet_object:6",
+                record_type="tweet_object",
+                tweet_id="6",
+                enrichment_state="terminal_unavailable",
+                raw_json='{"__tombstone__":true}',
+            ),
+            store._record(
+                row_key="tweet:like::6",
+                record_type="tweet",
+                tweet_id="6",
+                collection_type="like",
+                text="sparse membership text",
+                author_id=None,
+                raw_json='{"tweetId":"6"}',
+            ),
+            store._record(
+                row_key="raw_capture:detail-6",
+                record_type="raw_capture",
+                operation="TweetDetail",
+                cursor_in="6",
+                captured_at="2026-01-01T00:00:00+00:00",
+                raw_json=json.dumps(rich_payload),
+            ),
+            store._record(
+                row_key="tweet_object:7",
+                record_type="tweet_object",
+                tweet_id="7",
+                enrichment_state="terminal_unavailable",
+                raw_json='{"__tombstone__":true}',
+            ),
+        ]
+    )
+
+    report = store._repair_legacy_terminal_rows()
+
+    repaired = store._get_row("tweet_object:6")
+    assert repaired is not None
+    assert repaired["text"] == "recovered detail text"
+    assert repaired["author_id"] == "606"
+    assert report == {
+        "legacy_terminal_rows_scanned": 2,
+        "content_rows_repaired": 1,
+        "author_rows_repaired": 1,
+        "rows_still_missing_author": 1,
+        "rows_without_richer_source": 1,
+    }
+    assert capsys.readouterr().out == ""
+    store.close()
+
+
+def test_explicit_legacy_repair_can_scan_timeline_captures(paths) -> None:
+    store = open_archive_store(paths, create=True)
+    assert store is not None
+    payload = make_tweet_detail_response(
+        [make_tweet_result("8", "timeline recovery", user_id="808")]
+    )
+    store._merge_records(
+        [
+            store._record(
+                row_key="tweet_object:8",
+                record_type="tweet_object",
+                tweet_id="8",
+                enrichment_state="terminal_unavailable",
+                raw_json='{"__tombstone__":true}',
+            ),
+            store._record(
+                row_key="raw_capture:timeline",
+                record_type="raw_capture",
+                operation="Bookmarks",
+                source="live_graphql",
+                captured_at="2026-01-01T00:00:00+00:00",
+                raw_json=json.dumps(payload),
+            ),
+        ]
+    )
+
+    bounded = store.repair_legacy_terminal_rows(dry_run=True)
+    assert bounded["content_rows_repaired"] == 0
+    deep = store.repair_legacy_terminal_rows(
+        dry_run=False,
+        scan_timeline_captures=True,
+    )
+
+    assert deep["content_rows_repaired"] == 1
+    repaired = store._get_row("tweet_object:8")
+    assert repaired["text"] == "timeline recovery"
+    assert repaired["author_id"] == "808"
+    store.close()
+
+
+def test_schema_v2_migrates_to_v3_with_backup_reason_preservation_and_repairs(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "archive.db"
+    definitions = []
+    for name in ARCHIVE_COLUMNS:
+        if name in {"enrichment_followup_status", "enrichment_aborted_reason"}:
+            continue
+        definitions.append(f"{name} {COLUMN_TYPES[name]}")
+    connection = sqlite3.connect(db_path)
+    connection.execute(f"CREATE TABLE archive ({', '.join(definitions)})")
+    connection.execute("PRAGMA user_version = 2")
+    detail_payload = make_tweet_detail_response(
+        [make_tweet_result("1", "recovered from capture", user_id="101")]
+    )
+    connection.executemany(
+        "INSERT INTO archive ("
+        "row_key, record_type, tweet_id, operation, cursor_in, captured_at, source, "
+        "text, author_id, enrichment_state, enrichment_reason, enrichment_detail, "
+        "enrichment_retry_count, enrichment_next_retry_at, "
+        "enrichment_first_unavailable_at, enrichment_retry_eligible, raw_json"
+        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            (
+                "tweet_object:1",
+                "tweet_object",
+                "1",
+                None,
+                None,
+                None,
+                "live_graphql",
+                None,
+                None,
+                "terminal_unavailable",
+                "LegacyMysteryReason",
+                "original detail",
+                2,
+                "2026-01-01T00:00:00+00:00",
+                "2025-01-01T00:00:00+00:00",
+                1,
+                '{"__tombstone__":true}',
+            ),
+            (
+                "raw_capture:detail-1",
+                "raw_capture",
+                None,
+                "TweetDetail",
+                "1",
+                "2026-01-02T00:00:00+00:00",
+                "live_graphql",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                json.dumps(detail_payload),
+            ),
+            (
+                "tweet_object:2",
+                "tweet_object",
+                "2",
+                None,
+                None,
+                None,
+                "live_graphql",
+                "available",
+                "202",
+                "done",
+                "protected_account",
+                "stale scheduler detail",
+                4,
+                "2030-01-01T00:00:00+00:00",
+                "2025-01-01T00:00:00+00:00",
+                1,
+                '{"rest_id":"2"}',
+            ),
+        ],
+    )
+    connection.commit()
+    connection.close()
+
+    first = ArchiveStore(db_path, create=True)
+    assert first.conn.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert first.migration_report is not None
+    assert first.migration_report.from_version == 2
+    assert first.migration_report.to_version == 3
+    terminal = first._get_row("tweet_object:1")
+    assert terminal["text"] == "recovered from capture"
+    assert terminal["author_id"] == "101"
+    assert terminal["enrichment_reason"] == "unavailable_unknown"
+    assert "Legacy enrichment reason: LegacyMysteryReason" in terminal["enrichment_detail"]
+    available = first._get_row("tweet_object:2")
+    assert available["enrichment_reason"] is None
+    assert available["enrichment_detail"] is None
+    assert available["enrichment_retry_count"] == 0
+    assert available["enrichment_next_retry_at"] is None
+    assert available["enrichment_first_unavailable_at"] is None
+    assert available["enrichment_retry_eligible"] == 0
+    first.close()
+
+    backups = list(tmp_path.glob("archive.db.pre-schema-v3.*.bak"))
+    assert len(backups) == 1
+    backup = sqlite3.connect(backups[0])
+    assert backup.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+    assert backup.execute("PRAGMA user_version").fetchone()[0] == 2
+    backup.close()
+
+    second = ArchiveStore(db_path, create=True)
+    assert second.migration_report is None
+    second.close()
+    assert list(tmp_path.glob("archive.db.pre-schema-v3.*.bak")) == backups
+
+
+def test_migration_backup_failure_leaves_original_unchanged_and_no_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = tmp_path / "archive.db"
+    definitions = ", ".join(f"{name} {COLUMN_TYPES[name]}" for name in ARCHIVE_COLUMNS)
+    connection = sqlite3.connect(db_path)
+    connection.execute(f"CREATE TABLE archive ({definitions})")
+    connection.execute("PRAGMA user_version = 2")
+    connection.execute(
+        "INSERT INTO archive (row_key, record_type, tweet_id) "
+        "VALUES ('tweet_object:1', 'tweet_object', '1')"
+    )
+    connection.commit()
+    connection.close()
+    original_connect = sqlite3.connect
+
+    class InvalidBackupConnection:
+        def close(self) -> None:
+            return None
+
+    def failing_connect(path, *args, **kwargs):
+        if str(path).endswith(".bak.tmp"):
+            Path(path).touch()
+            return InvalidBackupConnection()
+        return original_connect(path, *args, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", failing_connect)
+
+    with pytest.raises(RuntimeError, match="validated pre-migration backup"):
+        ArchiveStore(db_path, create=True)
+
+    check = original_connect(db_path)
+    assert check.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert check.execute("SELECT COUNT(*) FROM archive").fetchone()[0] == 1
+    check.close()
+    assert list(tmp_path.glob("*.bak")) == []
+    assert list(tmp_path.glob("*.bak.tmp")) == []
+
+
+def test_due_resurrection_query_orders_and_limits_in_sql(paths) -> None:
+    store = open_archive_store(paths, create=True)
+    assert store is not None
+    with store.conn:
+        store.conn.executemany(
+            "INSERT INTO archive ("
+            "row_key, record_type, tweet_id, enrichment_state, enrichment_reason, "
+            "enrichment_retry_eligible, enrichment_next_retry_at"
+            ") VALUES (?, 'tweet_object', ?, 'terminal_unavailable', "
+            "'protected_account', 1, '2020-01-01T00:00:00+00:00')",
+            [(f"tweet_object:{index}", str(index)) for index in range(10_000)],
+        )
+    statements: list[str] = []
+    store.conn.set_trace_callback(statements.append)
+
+    rows = store.list_due_resurrection_tweets(
+        reasons={"protected_account"},
+        limit=37,
+        now="2026-01-01T00:00:00+00:00",
+    )
+
+    store.conn.set_trace_callback(None)
+    assert len(rows) == 37
+    select = next(statement for statement in statements if statement.startswith("SELECT"))
+    assert "ORDER BY" in select
+    assert "LIMIT 37" in select
+    store.close()
 
 
 def test_database_pragmas_use_configured_values(paths) -> None:

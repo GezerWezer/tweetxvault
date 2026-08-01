@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import fcntl
+import threading
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import httpx
 from rich.console import Console
@@ -103,36 +104,37 @@ class SyncAllResult:
 
 @dataclass(slots=True)
 class SyncFollowupPlan:
-    enrich: bool = True
+    enabled: bool = True
+    resurrection: bool = True
     articles: bool = True
     media: bool = True
     unfurl: bool = True
     threads: bool = True
     tagging: bool = True
-    retry_failed: bool = False
-
-    @property
-    def enabled(self) -> bool:
-        return any(
-            (
-                self.enrich,
-                self.articles,
-                self.media,
-                self.unfurl,
-                self.threads,
-                self.tagging,
-                self.retry_failed,
-            )
-        )
 
 
 class ProcessLock:
+    _registry_guard = threading.Lock()
+    _registry: ClassVar[dict[str, tuple[Any, int]]] = {}
+
     def __init__(self, path: Path):
         self.path = path
         self._handle: Any | None = None
+        self._registry_key: str | None = None
 
-    def acquire(self) -> None:
+    def acquire(self, *, reentrant: bool = False) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        key = str(self.path.resolve())
+        with self._registry_guard:
+            held = self._registry.get(key)
+            if held is not None:
+                if not reentrant:
+                    raise ProcessLockError("Another tweetxvault archive job is already running.")
+                handle, count = held
+                self._registry[key] = (handle, count + 1)
+                self._handle = handle
+                self._registry_key = key
+                return
         handle = self.path.open("a+")
         try:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -140,13 +142,27 @@ class ProcessLock:
             handle.close()
             raise ProcessLockError("Another tweetxvault archive job is already running.") from exc
         self._handle = handle
+        self._registry_key = key
+        with self._registry_guard:
+            self._registry[key] = (handle, 1)
 
     def release(self) -> None:
-        if self._handle is None:
+        if self._handle is None or self._registry_key is None:
             return
-        fcntl.flock(self._handle.fileno(), fcntl.LOCK_UN)
-        self._handle.close()
+        handle = self._handle
+        key = self._registry_key
+        with self._registry_guard:
+            held_handle, count = self._registry[key]
+            if count > 1:
+                self._registry[key] = (held_handle, count - 1)
+                self._handle = None
+                self._registry_key = None
+                return
+            del self._registry[key]
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        handle.close()
         self._handle = None
+        self._registry_key = None
 
 
 def _build_url(
@@ -454,7 +470,7 @@ async def sync_collection(
         console=console,
         sleep=sleep,
     )
-    if followups is not None and followups.enabled:
+    if followups is not None:
         await _run_auto_followups(
             plan=followups,
             config=config,
@@ -480,27 +496,6 @@ def _log_embedding_warning(console: Console | None, message: str) -> None:
 def _log_sync_followup(console: Console | None, message: str) -> None:
     if console is not None:
         console.print(f"sync follow-up: {message}", highlight=False)
-
-
-async def _run_followup_archive_enrich(
-    *,
-    config: AppConfig,
-    paths: XDGPaths,
-    auth_bundle: ResolvedAuthBundle,
-    transport: httpx.AsyncBaseTransport | None,
-    console: Console,
-):
-    from tweetxvault.archive_import import enrich_imported_archive
-
-    return await enrich_imported_archive(
-        limit=200,
-        config=config,
-        paths=paths,
-        auth_bundle=auth_bundle,
-        transport=transport,
-        console=console,
-        reconcile_live=False,
-    )
 
 
 async def _run_followup_threads(
@@ -613,66 +608,7 @@ async def _run_auto_followups(
     console: Console,
     sleep: Callable[[float], Awaitable[None]],
 ) -> None:
-    if not plan.enabled:
-        return
-
-    if plan.enrich:
-        _log_sync_followup(console, "running archive enrich")
-        try:
-            result = await _run_followup_archive_enrich(
-                config=config,
-                paths=paths,
-                auth_bundle=auth_bundle,
-                transport=transport,
-                console=console,
-            )
-        except ConfigError as exc:
-            _log_sync_followup(console, f"archive enrich skipped ({exc})")
-        except Exception as exc:
-            _log_embedding_warning(
-                console,
-                "sync follow-up archive enrich failed; "
-                f"run 'tweetxvault import enrich' later ({exc})",
-            )
-        else:
-            _log_sync_followup(
-                console,
-                "archive enrich: "
-                f"{result.detail_lookups} refreshed, "
-                f"{result.detail_terminal_unavailable} terminal, "
-                f"{result.detail_transient_failures} transient failures, "
-                f"{result.pending_enrichment} pending",
-            )
-
-    if plan.enrich:  # only resurrect if enrich is enabled
-        _log_sync_followup(console, "running resurrect dead tweets")
-        try:
-            from tweetxvault.archive_import import resurrect_dead_tweets
-
-            result = await resurrect_dead_tweets(
-                limit=None if plan.retry_failed else 200,
-                config=config,
-                paths=paths,
-                auth_bundle=auth_bundle,
-                transport=transport,
-                console=console,
-            )
-        except Exception as exc:
-            _log_embedding_warning(
-                console,
-                f"sync follow-up resurrect failed ({exc})",
-            )
-        else:
-            _log_sync_followup(
-                console,
-                "resurrect: "
-                f"{result.detail_lookups} resurrected, "
-                f"{result.detail_terminal_unavailable} still dead, "
-                f"{result.detail_transient_failures} transient failures, "
-                f"{result.pending_enrichment} remaining",
-            )
-
-    if plan.threads:
+    if plan.enabled and plan.threads:
         _log_sync_followup(console, "running threads expand")
         try:
             result = await _run_followup_threads(
@@ -699,7 +635,37 @@ async def _run_auto_followups(
                 f"{result.failed} failed",
             )
 
-    if plan.articles:
+    if plan.enabled and plan.resurrection:
+        _log_sync_followup(console, "running resurrection checks")
+        try:
+            from tweetxvault.resurrection import (
+                DEFAULT_RESURRECTION_BUDGET,
+                resurrect_due_tweets,
+            )
+
+            result = await resurrect_due_tweets(
+                budget=DEFAULT_RESURRECTION_BUDGET,
+                config=config,
+                paths=paths,
+                auth_bundle=auth_bundle,
+                transport=transport,
+                console=console,
+                sleep=sleep,
+            )
+        except Exception as exc:
+            _log_embedding_warning(console, f"sync follow-up resurrection failed ({exc})")
+        else:
+            _log_sync_followup(
+                console,
+                "resurrection: "
+                f"{result.attempted} checked, "
+                f"{result.resurrected} returned, "
+                f"{result.still_unavailable} still unavailable, "
+                f"{result.transient_failures} transient failures, "
+                f"{result.remaining_due} due",
+            )
+
+    if plan.enabled and plan.articles:
         _log_sync_followup(console, "running articles refresh")
         try:
             result = await _run_followup_articles(
@@ -725,7 +691,7 @@ async def _run_auto_followups(
                 f"{result.failed} failed",
             )
 
-    if plan.media:
+    if plan.enabled and plan.media:
         _log_sync_followup(console, "running media download")
         try:
             result = await _run_followup_media(
@@ -749,7 +715,7 @@ async def _run_auto_followups(
                 f"{result.failed} failed",
             )
 
-    if plan.unfurl:
+    if plan.enabled and plan.unfurl:
         _log_sync_followup(console, "running unfurl")
         try:
             result = await _run_followup_unfurl(
@@ -771,7 +737,7 @@ async def _run_auto_followups(
                 f"{result.failed} failed",
             )
 
-    if plan.tagging and config.tagging.enabled:
+    if plan.enabled and plan.tagging and config.tagging.enabled:
         _log_sync_followup(console, "running media tagging")
         try:
             tagged_count = await _run_followup_tagging(
@@ -789,6 +755,15 @@ async def _run_auto_followups(
                 console,
                 f"tagging: {tagged_count} tagged",
             )
+
+    from tweetxvault.reminders import print_pending_archive_enrichment_reminder
+
+    store = open_archive_store(paths, create=False, config=config)
+    if store is not None:
+        try:
+            print_pending_archive_enrichment_reminder(console, store)
+        finally:
+            store.close()
 
 
 async def _sync_collection_ready(
@@ -818,6 +793,9 @@ async def _sync_collection_ready(
     try:
         store = open_archive_store(paths, create=True, config=config)
         assert store is not None
+        from tweetxvault.reminders import print_archive_migration_report
+
+        print_archive_migration_report(console, store)
         try:
             store.ensure_archive_owner_id(preflight.auth.user_id)
         except ArchiveOwnerMismatchError:
@@ -1018,7 +996,7 @@ async def sync_all(
             errors[collection] = str(exc)
             console.print(f"{collection}: failed ({exc})")
             break
-    if exit_code == 0 and followups is not None and followups.enabled:
+    if exit_code == 0 and followups is not None:
         await _run_auto_followups(
             plan=followups,
             config=config,

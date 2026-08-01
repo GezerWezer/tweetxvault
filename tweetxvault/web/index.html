@@ -54,6 +54,17 @@
             </div>
         </div>
 
+        <div x-show="archiveEnrichmentIncomplete > 0" x-cloak role="alert"
+             class="px-4 py-3 border-b border-[var(--border-color)] bg-[color-mix(in_srgb,var(--accent-color)_12%,var(--bg-primary))] text-sm text-[var(--text-primary)]">
+            <div class="font-semibold">
+                Archive enrichment is incomplete:
+                <span x-text="archiveEnrichmentIncomplete.toLocaleString()"></span> tweets remain.
+            </div>
+            <div class="mt-1 text-[var(--text-secondary)]">
+                Run <code class="font-mono text-[var(--accent-color)]">tweetxvault import enrich</code> to continue.
+            </div>
+        </div>
+
         <!-- LIST VIEW -->
         <div x-show="viewMode === 'list'" class="pb-4">
             <!-- Count Header -->
@@ -1518,7 +1529,7 @@
                             <div class="stats-grid">
                                 <div class="stats-card">
                                     <div class="stats-label">Enriched <svg class="stats-info-icon" viewBox="0 0 24 24" fill="currentColor"><title>Posts that have been fully enriched with metadata</title><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path d="M11 17h2v-6h-2v6zm1-8a1 1 0 100-2 1 1 0 000 2z"/></svg></div>
-                                    <div class="stats-value" x-text="statsHealth.enrichment.done.toLocaleString()"></div>
+                                    <div class="stats-value" x-text="statsHealth.enrichment.available.toLocaleString()"></div>
                                 </div>
                                 <div class="stats-card">
                                     <div class="stats-label">Pending <svg class="stats-info-icon" viewBox="0 0 24 24" fill="currentColor"><title>Posts awaiting enrichment processing</title><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path d="M11 17h2v-6h-2v6zm1-8a1 1 0 100-2 1 1 0 000 2z"/></svg></div>

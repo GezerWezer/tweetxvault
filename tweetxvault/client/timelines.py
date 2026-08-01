@@ -6,6 +6,7 @@ import asyncio
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 from urllib.parse import urlencode
 
@@ -20,7 +21,13 @@ from tweetxvault.client.features import (
     build_user_tweets_features,
 )
 from tweetxvault.config import API_BASE_URL, SyncConfig
-from tweetxvault.extractor import extract_author_fields, extract_canonical_text, unwrap_tweet_result
+from tweetxvault.extractor import (
+    classify_tweet_unavailability,
+    extract_author_fields,
+    extract_canonical_text,
+    extract_tweet_unavailability_detail,
+    unwrap_tweet_result,
+)
 
 
 @dataclass(slots=True)
@@ -33,6 +40,57 @@ class TimelineTweet:
     created_at: str | None
     sort_index: str | None
     raw_json: dict[str, Any]
+
+
+@dataclass(slots=True)
+class TweetUnavailableInfo:
+    tweet_id: str
+    typename: str
+    reason: str
+    detail: str | None
+    raw_result: dict[str, Any]
+
+
+class FocalResultKind(StrEnum):
+    AVAILABLE = "available"
+    EXPLICIT_UNAVAILABLE = "explicit_unavailable"
+    ABSENT = "absent"
+
+
+MAX_CONSECUTIVE_FOCAL_ABSENCES = 3
+
+
+@dataclass(slots=True)
+class FocalTweetDetailResult:
+    kind: FocalResultKind
+    tweet: TimelineTweet | None = None
+    unavailable: TweetUnavailableInfo | None = None
+
+    @property
+    def is_available(self) -> bool:
+        return self.kind == FocalResultKind.AVAILABLE
+
+    @property
+    def is_explicitly_unavailable(self) -> bool:
+        return self.kind == FocalResultKind.EXPLICIT_UNAVAILABLE
+
+    @property
+    def is_absent(self) -> bool:
+        return self.kind == FocalResultKind.ABSENT
+
+    @property
+    def tweet_id(self) -> str:
+        if self.tweet is not None:
+            return self.tweet.tweet_id
+        assert self.unavailable is not None
+        return self.unavailable.tweet_id
+
+    @property
+    def raw_json(self) -> dict[str, Any]:
+        if self.tweet is not None:
+            return self.tweet.raw_json
+        assert self.unavailable is not None
+        return self.unavailable.raw_result
 
 
 def _encode_param(value: dict[str, Any]) -> str:
@@ -133,13 +191,16 @@ async def fetch_page(
     )
 
 
-def _extract_tweet_results_from_content(content: dict[str, Any]) -> list[dict[str, Any]]:
-    results: list[dict[str, Any]] = []
+def _extract_raw_tweet_result_entries(
+    content: dict[str, Any],
+    entry_id: str | None,
+) -> list[tuple[dict[str, Any], str | None]]:
+    results: list[tuple[dict[str, Any], str | None]] = []
     item_content = content.get("itemContent") or content.get("content", {}).get("itemContent")
     if isinstance(item_content, dict):
-        result = unwrap_tweet_result(item_content.get("tweet_results", {}).get("result"))
-        if result:
-            results.append(result)
+        result = item_content.get("tweet_results", {}).get("result")
+        if isinstance(result, dict):
+            results.append((result, entry_id))
 
     for item in content.get("items", []):
         if not isinstance(item, dict):
@@ -147,10 +208,25 @@ def _extract_tweet_results_from_content(content: dict[str, Any]) -> list[dict[st
         nested_item = item.get("item", {})
         nested_content = nested_item.get("itemContent")
         if isinstance(nested_content, dict):
-            result = unwrap_tweet_result(nested_content.get("tweet_results", {}).get("result"))
-            if result:
-                results.append(result)
+            result = nested_content.get("tweet_results", {}).get("result")
+            if isinstance(result, dict):
+                nested_entry_id = item.get("entryId") or nested_item.get("entryId") or entry_id
+                results.append(
+                    (result, str(nested_entry_id) if nested_entry_id is not None else None)
+                )
     return results
+
+
+def _extract_raw_tweet_results_from_content(content: dict[str, Any]) -> list[dict[str, Any]]:
+    return [result for result, _entry_id in _extract_raw_tweet_result_entries(content, None)]
+
+
+def _extract_tweet_results_from_content(content: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        unwrapped
+        for raw_result in _extract_raw_tweet_results_from_content(content)
+        if (unwrapped := unwrap_tweet_result(raw_result)) is not None
+    ]
 
 
 def _iter_entries(node: Any) -> list[dict[str, Any]]:
@@ -177,6 +253,8 @@ def _extract_cursor(entry: dict[str, Any]) -> str | None:
 
 
 def _tweet_from_result(result: dict[str, Any], *, sort_index: str | None) -> TimelineTweet | None:
+    if result.get("__typename") in {"TweetTombstone", "TweetUnavailable"}:
+        return None
     legacy = result.get("legacy") or {}
     tweet_id = result.get("rest_id")
     if not tweet_id:
@@ -231,8 +309,49 @@ def parse_tweet_detail_tweets(data: dict[str, Any]) -> list[TimelineTweet]:
 def parse_tweet_detail_response(
     data: dict[str, Any],
     focal_tweet_id: str,
-) -> TimelineTweet | None:
-    for tweet in parse_tweet_detail_tweets(data):
-        if tweet.tweet_id == focal_tweet_id:
-            return tweet
-    return None
+) -> FocalTweetDetailResult:
+    for entry in _iter_entries(data):
+        entry_id = str(entry.get("entryId") or "")
+        sort_index = entry.get("sortIndex")
+        for raw_result, result_entry_id in _extract_raw_tweet_result_entries(
+            entry.get("content", {}), entry_id
+        ):
+            result = unwrap_tweet_result(raw_result)
+            if result is None:
+                continue
+            tweet = _tweet_from_result(result, sort_index=sort_index)
+            if tweet is not None:
+                if tweet.tweet_id == focal_tweet_id:
+                    return FocalTweetDetailResult(
+                        kind=FocalResultKind.AVAILABLE,
+                        tweet=tweet,
+                    )
+                continue
+            typename = str(result.get("__typename") or raw_result.get("__typename") or "")
+            if typename not in {"TweetTombstone", "TweetUnavailable"}:
+                continue
+            detail = extract_tweet_unavailability_detail(result)
+            unavailable = TweetUnavailableInfo(
+                tweet_id=focal_tweet_id,
+                typename=typename,
+                reason=classify_tweet_unavailability(typename, detail),
+                detail=detail,
+                raw_result=result,
+            )
+            result_id = str(result.get("rest_id") or raw_result.get("rest_id") or "")
+            entry_matches = result_entry_id == f"tweet-{focal_tweet_id}"
+            if result_id == focal_tweet_id or (not result_id and entry_matches):
+                return FocalTweetDetailResult(
+                    kind=FocalResultKind.EXPLICIT_UNAVAILABLE,
+                    unavailable=unavailable,
+                )
+    return FocalTweetDetailResult(
+        kind=FocalResultKind.ABSENT,
+        unavailable=TweetUnavailableInfo(
+            tweet_id=focal_tweet_id,
+            typename="FocalTweetAbsent",
+            reason="unavailable_unknown",
+            detail="TweetDetail response did not contain an identifiable focal result.",
+            raw_result={},
+        ),
+    )

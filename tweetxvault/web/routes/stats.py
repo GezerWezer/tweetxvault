@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Depends
 
 from tweetxvault.storage import ArchiveStore
+from tweetxvault.storage.backend import AVAILABLE_ENRICHMENT_STATES
 from tweetxvault.web.deps import get_store, verify_credentials
 
 router = APIRouter(
@@ -176,12 +177,36 @@ def get_stats_health(
         ).fetchone()[0]
         or 0
     )
+    available_placeholders = ", ".join("?" for _state in AVAILABLE_ENRICHMENT_STATES)
+    enrich_available = (
+        conn.execute(
+            f"""
+            SELECT count(*)
+            FROM archive
+            WHERE record_type = 'tweet_object'
+              AND enrichment_state IN ({available_placeholders})
+            """,
+            AVAILABLE_ENRICHMENT_STATES,
+        ).fetchone()[0]
+        or 0
+    )
+    enrich_resurrected = enrich_available - enrich_done
     enrich_pending = (
         conn.execute(
             """
             SELECT count(*)
             FROM archive
             WHERE record_type = 'tweet_object' AND enrichment_state = 'pending'
+            """
+        ).fetchone()[0]
+        or 0
+    )
+    enrich_transient = (
+        conn.execute(
+            """
+            SELECT count(*)
+            FROM archive
+            WHERE record_type = 'tweet_object' AND enrichment_state = 'transient_failure'
             """
         ).fetchone()[0]
         or 0
@@ -220,8 +245,12 @@ def get_stats_health(
 
     return {
         "enrichment": {
+            "available": enrich_available,
             "done": enrich_done,
+            "resurrected": enrich_resurrected,
             "pending": enrich_pending,
+            "transient": enrich_transient,
+            "incomplete": enrich_pending + enrich_transient,
             "terminal": enrich_terminal,
         },
         "threads_expanded": threads_expanded,

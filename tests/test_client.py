@@ -24,6 +24,7 @@ from tweetxvault.client.base import (
     is_stale_query_id,
 )
 from tweetxvault.client.timelines import (
+    FocalResultKind,
     build_bookmarks_url,
     build_likes_url,
     build_tweet_detail_url,
@@ -34,6 +35,23 @@ from tweetxvault.client.timelines import (
     parse_tweet_detail_tweets,
 )
 from tweetxvault.config import SyncConfig
+
+
+def _detail_payload(entries: list[dict[str, object]]) -> dict[str, object]:
+    return {
+        "data": {
+            "threaded_conversation_with_injections_v2": {
+                "instructions": [{"type": "TimelineAddEntries", "entries": entries}]
+            }
+        }
+    }
+
+
+def _detail_entry(entry_id: str, result: dict[str, object]) -> dict[str, object]:
+    return {
+        "entryId": entry_id,
+        "content": {"itemContent": {"tweet_results": {"result": result}}},
+    }
 
 
 def test_build_timeline_urls() -> None:
@@ -64,8 +82,11 @@ def test_parse_tweet_detail_response_real_article_fixture() -> None:
     fixture = Path(__file__).parent / "fixtures" / "dimitris_article_tweet_detail.json"
     payload = json.loads(fixture.read_text(encoding="utf-8"))
 
-    tweet = parse_tweet_detail_response(payload, "2026531440414925307")
+    focal = parse_tweet_detail_response(payload, "2026531440414925307")
 
+    assert focal.is_available
+    assert focal.kind == FocalResultKind.AVAILABLE
+    tweet = focal.tweet
     assert tweet is not None
     assert tweet.tweet_id == "2026531440414925307"
     article = ((tweet.raw_json.get("article") or {}).get("article_results") or {}).get(
@@ -92,7 +113,135 @@ def test_parse_tweet_detail_tweets_collects_all_context_tweets() -> None:
     tweets = parse_tweet_detail_tweets(payload)
 
     assert [tweet.tweet_id for tweet in tweets] == ["100", "200"]
-    assert parse_tweet_detail_response(payload, "200") is not None
+    assert parse_tweet_detail_response(payload, "200").is_available
+
+
+def test_parse_tweet_detail_response_preserves_unavailable_focal_payload() -> None:
+    unavailable = {
+        "__typename": "TweetTombstone",
+        "tombstone": {"text": {"text": "These posts are protected."}},
+        "reason": {"text": "raw reason metadata"},
+    }
+    payload = {
+        "data": {
+            "threaded_conversation_with_injections_v2": {
+                "instructions": [
+                    {
+                        "entries": [
+                            {
+                                "entryId": "tweet-900",
+                                "content": {
+                                    "itemContent": {"tweet_results": {"result": unavailable}}
+                                },
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+    }
+
+    focal = parse_tweet_detail_response(payload, "900")
+
+    assert not focal.is_available
+    assert focal.is_explicitly_unavailable
+    assert focal.unavailable is not None
+    assert focal.unavailable.reason == "protected_account"
+    assert focal.unavailable.detail == "These posts are protected."
+    assert focal.unavailable.raw_result is unavailable
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "This Post was deleted by the Post author.",
+        "You're unable to view this Post because this account owner limits who can view "
+        "their Posts.",
+    ],
+)
+def test_parse_tweet_detail_does_not_assign_unrelated_tombstone_to_focal(
+    message: str,
+) -> None:
+    unrelated = {
+        "__typename": "TweetTombstone",
+        "rest_id": "999",
+        "tombstone": {"text": {"text": message}},
+    }
+
+    focal = parse_tweet_detail_response(
+        _detail_payload([_detail_entry("tweet-999", unrelated)]),
+        "123",
+    )
+
+    assert not focal.is_available
+    assert focal.is_absent
+    assert focal.unavailable is not None
+    assert focal.unavailable.typename == "FocalTweetAbsent"
+    assert focal.unavailable.reason == "unavailable_unknown"
+    assert focal.unavailable.raw_result == {}
+
+
+def test_parse_tweet_detail_matches_focal_tombstone_by_exact_entry_id() -> None:
+    unavailable = {
+        "__typename": "TweetTombstone",
+        "tombstone": {"text": {"text": "This account is suspended."}},
+    }
+
+    focal = parse_tweet_detail_response(
+        _detail_payload([_detail_entry("tweet-123", unavailable)]),
+        "123",
+    )
+
+    assert focal.unavailable is not None
+    assert focal.is_explicitly_unavailable
+    assert focal.unavailable.reason == "suspended_account"
+    assert focal.unavailable.raw_result is unavailable
+
+
+def test_parse_tweet_detail_prefers_available_focal_over_unrelated_tombstones() -> None:
+    unrelated = {
+        "__typename": "TweetTombstone",
+        "rest_id": "999",
+        "tombstone": {"text": {"text": "This Post was deleted by the Post author."}},
+    }
+    available = make_tweet_result("123", "available focal")
+
+    focal = parse_tweet_detail_response(
+        _detail_payload(
+            [
+                _detail_entry("tweet-999", unrelated),
+                _detail_entry("tweet-123", available),
+            ]
+        ),
+        "123",
+    )
+
+    assert focal.is_available
+    assert focal.tweet is not None
+    assert focal.tweet.tweet_id == "123"
+
+
+def test_parse_tweet_detail_multiple_unmatched_tombstones_remain_unknown() -> None:
+    entries = [
+        _detail_entry(
+            f"tweet-{tweet_id}",
+            {
+                "__typename": "TweetUnavailable",
+                "rest_id": tweet_id,
+                "reason": message,
+            },
+        )
+        for tweet_id, message in (
+            ("998", "This account is suspended."),
+            ("999", "This Post was deleted by the Post author."),
+        )
+    ]
+
+    focal = parse_tweet_detail_response(_detail_payload(entries), "123")
+
+    assert focal.unavailable is not None
+    assert focal.unavailable.typename == "FocalTweetAbsent"
+    assert focal.unavailable.reason == "unavailable_unknown"
 
 
 def test_parse_timeline_response_bookmarks_shape() -> None:

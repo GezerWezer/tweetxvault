@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import mimetypes
@@ -23,6 +24,8 @@ from rich.console import Console
 from tweetxvault.auth import ResolvedAuthBundle, resolve_auth_bundle
 from tweetxvault.client.base import AdaptiveRequestPacer, build_async_client
 from tweetxvault.client.timelines import (
+    MAX_CONSECUTIVE_FOCAL_ABSENCES,
+    FocalResultKind,
     TimelineTweet,
     build_tweet_detail_url,
     fetch_page,
@@ -35,7 +38,9 @@ from tweetxvault.exceptions import (
     ConfigError,
     FeatureFlagDriftError,
     RateLimitExhaustedError,
+    RepeatedFocalAbsenceError,
     StaleQueryIdError,
+    TweetXVaultError,
 )
 from tweetxvault.extractor import ExtractedTweetGraph, extract_secondary_objects
 from tweetxvault.jobs import (
@@ -46,6 +51,7 @@ from tweetxvault.jobs import (
     resolve_job_context,
 )
 from tweetxvault.query_ids import QueryIdStore, refresh_query_ids
+from tweetxvault.resurrection import resurrection_retry_schedule, transient_retry_at
 from tweetxvault.storage import ArchiveStore, open_archive_store
 from tweetxvault.storage.backend import ARCHIVE_SOURCE, LIVE_SOURCE, _PageBuffer
 from tweetxvault.sync import ProcessLock, sync_collection
@@ -56,6 +62,7 @@ _MANIFEST_ASSIGNMENT_RE = re.compile(r"^\s*window\.__THAR_CONFIG\s*=\s*", re.DOT
 _AUTHORED_IMPORT_PREFETCH_CHUNK = 50
 _LIKE_IMPORT_PREFETCH_CHUNK = 200
 _DETAIL_ENRICH_WRITE_BATCH = 100
+_DETAIL_ENRICH_PAGE_SIZE = 500
 _T = TypeVar("_T")
 
 
@@ -105,6 +112,9 @@ class ArchiveImportResult:
     detail_terminal_unavailable: int = 0
     detail_transient_failures: int = 0
     pending_enrichment: int = 0
+    pending_untouched: int = 0
+    transient_due: int = 0
+    transient_delayed: int = 0
 
 
 @dataclass(slots=True)
@@ -115,6 +125,48 @@ class ArchiveEnrichResult:
     detail_terminal_unavailable: int = 0
     detail_transient_failures: int = 0
     pending_enrichment: int = 0
+    selected: int = 0
+    completed: int = 0
+    classified_unavailable: int = 0
+    transient_failures: int = 0
+    pending_untouched: int = 0
+    transient_due: int = 0
+    transient_delayed: int = 0
+
+    def __iter__(self):
+        yield self.detail_lookups
+        yield self.detail_terminal_unavailable
+        yield self.detail_transient_failures
+        yield self.pending_enrichment
+
+
+class ArchiveEnrichmentInterrupted(KeyboardInterrupt):
+    def __init__(self, remaining: int):
+        super().__init__("Archive enrichment interrupted.")
+        self.remaining = remaining
+
+
+class ArchiveEnrichmentAborted(TweetXVaultError):
+    def __init__(self, remaining: int, cause: Exception):
+        super().__init__(f"Archive enrichment stopped after {cause.__class__.__name__}: {cause}")
+        self.remaining = remaining
+        self.cause = cause
+
+
+@dataclass(slots=True)
+class _FocalAbsenceTracker:
+    consecutive: int = 0
+
+    def observe(self, kind: FocalResultKind, tweet_id: str) -> None:
+        if kind == FocalResultKind.ABSENT:
+            self.consecutive += 1
+            if self.consecutive >= MAX_CONSECUTIVE_FOCAL_ABSENCES:
+                raise RepeatedFocalAbsenceError(
+                    f"TweetDetail omitted its requested focal tweet for "
+                    f"{self.consecutive} consecutive responses; last target was {tweet_id}."
+                )
+        else:
+            self.consecutive = 0
 
 
 def _log_archive_phase(console: Console, prefix: str, message: str) -> None:
@@ -983,78 +1035,66 @@ async def _run_archive_followup(
         except ConfigError as exc:
             warnings.append(f"detail enrichment skipped: {exc}")
             resolved_auth = None
-    detail_succeeded = 0
-    detail_terminal = 0
-    detail_transient = 0
-    pending = 0
+    enrichment_result = ArchiveEnrichResult()
     if resolved_auth is not None:
         try:
-            (
-                detail_succeeded,
-                detail_terminal,
-                detail_transient,
-                pending,
-            ) = await _enrich_pending_rows(
-                limit=detail_limit,
-                config=config,
-                paths=paths,
-                auth_bundle=resolved_auth,
-                transport=transport,
-                console=console,
-                status=status,
-            )
+            absence_tracker = _FocalAbsenceTracker()
+            page_limit = detail_limit if detail_limit is not None else _DETAIL_ENRICH_PAGE_SIZE
+            while True:
+                page = await _enrich_pending_rows(
+                    limit=page_limit,
+                    config=config,
+                    paths=paths,
+                    auth_bundle=resolved_auth,
+                    transport=transport,
+                    console=console,
+                    status=status,
+                    absence_tracker=absence_tracker,
+                )
+                if isinstance(page, tuple):
+                    completed, unavailable, transient, remaining = page
+                    page = ArchiveEnrichResult(
+                        detail_lookups=completed,
+                        detail_terminal_unavailable=unavailable,
+                        detail_transient_failures=transient,
+                        pending_enrichment=remaining,
+                        selected=completed + unavailable + transient,
+                        completed=completed,
+                        classified_unavailable=unavailable,
+                        transient_failures=transient,
+                        pending_untouched=remaining,
+                    )
+                enrichment_result.selected += page.selected
+                enrichment_result.completed += page.completed
+                enrichment_result.classified_unavailable += page.classified_unavailable
+                enrichment_result.transient_failures += page.transient_failures
+                enrichment_result.detail_lookups += page.detail_lookups
+                enrichment_result.detail_terminal_unavailable += page.detail_terminal_unavailable
+                enrichment_result.detail_transient_failures += page.detail_transient_failures
+                enrichment_result.pending_enrichment = page.pending_enrichment
+                enrichment_result.pending_untouched = page.pending_untouched
+                enrichment_result.transient_due = page.transient_due
+                enrichment_result.transient_delayed = page.transient_delayed
+                if detail_limit is not None or page.selected < page_limit:
+                    break
         except Exception as exc:
-            warnings.append(f"detail enrichment failed: {exc}")
             async with locked_archive_job(config=config, paths=paths) as job:
-                pending = job.store.count_tweet_objects_for_enrichment()
+                remaining = job.store.count_incomplete_initial_enrichment()
+            raise ArchiveEnrichmentAborted(remaining, exc) from exc
     else:
         async with locked_archive_job(config=config, paths=paths) as job:
-            pending = job.store.count_tweet_objects_for_enrichment()
+            enrichment_result = _archive_enrich_counts(job.store)
+    enrichment_result.warnings = warnings
+    enrichment_result.reconciled_collections = reconciled_collections
+    return enrichment_result
+
+
+def _archive_enrich_counts(store: ArchiveStore) -> ArchiveEnrichResult:
     return ArchiveEnrichResult(
-        warnings=warnings,
-        reconciled_collections=reconciled_collections,
-        detail_lookups=detail_succeeded,
-        detail_terminal_unavailable=detail_terminal,
-        detail_transient_failures=detail_transient,
-        pending_enrichment=pending,
-    )
-
-
-async def resurrect_dead_tweets(
-    *,
-    limit: int | None,
-    config: AppConfig,
-    paths: XDGPaths,
-    auth_bundle: ResolvedAuthBundle | None = None,
-    transport: httpx.AsyncBaseTransport | None = None,
-    console: Console | None = None,
-    status: Callable[[str], None] | None = None,
-) -> ArchiveEnrichResult:
-    config, paths = resolve_job_context(config=config, paths=paths)
-    console = console or Console(stderr=True)
-    warnings: list[str] = []
-
-    if auth_bundle is None:
-        auth_bundle = resolve_auth_bundle(config)
-
-    succeeded, terminal, transient, remaining = await _enrich_pending_rows(
-        limit=limit,
-        config=config,
-        paths=paths,
-        auth_bundle=auth_bundle,
-        transport=transport,
-        console=console,
-        resurrect_dead=True,
-        status=status,
-    )
-
-    return ArchiveEnrichResult(
-        warnings=warnings,
-        reconciled_collections=[],
-        detail_lookups=succeeded,
-        detail_terminal_unavailable=terminal,
-        detail_transient_failures=transient,
-        pending_enrichment=remaining,
+        pending_enrichment=store.count_incomplete_initial_enrichment(),
+        pending_untouched=store.count_pending_initial_enrichment(),
+        transient_due=store.count_due_transient_enrichment(),
+        transient_delayed=store.count_delayed_transient_enrichment(),
     )
 
 
@@ -1066,26 +1106,21 @@ async def _enrich_pending_rows(
     auth_bundle: ResolvedAuthBundle,
     transport: httpx.AsyncBaseTransport | None,
     console: Console,
-    resurrect_dead: bool = False,
     status: Callable[[str], None] | None = None,
-) -> tuple[int, int, int, int]:
+    absence_tracker: _FocalAbsenceTracker | None = None,
+) -> ArchiveEnrichResult:
     if limit is not None and limit <= 0:
         async with locked_archive_job(config=config, paths=paths, console=console) as job:
-            if resurrect_dead:
-                return 0, 0, 0, job.store.count_dead_tweets_for_resurrection()
-            return 0, 0, 0, job.store.count_tweet_objects_for_enrichment()
+            return _archive_enrich_counts(job.store)
 
     async with locked_archive_job(config=config, paths=paths, console=console) as job:
         store = job.store
-        if resurrect_dead:
-            rows = store.list_dead_tweets_for_resurrection(limit=limit)
-            desc_type = "dead tweets for resurrection"
-        else:
-            rows = store.list_tweet_objects_for_enrichment(limit=limit)
-            desc_type = "pending tweets"
+        selection_limit = _DETAIL_ENRICH_PAGE_SIZE if limit is None else limit
+        rows = store.list_tweet_objects_for_enrichment(limit=selection_limit)
+        desc_type = "eligible sparse tweets"
         if not rows:
             _emit_status(status, f"no {desc_type} available")
-            return 0, 0, 0, 0
+            return _archive_enrich_counts(store)
         limit_suffix = "" if limit is None else f" (limit {limit})"
         _emit_status(status, f"detail enrichment over {len(rows)} {desc_type}{limit_suffix}")
         query_store = QueryIdStore(paths)
@@ -1102,6 +1137,7 @@ async def _enrich_pending_rows(
         pacer = AdaptiveRequestPacer(config.sync.detail_delay)
         write_buffer = _PageBuffer()
         buffered_writes = 0
+        absence_tracker = absence_tracker or _FocalAbsenceTracker()
 
         def flush_detail_writes() -> None:
             nonlocal buffered_writes
@@ -1122,6 +1158,7 @@ async def _enrich_pending_rows(
                 for index, row in enumerate(rows, start=1):
                     tweet_id = row["tweet_id"]
                     wrote_row = False
+                    absence_error: RepeatedFocalAbsenceError | None = None
                     await pacer.wait(attempted=index - 1)
 
                     async def refresh_once(tweet_id: str = tweet_id) -> str:
@@ -1133,6 +1170,7 @@ async def _enrich_pending_rows(
                         query_ids.update(refreshed)
                         return build_tweet_detail_url(query_ids["TweetDetail"], tweet_id)
 
+                    write_checkpoint = write_buffer.checkpoint()
                     try:
                         response = await fetch_page(
                             client,
@@ -1153,17 +1191,59 @@ async def _enrich_pending_rows(
                         )
                         pacer.observe(response, status=status)
                         payload = response.json()
-                        tweet = parse_tweet_detail_response(payload, tweet_id)
-                        if tweet is None:
-                            raise ValueError(f"TweetDetail did not include focal tweet {tweet_id}.")
-                        store.persist_tweet_detail(
-                            tweet=tweet,
-                            raw_json=payload,
-                            http_status=response.status_code,
-                            cursor=write_buffer,
-                        )
-                        succeeded += 1
+                        focal = parse_tweet_detail_response(payload, tweet_id)
+                        if focal.kind == FocalResultKind.AVAILABLE and focal.tweet is not None:
+                            absence_tracker.observe(focal.kind, tweet_id)
+                            store.persist_tweet_detail(
+                                tweet=focal.tweet,
+                                raw_json=payload,
+                                http_status=response.status_code,
+                                cursor=write_buffer,
+                            )
+                            succeeded += 1
+                        elif focal.kind == FocalResultKind.EXPLICIT_UNAVAILABLE:
+                            absence_tracker.observe(focal.kind, tweet_id)
+                            assert focal.unavailable is not None
+                            eligible, next_retry = resurrection_retry_schedule(
+                                focal.unavailable.reason, 0
+                            )
+                            store.persist_unavailable_tweet(
+                                tweet_id=tweet_id,
+                                operation="TweetDetail",
+                                raw_json=payload,
+                                http_status=response.status_code,
+                                reason=focal.unavailable.reason,
+                                detail=focal.unavailable.detail,
+                                retry_eligible=eligible,
+                                next_retry_at=next_retry,
+                                retry_count=0,
+                                cursor=write_buffer,
+                            )
+                            terminal += 1
+                        else:
+                            assert focal.kind == FocalResultKind.ABSENT
+                            assert focal.unavailable is not None
+                            write_buffer.restore(write_checkpoint)
+                            retry_count = int(row.get("enrichment_retry_count") or 0) + 1
+                            store.update_tweet_object_enrichment(
+                                tweet_id,
+                                enrichment_state="transient_failure",
+                                enrichment_checked_at=utc_now(),
+                                enrichment_http_status=response.status_code,
+                                enrichment_reason="focal_tweet_absent",
+                                enrichment_detail=focal.unavailable.detail,
+                                enrichment_retry_count=retry_count,
+                                enrichment_next_retry_at=transient_retry_at(retry_count),
+                                enrichment_retry_eligible=None,
+                                cursor=write_buffer,
+                            )
+                            transient += 1
                         wrote_row = True
+                        if focal.kind == FocalResultKind.ABSENT:
+                            try:
+                                absence_tracker.observe(focal.kind, tweet_id)
+                            except RepeatedFocalAbsenceError as exc:
+                                absence_error = exc
                     except APIResponseError as exc:
                         if isinstance(
                             exc,
@@ -1174,66 +1254,79 @@ async def _enrich_pending_rows(
                         ):
                             raise
                         if exc.status_code == 410:
-                            store.update_tweet_object_enrichment(
-                                tweet_id,
-                                enrichment_state="terminal_unavailable",
-                                enrichment_checked_at=utc_now(),
-                                enrichment_http_status=exc.status_code,
-                                enrichment_reason="not_found",
+                            eligible, next_retry = resurrection_retry_schedule("not_found", 0)
+                            store.persist_unavailable_tweet(
+                                tweet_id=tweet_id,
+                                operation="TweetDetail",
+                                raw_json={"http_status": 410, "error": str(exc)},
+                                http_status=exc.status_code,
+                                reason="not_found",
+                                detail=str(exc),
+                                retry_eligible=eligible,
+                                next_retry_at=next_retry,
+                                retry_count=0,
                                 cursor=write_buffer,
                             )
                             terminal += 1
                             wrote_row = True
                         else:
+                            retry_count = int(row.get("enrichment_retry_count") or 0) + 1
                             store.update_tweet_object_enrichment(
                                 tweet_id,
                                 enrichment_state="transient_failure",
                                 enrichment_checked_at=utc_now(),
                                 enrichment_http_status=exc.status_code,
-                                enrichment_reason=exc.__class__.__name__,
+                                enrichment_reason=None,
+                                enrichment_detail=str(exc),
+                                enrichment_retry_count=retry_count,
+                                enrichment_next_retry_at=transient_retry_at(retry_count),
+                                enrichment_retry_eligible=None,
                                 cursor=write_buffer,
                             )
                             transient += 1
                             wrote_row = True
-                    except Exception as exc:
-                        from tweetxvault.exceptions import TerminalUnavailableError
-
-                        if isinstance(exc, TerminalUnavailableError):
-                            store.update_tweet_object_enrichment(
-                                tweet_id,
-                                enrichment_state="terminal_unavailable",
-                                enrichment_checked_at=utc_now(),
-                                enrichment_http_status=404,
-                                enrichment_reason="TerminalUnavailableError",
-                                cursor=write_buffer,
-                            )
-                            terminal += 1
-                            wrote_row = True
-                        else:
-                            store.update_tweet_object_enrichment(
-                                tweet_id,
-                                enrichment_state="transient_failure",
-                                enrichment_checked_at=utc_now(),
-                                enrichment_http_status=None,
-                                enrichment_reason=exc.__class__.__name__,
-                                cursor=write_buffer,
-                            )
-                            transient += 1
-                            wrote_row = True
+                    except httpx.TransportError as exc:
+                        retry_count = int(row.get("enrichment_retry_count") or 0) + 1
+                        store.update_tweet_object_enrichment(
+                            tweet_id,
+                            enrichment_state="transient_failure",
+                            enrichment_checked_at=utc_now(),
+                            enrichment_http_status=None,
+                            enrichment_reason=None,
+                            enrichment_detail=f"{exc.__class__.__name__}: {exc}",
+                            enrichment_retry_count=retry_count,
+                            enrichment_next_retry_at=transient_retry_at(retry_count),
+                            enrichment_retry_eligible=None,
+                            cursor=write_buffer,
+                        )
+                        transient += 1
+                        wrote_row = True
+                    except Exception:
+                        write_buffer.restore(write_checkpoint)
+                        raise
                     if wrote_row:
                         buffered_writes += 1
                         if buffered_writes >= _DETAIL_ENRICH_WRITE_BATCH:
                             flush_detail_writes()
+                    if absence_error is not None:
+                        flush_detail_writes()
+                        raise absence_error
                     if detail_progress:
                         detail_progress(index, len(rows))
         finally:
-            await client.aclose()
-            flush_detail_writes()
-        if resurrect_dead:
-            remaining = store.count_dead_tweets_for_resurrection()
-        else:
-            remaining = store.count_tweet_objects_for_enrichment()
-    return succeeded, terminal, transient, remaining
+            try:
+                await client.aclose()
+            finally:
+                flush_detail_writes()
+        result = _archive_enrich_counts(store)
+        result.selected = len(rows)
+        result.completed = succeeded
+        result.classified_unavailable = terminal
+        result.transient_failures = transient
+        result.detail_lookups = succeeded
+        result.detail_terminal_unavailable = terminal
+        result.detail_transient_failures = transient
+    return result
 
 
 def _manifest_generation_date(manifest: dict[str, Any]) -> str | None:
@@ -1330,6 +1423,19 @@ def _manifest_counts(manifest_row: dict[str, Any] | None) -> dict[str, int]:
     return counts
 
 
+def _manifest_all_counts(manifest_row: dict[str, Any] | None) -> dict[str, Any]:
+    if not manifest_row:
+        return _initial_counts()
+    raw = manifest_row.get("counts_json")
+    if not isinstance(raw, str) or not raw:
+        return _initial_counts()
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return _initial_counts()
+    return parsed if isinstance(parsed, dict) else _initial_counts()
+
+
 def _manifest_warnings(manifest_row: dict[str, Any] | None) -> list[str]:
     if not manifest_row:
         return []
@@ -1349,6 +1455,37 @@ def _list_import_manifest_rows(store: ArchiveStore) -> list[dict[str, Any]]:
     return store._query("record_type = 'import_manifest' AND status = 'completed'")
 
 
+def _finalize_import_enrichment_status(
+    store: ArchiveStore,
+    manifest_row: dict[str, Any],
+    *,
+    followup_status: str,
+    aborted_reason: str | None = None,
+    count_updates: dict[str, Any] | None = None,
+) -> None:
+    digest = manifest_row.get("archive_digest")
+    if not isinstance(digest, str) or not digest:
+        return
+    counts = _manifest_all_counts(manifest_row)
+    if count_updates:
+        counts.update(count_updates)
+    counts["pending_enrichment"] = store.count_incomplete_initial_enrichment()
+    counts["transient_due"] = store.count_due_transient_enrichment()
+    counts["transient_delayed"] = store.count_delayed_transient_enrichment()
+    counts.update(store.enrichment_status_counts())
+    store.set_import_manifest(
+        digest,
+        archive_generation_date=manifest_row.get("archive_generation_date"),
+        status=str(manifest_row.get("status") or "completed"),
+        import_started_at=manifest_row.get("import_started_at"),
+        import_completed_at=utc_now(),
+        warnings=_manifest_warnings(manifest_row),
+        counts=counts,
+        enrichment_followup_status=followup_status,
+        enrichment_aborted_reason=aborted_reason,
+    )
+
+
 def _aggregate_import_counts(manifest_rows: list[dict[str, Any]]) -> dict[str, int]:
     counts = _initial_counts()
     for row in manifest_rows:
@@ -1361,7 +1498,7 @@ def _aggregate_import_counts(manifest_rows: list[dict[str, Any]]) -> dict[str, i
 async def enrich_imported_archive(
     *,
     limit: int | None = None,
-    reconcile_live: bool = True,
+    reconcile_live: bool = False,
     config: AppConfig | None = None,
     paths: XDGPaths | None = None,
     auth_bundle: ResolvedAuthBundle | None = None,
@@ -1387,24 +1524,61 @@ async def enrich_imported_archive(
                 "No completed X archive import found. Run 'tweetxvault import x-archive' first."
             ) from exc
         raise
-    return await _run_archive_followup(
-        collections=_followup_collections_from_counts(counts),
-        detail_limit=limit,
-        reconcile_live=reconcile_live,
-        config=config,
-        paths=paths,
-        auth_bundle=auth_bundle,
-        transport=transport,
-        console=runner_console,
-        status=status,
-    )
+    try:
+        result = await _run_archive_followup(
+            collections=_followup_collections_from_counts(counts),
+            detail_limit=limit,
+            reconcile_live=reconcile_live,
+            config=config,
+            paths=paths,
+            auth_bundle=auth_bundle,
+            transport=transport,
+            console=runner_console,
+            status=status,
+        )
+    except (KeyboardInterrupt, asyncio.CancelledError) as exc:
+        async with locked_archive_job(config=config, paths=paths) as job:
+            remaining = job.store.count_incomplete_initial_enrichment()
+            for manifest_row in _list_import_manifest_rows(job.store):
+                _finalize_import_enrichment_status(
+                    job.store,
+                    manifest_row,
+                    followup_status="enrichment_interrupted",
+                    aborted_reason=str(exc) or exc.__class__.__name__,
+                )
+        raise ArchiveEnrichmentInterrupted(remaining) from exc
+    except Exception as exc:
+        async with locked_archive_job(config=config, paths=paths) as job:
+            for manifest_row in _list_import_manifest_rows(job.store):
+                _finalize_import_enrichment_status(
+                    job.store,
+                    manifest_row,
+                    followup_status="enrichment_aborted",
+                    aborted_reason=str(exc),
+                )
+        raise
+    else:
+        async with locked_archive_job(config=config, paths=paths) as job:
+            count_updates = {
+                "detail_lookups": result.detail_lookups,
+                "detail_terminal_unavailable": result.detail_terminal_unavailable,
+                "detail_transient_failures": result.detail_transient_failures,
+            }
+            for manifest_row in _list_import_manifest_rows(job.store):
+                _finalize_import_enrichment_status(
+                    job.store,
+                    manifest_row,
+                    followup_status="enrichment_complete",
+                    count_updates=count_updates,
+                )
+        return result
 
 
 async def import_x_archive(
     archive_path: Path,
     *,
     detail_lookups: int = 0,
-    enrich: bool = False,
+    enrich: bool = True,
     regen: bool = False,
     sample_limit: int | None = None,
     debug: bool = False,
@@ -1418,8 +1592,6 @@ async def import_x_archive(
     console = console or Console(stderr=True)
     status = _status_printer(console, "archive import", force=debug)
     runner_console = _runner_console(console, force=debug)
-    if enrich and detail_lookups > 0:
-        raise ConfigError("Use either --enrich or --detail-lookups, not both.")
     if sample_limit is not None and sample_limit <= 0:
         raise ConfigError("--sample-limit must be greater than zero.")
     _emit_status(status, f"opening {archive_path}")
@@ -1486,6 +1658,9 @@ async def import_x_archive(
         try:
             store = open_archive_store(paths, create=True, config=config)
             assert store is not None
+            from tweetxvault.reminders import print_archive_migration_report
+
+            print_archive_migration_report(console, store)
             write_tracker = ArchiveWriteTracker(store)
             store.ensure_archive_owner_id(identity.account_id)
             if regen:
@@ -1825,7 +2000,7 @@ async def import_x_archive(
         finally:
             lock.release()
 
-        if sampled_import and not followup_requested:
+        if sampled_import:
             warnings.append(
                 "sampled import skipped automatic live reconciliation and detail enrichment; "
                 "rerun without --sample-limit for normal follow-up"
@@ -1849,17 +2024,41 @@ async def import_x_archive(
         # the outer lock across potentially long network I/O.
         _emit_status(status, "running follow-up reconciliation and enrichment...")
         followup_started = perf_counter()
-        followup = await _run_archive_followup(
-            collections=_followup_collections_from_counts(counts),
-            detail_limit=None if enrich else detail_lookups,
-            reconcile_live=True,
-            config=config,
-            paths=paths,
-            auth_bundle=auth_bundle,
-            transport=transport,
-            console=runner_console,
-            status=status,
-        )
+        try:
+            followup = await _run_archive_followup(
+                collections=_followup_collections_from_counts(counts),
+                detail_limit=(detail_lookups if detail_lookups > 0 else None if enrich else 0),
+                reconcile_live=True,
+                config=config,
+                paths=paths,
+                auth_bundle=auth_bundle,
+                transport=transport,
+                console=runner_console,
+                status=status,
+            )
+        except (KeyboardInterrupt, asyncio.CancelledError) as exc:
+            async with locked_archive_job(config=config, paths=paths) as job:
+                remaining = job.store.count_incomplete_initial_enrichment()
+                manifest_row = job.store.get_import_manifest(digest)
+                if manifest_row is not None:
+                    _finalize_import_enrichment_status(
+                        job.store,
+                        manifest_row,
+                        followup_status="enrichment_interrupted",
+                        aborted_reason=str(exc) or exc.__class__.__name__,
+                    )
+            raise ArchiveEnrichmentInterrupted(remaining) from exc
+        except Exception as exc:
+            async with locked_archive_job(config=config, paths=paths) as job:
+                manifest_row = job.store.get_import_manifest(digest)
+                if manifest_row is not None:
+                    _finalize_import_enrichment_status(
+                        job.store,
+                        manifest_row,
+                        followup_status="enrichment_aborted",
+                        aborted_reason=str(exc),
+                    )
+            raise
         followup_performed = True
         warnings.extend(followup.warnings)
         if debug:
@@ -1882,6 +2081,7 @@ async def import_x_archive(
             final_counts["detail_terminal_unavailable"] = followup.detail_terminal_unavailable
             final_counts["detail_transient_failures"] = followup.detail_transient_failures
             final_counts["pending_enrichment"] = followup.pending_enrichment
+            final_counts.update(store.enrichment_status_counts())
             store.set_import_manifest(
                 digest,
                 archive_generation_date=generation_date,
@@ -1894,6 +2094,8 @@ async def import_x_archive(
                 import_completed_at=utc_now(),
                 warnings=warnings,
                 counts=final_counts,
+                enrichment_followup_status="enrichment_complete",
+                enrichment_aborted_reason=None,
             )
             store.close()
         finally:
@@ -1914,4 +2116,7 @@ async def import_x_archive(
             detail_terminal_unavailable=followup.detail_terminal_unavailable,
             detail_transient_failures=followup.detail_transient_failures,
             pending_enrichment=followup.pending_enrichment,
+            pending_untouched=followup.pending_untouched,
+            transient_due=followup.transient_due,
+            transient_delayed=followup.transient_delayed,
         )

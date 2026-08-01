@@ -180,6 +180,7 @@ function tweetApp() {
         loadingStatsCollections: false,
         statsHealth: null,
         loadingStatsHealth: false,
+        archiveEnrichmentIncomplete: 0,
         statsTags: null,
         loadingStatsTags: false,
 
@@ -258,6 +259,8 @@ function tweetApp() {
             
             
             this.fetchStats();
+            this.fetchArchiveEnrichmentStatus();
+            setInterval(() => this.fetchArchiveEnrichmentStatus(), 60000);
             this.fetchGlobalTags();
             
             this.$watch('showSettingsModal', val => {
@@ -717,6 +720,15 @@ function tweetApp() {
                     console.error(e);
                     this.loadingStatsHealth = false;
                 });
+        },
+
+        fetchArchiveEnrichmentStatus() {
+            fetch('/api/stats/health')
+                .then(r => r.json())
+                .then(d => {
+                    this.archiveEnrichmentIncomplete = d.enrichment?.incomplete || 0;
+                })
+                .catch(e => console.error('Failed to fetch archive enrichment status', e));
         },
 
         storageRowY: [],

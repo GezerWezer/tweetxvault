@@ -4,6 +4,7 @@ import pytest
 
 from tests.conftest import make_tweet_result
 from tweetxvault.extractor import (
+    classify_tweet_unavailability,
     extract_canonical_text,
     extract_note_tweet_text,
     extract_secondary_objects,
@@ -19,14 +20,45 @@ def test_unwrap_tweet_result_rejects_non_tweet_shapes(value) -> None:
 
 
 @pytest.mark.parametrize("typename", ["TweetTombstone", "TweetUnavailable"])
-def test_unwrap_tweet_result_normalizes_terminal_shapes(typename: str) -> None:
+def test_unwrap_tweet_result_preserves_terminal_shapes(typename: str) -> None:
     payload = {
         "__typename": typename,
         "rest_id": "deleted-id",
         "reason": "This Post is unavailable.",
     }
 
-    assert unwrap_tweet_result(payload) == {"__tombstone__": True}
+    assert unwrap_tweet_result(payload) is payload
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("These posts are protected.", "protected_account"),
+        (
+            "You're unable to view this Post because this account owner limits who can view "
+            "their Posts. {learnmore}",
+            "protected_account",
+        ),
+        ("This post is unavailable because the account is protected.", "protected_account"),
+        ("Account suspended", "suspended_account"),
+        (
+            "The account that authored this post has been suspended.",
+            "suspended_account",
+        ),
+        ("This account is suspended.", "suspended_account"),
+        ("This account doesn't exist.", "account_missing"),
+        ("This Post is from an account that no longer exists.", "account_missing"),
+        ("This Post was deleted by the Post author.", "deleted_by_author"),
+        ("This post was deleted by its author.", "deleted_by_author"),
+        ("The author deleted this post.", "deleted_by_author"),
+        ("This Post has been withheld in your country.", "withheld"),
+        ("Post not found", "not_found"),
+        ("Dieses Posting ist nicht verfügbar.", "unavailable_unknown"),
+        (None, "unavailable_unknown"),
+    ],
+)
+def test_classify_tweet_unavailability(message: str | None, expected: str) -> None:
+    assert classify_tweet_unavailability("TweetUnavailable", message) == expected
 
 
 def test_visibility_wrapper_preserves_birdwatch_pivot_and_canonical_note_text() -> None:

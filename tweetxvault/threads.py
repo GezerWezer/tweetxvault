@@ -12,13 +12,26 @@ from rich.console import Console
 from tweetxvault.auth import ResolvedAuthBundle, resolve_auth_bundle
 from tweetxvault.client.base import AdaptiveRequestPacer, build_async_client
 from tweetxvault.client.timelines import (
+    MAX_CONSECUTIVE_FOCAL_ABSENCES,
+    FocalResultKind,
+    FocalTweetDetailResult,
+    TimelineTweet,
     build_tweet_detail_url,
     fetch_page,
     parse_tweet_detail_response,
     parse_tweet_detail_tweets,
 )
 from tweetxvault.config import AppConfig, XDGPaths
-from tweetxvault.exceptions import ConfigError
+from tweetxvault.exceptions import (
+    APIResponseError,
+    AuthExpiredError,
+    ConfigError,
+    FeatureFlagDriftError,
+    QueryIdRefreshError,
+    RateLimitExhaustedError,
+    RepeatedFocalAbsenceError,
+    StaleQueryIdError,
+)
 from tweetxvault.extractor import extract_status_id_from_url
 from tweetxvault.jobs import locked_archive_job, resolve_job_context
 from tweetxvault.query_ids import QueryIdStore, refresh_query_ids
@@ -34,6 +47,22 @@ class ThreadExpandResult:
     expanded: int = 0
     skipped: int = 0
     failed: int = 0
+
+
+@dataclass(slots=True)
+class _FocalAbsenceTracker:
+    consecutive: int = 0
+
+    def observe(self, kind: FocalResultKind, tweet_id: str) -> None:
+        if kind != FocalResultKind.ABSENT:
+            self.consecutive = 0
+            return
+        self.consecutive += 1
+        if self.consecutive >= MAX_CONSECUTIVE_FOCAL_ABSENCES:
+            raise RepeatedFocalAbsenceError(
+                f"TweetDetail omitted its requested focal tweet for "
+                f"{self.consecutive} consecutive responses; last target was {tweet_id}."
+            )
 
 
 def normalize_thread_target(value: str) -> str:
@@ -88,7 +117,7 @@ async def _fetch_detail(
     config: AppConfig,
     console: Console,
     pacer: AdaptiveRequestPacer | None = None,
-) -> tuple[dict[str, object], list]:
+) -> tuple[dict[str, object], list[TimelineTweet], FocalTweetDetailResult, int]:
     async def refresh_once() -> str:
         refreshed = await refresh_query_ids(
             query_store,
@@ -112,10 +141,7 @@ async def _fetch_detail(
     payload = response.json()
     tweets = parse_tweet_detail_tweets(payload)
     focal = parse_tweet_detail_response(payload, tweet_id)
-    if focal is None:
-        from tweetxvault.exceptions import TerminalUnavailableError
-        raise TerminalUnavailableError(f"TweetDetail did not include focal tweet {tweet_id}.")
-    return payload, tweets
+    return payload, tweets, focal, response.status_code
 
 
 async def _expand_target(
@@ -129,8 +155,8 @@ async def _expand_target(
     console: Console,
     pacer: AdaptiveRequestPacer | None = None,
     mark_dirty: Callable[[int, int], None] | None = None,
-) -> list[str]:
-    payload, tweets = await _fetch_detail(
+) -> tuple[list[str], FocalResultKind]:
+    payload, tweets, focal, http_status = await _fetch_detail(
         tweet_id=tweet_id,
         query_ids=query_ids,
         query_store=query_store,
@@ -139,14 +165,35 @@ async def _expand_target(
         console=console,
         pacer=pacer,
     )
-    store.persist_thread_detail(
-        focal_tweet_id=tweet_id,
-        tweets=tweets,
-        raw_json=payload,
-    )
-    if mark_dirty is not None:
+    if focal.kind == FocalResultKind.AVAILABLE:
+        store.persist_thread_detail(
+            focal_tweet_id=tweet_id,
+            tweets=tweets,
+            raw_json=payload,
+            http_status=http_status,
+        )
+    elif focal.kind == FocalResultKind.EXPLICIT_UNAVAILABLE:
+        assert focal.unavailable is not None
+        from tweetxvault.resurrection import resurrection_retry_schedule
+
+        retry_eligible, next_retry_at = resurrection_retry_schedule(
+            focal.unavailable.reason,
+            0,
+        )
+        store.persist_unavailable_tweet(
+            tweet_id=tweet_id,
+            operation="ThreadExpandDetail",
+            raw_json=payload,
+            http_status=http_status,
+            reason=focal.unavailable.reason,
+            detail=focal.unavailable.detail,
+            retry_eligible=retry_eligible,
+            next_retry_at=next_retry_at,
+            retry_count=0,
+        )
+    if mark_dirty is not None and focal.kind != FocalResultKind.ABSENT:
         mark_dirty(1, 1)
-    return [tweet.tweet_id for tweet in tweets]
+    return [tweet.tweet_id for tweet in tweets], focal.kind
 
 
 async def _try_expand_target(
@@ -162,13 +209,14 @@ async def _try_expand_target(
     known_tweet_ids: set[str],
     result: ThreadExpandResult,
     console: Console,
+    absence_tracker: _FocalAbsenceTracker,
     pacer: AdaptiveRequestPacer | None = None,
     mark_dirty: Callable[[int, int], None] | None = None,
 ) -> None:
     result.processed += 1
     attempted_targets.add(tweet_id)
     try:
-        discovered_ids = await _expand_target(
+        discovered_ids, focal_kind = await _expand_target(
             tweet_id=tweet_id,
             store=store,
             query_ids=query_ids,
@@ -179,19 +227,32 @@ async def _try_expand_target(
             pacer=pacer,
             mark_dirty=mark_dirty,
         )
-    except Exception as exc:
-        from tweetxvault.exceptions import TerminalUnavailableError
-        if isinstance(exc, TerminalUnavailableError):
-            result.failed += 1
-            _log_thread_status(console, tweet_id, "terminal unavailable (dead/private/suspended)")
-            store.persist_terminal_unavailable_target(tweet_id, "ThreadExpandDetail")
-            expanded_targets.add(tweet_id)
-            return
+    except (
+        AuthExpiredError,
+        FeatureFlagDriftError,
+        QueryIdRefreshError,
+        RateLimitExhaustedError,
+        RepeatedFocalAbsenceError,
+        StaleQueryIdError,
+    ):
+        raise
+    except (APIResponseError, httpx.TransportError) as exc:
         result.failed += 1
         _log_thread_status(console, tweet_id, f"failed ({exc})")
         return
+    except Exception:
+        raise
 
+    absence_tracker.observe(focal_kind, tweet_id)
+    if focal_kind == FocalResultKind.ABSENT:
+        result.failed += 1
+        _log_thread_status(console, tweet_id, "ambiguous focal absence (deferred)")
+        return
     expanded_targets.add(tweet_id)
+    if focal_kind == FocalResultKind.EXPLICIT_UNAVAILABLE:
+        result.failed += 1
+        _log_thread_status(console, tweet_id, "terminal unavailable (classified for retry)")
+        return
     known_tweet_ids.update(discovered_ids)
     result.expanded += 1
 
@@ -244,6 +305,7 @@ async def expand_threads(
             attempted_targets: set[str] = set()
             known_tweet_ids: set[str] = set()
             pacer = AdaptiveRequestPacer(config.sync.detail_delay)
+            absence_tracker = _FocalAbsenceTracker()
 
             if targets:
                 requested, duplicate_count = _dedupe_targets(
@@ -280,6 +342,7 @@ async def expand_threads(
                         known_tweet_ids=known_tweet_ids,
                         result=result,
                         console=console,
+                        absence_tracker=absence_tracker,
                         pacer=pacer,
                         mark_dirty=job.mark_dirty,
                     )
@@ -326,6 +389,7 @@ async def expand_threads(
                         known_tweet_ids=known_tweet_ids,
                         result=result,
                         console=console,
+                        absence_tracker=absence_tracker,
                         pacer=pacer,
                         mark_dirty=job.mark_dirty,
                     )
@@ -347,9 +411,9 @@ async def expand_threads(
                     )
                     _log_threads(console, "loading archived url refs...")
                     url_ref_rows = store.list_url_ref_rows()
-                    
+
                     max_linked_depth = config.sync.max_linked_depth
-                    
+
                     edges = {}
                     for row in url_ref_rows:
                         target_id = None
@@ -364,7 +428,7 @@ async def expand_threads(
                             if src not in edges:
                                 edges[src] = []
                             edges[src].append((target_id, row))
-                    
+
                     depths = {tid: 0 for tid in membership_ids if tid}
                     for d in range(1, max_linked_depth + 1):
                         current_layer = [tid for tid, depth in depths.items() if depth == d - 1]
@@ -373,7 +437,7 @@ async def expand_threads(
                                 for tgt_id, _ in edges[src]:
                                     if tgt_id not in depths:
                                         depths[tgt_id] = d
-                    
+
                     filtered_url_rows = []
                     for src, target_list in edges.items():
                         if max_linked_depth == 0:
@@ -438,6 +502,7 @@ async def expand_threads(
                             known_tweet_ids=known_tweet_ids,
                             result=result,
                             console=console,
+                            absence_tracker=absence_tracker,
                             pacer=pacer,
                             mark_dirty=job.mark_dirty,
                         )

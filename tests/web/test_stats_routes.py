@@ -148,7 +148,9 @@ def test_health_reports_pipeline_counts(make_web_client) -> None:
         [
             ("tweet_object", "done", None, None),
             ("tweet_object", "done", None, None),
+            ("tweet_object", "resurrected", None, None),
             ("tweet_object", "pending", None, None),
+            ("tweet_object", "transient_failure", None, None),
             ("tweet_object", "terminal_unavailable", None, None),
             ("tweet", None, "c1", None),
             ("tweet", None, "c1", None),
@@ -163,7 +165,15 @@ def test_health_reports_pipeline_counts(make_web_client) -> None:
 
     assert response.status_code == 200
     assert response.json() == {
-        "enrichment": {"done": 2, "pending": 1, "terminal": 1},
+        "enrichment": {
+            "available": 3,
+            "done": 2,
+            "resurrected": 1,
+            "pending": 1,
+            "transient": 1,
+            "incomplete": 2,
+            "terminal": 1,
+        },
         "threads_expanded": 2,
         "preview_articles": 1,
     }

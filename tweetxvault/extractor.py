@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -74,10 +75,97 @@ def unwrap_tweet_result(result: Any) -> dict[str, Any] | None:
             unwrapped["birdwatch_pivot"] = result["birdwatch_pivot"]
         return unwrapped
     if typename in {"TweetTombstone", "TweetUnavailable"}:
-        return {"__tombstone__": True}
+        return result
     if result.get("rest_id"):
         return result
     return None
+
+
+def extract_tweet_unavailability_detail(result: dict[str, Any]) -> str | None:
+    tombstone = result.get("tombstone")
+    if isinstance(tombstone, dict):
+        tombstone_text = tombstone.get("text")
+        if isinstance(tombstone_text, str) and tombstone_text:
+            return tombstone_text
+        if isinstance(tombstone_text, dict):
+            text = tombstone_text.get("text")
+            if isinstance(text, str) and text:
+                return text
+    for key in ("reason", "message", "text"):
+        value = result.get(key)
+        if isinstance(value, str) and value:
+            return value
+        if isinstance(value, dict):
+            text = value.get("text")
+            if isinstance(text, str) and text:
+                return text
+    return None
+
+
+def classify_tweet_unavailability(typename: str, text: str | None) -> str:
+    normalized = (text or "").casefold().replace("\u2019", "'").replace("\u2018", "'")
+    normalized = re.sub(r"\{[^{}]*\}", " ", normalized)
+    normalized = " ".join(normalized.split())
+    if any(
+        phrase in normalized
+        for phrase in (
+            "protected account",
+            "account is protected",
+            "posts are protected",
+            "tweets are protected",
+            "confirmed followers",
+            "not authorized to see",
+            "account owner limits who can view",
+            "limits who can view their posts",
+            "unable to view this post because this account",
+        )
+    ):
+        return "protected_account"
+    if any(
+        phrase in normalized
+        for phrase in (
+            "account suspended",
+            "account is suspended",
+            "account has been suspended",
+            "account that authored this post has been suspended",
+            "suspended account",
+        )
+    ):
+        return "suspended_account"
+    if any(
+        phrase in normalized
+        for phrase in (
+            "account doesn't exist",
+            "account does not exist",
+            "account no longer exists",
+            "account that no longer exists",
+            "post is from an account that no longer exists",
+            "user not found",
+        )
+    ):
+        return "account_missing"
+    if any(
+        phrase in normalized
+        for phrase in (
+            "post was deleted by its author",
+            "post was deleted by the post author",
+            "deleted by the post author",
+            "deleted by the tweet author",
+            "author deleted this post",
+            "author deleted",
+        )
+    ):
+        return "deleted_by_author"
+    if any(
+        phrase in normalized
+        for phrase in ("withheld", "not available in your country", "legal demand")
+    ):
+        return "withheld"
+    if any(
+        phrase in normalized for phrase in ("post not found", "tweet not found", "status not found")
+    ):
+        return "not_found"
+    return "unavailable_unknown"
 
 
 def extract_author_fields(tweet: dict[str, Any]) -> tuple[str | None, str | None, str | None]:
@@ -389,6 +477,8 @@ class ExtractedTweetGraph:
 
 
 def _tweet_object(tweet: dict[str, Any]) -> TweetObjectData | None:
+    if tweet.get("__typename") in {"TweetTombstone", "TweetUnavailable"}:
+        return None
     tweet_id = tweet.get("rest_id")
     if not tweet_id:
         return None
@@ -745,7 +835,11 @@ def _attached_tweets(tweet: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
         ),
         ("quote_of", unwrap_tweet_result((tweet.get("quoted_status_result") or {}).get("result"))),
     ]
-    return [(relation_type, item) for relation_type, item in pairs if item is not None]
+    return [
+        (relation_type, item)
+        for relation_type, item in pairs
+        if item is not None and item.get("__typename") not in {"TweetTombstone", "TweetUnavailable"}
+    ]
 
 
 def _visit_tweet(

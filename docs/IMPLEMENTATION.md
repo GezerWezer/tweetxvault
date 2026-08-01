@@ -11,6 +11,49 @@ Hard constraints:
 
 Definition of done: passes `uv run ruff format --check`, `uv run ruff check`, and `uv run pytest`.
 
+## Archive enrichment and reason-aware resurrection (2026-08-01)
+
+- [x] Add versioned, backed-up, additive SQLite migration for enrichment scheduler metadata.
+- [x] Preserve rich tweet fields when recording unavailable results and repair recoverable legacy rows.
+- [x] Preserve tombstone payloads and return structured focal TweetDetail results with normalized reasons.
+- [x] Separate finite initial archive enrichment from recurring resurrection scheduling.
+- [x] Make X archive import enrich automatically by default and make `import enrich` uncapped by default.
+- [x] Add interruption-safe progress flushing, distinct queue counts, and persistent reminders.
+- [x] Add a bounded, reason-weighted resurrection scheduler with same-author recovery boosts.
+- [x] Remove initial archive enrichment from sync and update CLI flags/help/follow-up ordering.
+- [x] Expose enrichment completeness in stats and the Web UI warning banner.
+- [x] Add migration, persistence, parsing, enrichment, scheduler, CLI, sync, and Web UI tests.
+- [x] Update README/PLAN/worklog and pass focused plus full validation.
+
+### Post-implementation audit corrections
+
+- [x] Require positive focal-ID association and cover unrelated/context tombstones.
+- [x] Classify representative private and missing-account messages after text normalization.
+- [x] Preserve and schedule structured thread tombstones without same-sync resurrection.
+- [x] Abort on unexpected parser/storage errors while retaining completed buffered work.
+- [x] Clear stale terminal metadata on live revival and share available-state consumers.
+- [x] Keep transport failures separate from completed availability retry counts.
+- [x] Add manual continuation interruption/abort reporting with conventional exit statuses.
+- [x] Rank indexed legacy repair sources, report deferred deep recovery, and remove stdout output.
+- [x] Pass audit-focused tests, full pytest, Ruff, compileall, diff, and browser validation.
+
+### Final hardening pass
+
+- [x] Classify focal TweetDetail results as available, explicitly unavailable, or absent.
+- [x] Stop archive enrichment, resurrection, and thread expansion after three consecutive
+  ambiguous focal absences without converting those rows into confirmed tombstones.
+- [x] Preserve stronger unavailable reasons and keep same-author probes/boosts due across
+  resurrection budget boundaries.
+- [x] Apply ordering, exclusion, and limits in SQL and drain uncapped enrichment in bounded
+  pages.
+- [x] Advance SQLite to schema v3 with a validated atomic backup, sequential migration stages,
+  unknown-reason preservation, scheduler normalization, ranked repair, and surfaced reporting.
+- [x] Add `repair legacy-tombstones` with dry-run, limit, and optional timeline-capture scanning.
+- [x] Finalize import follow-up status on success, interruption, and abort; flush writes even
+  when HTTP client shutdown fails; preserve unavailable rows' `last_seen_at`.
+- [x] Count both `done` and `resurrected` rows as Web UI “Enriched” and cover the final behavior
+  with parser, worker, migration, SQL-bound, CLI, and Web regressions.
+
 Planning note (2026-03-15):
 - The sections below describe the completed SQLite-backed MVP.
 - The SQLite -> LanceDB migration landed on 2026-03-15.

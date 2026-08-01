@@ -1,3 +1,70 @@
+- 2026-08-01 (Archive enrichment final hardening)
+  - Added explicit available/explicit-unavailable/absent focal result kinds and a shared
+    three-response circuit breaker across initial enrichment, resurrection, and threads;
+    ambiguous responses now remain retryable and never establish terminal unavailability.
+  - Preserved stronger unavailable reasons across vague retries, persisted account probes and
+    boosts as due before queueing, retained the global 200-request ceiling, and moved candidate
+    ordering, exclusion, and limits into SQL.
+  - Advanced SQLite to schema v3 with sequential stages, validated atomic pre-v3 backups,
+    unknown-reason diagnostics, available-row scheduler cleanup, ranked bounded legacy repair,
+    surfaced migration reports, and an explicit deep `repair legacy-tombstones` command.
+  - Finalized archive-import follow-up status independently on success, interruption, and
+    systemic abort; made buffered writes survive client-close errors; preserved `last_seen_at`
+    on unavailable checks; and made the Web “Enriched” card include resurrected rows.
+  - Added regressions for focal ambiguity and circuit breaking, reason confidence, budget-edge
+    probe persistence, 10,000-row SQL bounds, v2-to-v3 migration/backup failure, systemic thread
+    aborts, manifest finalization, close failures, CLI help, deep repair, and Web semantics.
+  - Validation passed for all 675 pytest cases, repository-wide Ruff lint, scoped Ruff format,
+    compileall, `git diff --check`, and all 18 browser-asset tests. The configured archive path
+    did not contain a database, so production-copy manual validation remains a deployment step;
+    v2 migration, backup integrity, row preservation, and failure cleanup were exercised against
+    isolated SQLite copies in the regression suite.
+
+- 2026-08-01 (Archive enrichment implementation audit corrections)
+  - Removed unsafe single-unmatched-tombstone focal inference; unavailable reasons now require
+    an exact result ID or exact `tweet-<id>` entry association, with representative private,
+    missing-account, placeholder, localized, suspension, deletion, and withheld fixtures.
+  - Made thread expansion persist the full unavailable response, original detail, normalized
+    reason, and reason-specific due time so normal sync does not repeat the request during its
+    immediately following resurrection pass.
+  - Narrowed initial-enrichment and resurrection failure handling to known API, transport, and
+    explicit-unavailable cases. Unexpected parser/storage/programming failures restore the
+    current buffer checkpoint, abort the pass, retain prior row state, and report continuation.
+  - Normalized successful live ingestion to clear stale terminal scheduler metadata; shared
+    `done`/`resurrected` availability now drives tagging and Web health counts.
+  - Kept transport failures from advancing long-term availability retry counts, corrected
+    zero-row account-boost metrics, and added standalone `import enrich` interruption/abort UX.
+  - Ranked cheap legacy tombstone recovery sources so an indexed rich TweetDetail capture wins
+    over a sparse membership, removed backend stdout printing, and reports author recovery plus
+    deliberately deferred deep timeline scans through `migration_report`.
+  - Validation passed with `uv run pytest -q`, `uv run ruff check tweetxvault tests`, scoped
+    `uv run ruff format --check`, `.venv/bin/python -m compileall -q tweetxvault tests`,
+    `git diff --check`, and all 18 browser-asset tests in `node tests/js/test_web_assets.cjs`.
+
+- 2026-08-01 (Archive enrichment and reason-aware resurrection refactor)
+  - Split finite initial X-archive enrichment from recurring resurrection: normal sync no
+    longer drains sparse import rows and instead runs a fixed 200-attempt resurrection pass
+    after thread expansion.
+  - Added SQLite schema version 2 with generic additive-column migration, pre-migration
+    SQLite API backups, quick-check/row-count/index validation, safe legacy reason backfill,
+    and local repair attempts for previously minimized terminal rows.
+  - Preserved full `TweetTombstone` / `TweetUnavailable` payloads and original detail text;
+    normalized unavailable reasons conservatively without treating an absent focal result as
+    a confirmed deletion.
+  - Replaced terminal-row reconstruction with update-oriented persistence that retains text,
+    author, timestamps, provenance, raw live tweet JSON, media relationships, and retry state.
+  - Made `import x-archive` perform all eligible TweetDetail enrichment by default, added
+    `--no-enrich`, made bare `import enrich` uncapped, retained bounded per-run overrides, and
+    flushes buffered successes before reporting an interrupted continuation.
+  - Added due-time retry selection, distinct pending/due/delayed counts, persistent CLI/Web
+    reminders, manifest queue breakdowns, stats visibility, and a polling Web warning banner.
+  - Added a reason-weighted resurrection scheduler with permanent-deletion exclusion,
+    reason-specific intervals, transport retry preservation, deterministic 120/50/30 budget
+    allocation, and bounded same-author probe/boost behavior keyed only by numeric author id.
+  - Validation passed with `uv run pytest -q`, `uv run ruff check tweetxvault tests`, scoped
+    `uv run ruff format --check` coverage for every changed Python file, `git diff --check`,
+    and all 18 browser-asset tests in `node tests/js/test_web_assets.cjs`.
+
 - 2026-07-31 (Web config advanced-toggle regression and tagging latency investigation)
   - Restored the original basic-field whitelist so browser/profile, sync-tuning, and
     database settings are revealed only when the Web UI Advanced toggle is enabled.

@@ -90,6 +90,9 @@ def test_lifespan_opens_indexes_and_closes_store(monkeypatch, tmp_path: Path) ->
     events: list[str] = []
 
     class Store:
+        def count_incomplete_initial_enrichment(self):
+            return 0
+
         def ensure_scalar_indexes(self):
             events.append("scalar")
 
@@ -166,6 +169,9 @@ async def test_lifespan_closes_store_when_context_exits_with_error(
     events: list[str] = []
 
     class Store:
+        def count_incomplete_initial_enrichment(self):
+            return 0
+
         def ensure_scalar_indexes(self):
             events.append("scalar")
 

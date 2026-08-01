@@ -412,10 +412,12 @@ Extend the single-table LanceDB archive with additional `record_type` values:
   - Stores the latest raw tweet object plus normalized text fields that are global to the tweet (`text`, `created_at`, author fields, later `conversation_id`, `lang`, note-tweet text if present).
   - Carries `source` for the current winning normalized snapshot plus nullable `deleted_at` when the only surviving payload comes from the official archive.
   - Archive-seeded sparse placeholders should also track:
-    - `enrichment_state` (`pending`, `done`, `transient_failure`, `terminal_unavailable`)
+    - `enrichment_state` (`pending`, `done`, `transient_failure`, `terminal_unavailable`, `resurrected`)
     - `enrichment_checked_at`
     - `enrichment_http_status`
-    - `enrichment_reason` (`deleted`, `suspended`, `not_found`, etc.)
+    - `enrichment_reason` (stable unavailable reason such as `archive_deleted`, `protected_account`, or `unavailable_unknown`)
+    - `enrichment_detail` (original tombstone text or diagnostic detail)
+    - `enrichment_retry_count`, `enrichment_next_retry_at`, `enrichment_first_unavailable_at`, and `enrichment_retry_eligible`
   - Consumers should prefer this row over collection-scoped `tweet.raw_json` once it exists, but the existing `tweet` row remains the membership/projection layer.
 
 - `tweet_relation`
@@ -554,9 +556,14 @@ Concrete merge rules from the first real fixture:
 - Import `like.js` with a stable synthetic archive-order `sort_index` encoded as negative numeric strings (`-1`, `-2`, ... in file order) so the values stay compatible with current integer-based sorting and fall behind real live timeline sort keys in newest-first views.
 - Import deleted authored tweets into the normal `tweets` collection membership and surface nullable `deleted_at` on both the membership `tweet` row and the normalized `tweet_object` row rather than inventing a separate tombstone collection.
 - Do not perform an unconditional per-item GraphQL fetch inline during import; instead, run normal bulk collection syncs first, then targeted per-item lookups only for rows that remain sparse after import.
-- Shipped import behavior: if auth is available, `tweetxvault import x-archive ...` runs the bulk `tweets` / `likes` follow-up automatically, but explicit per-item `TweetDetail` lookups stay operator-bounded via `--detail-lookups` (default `0`) so large archives do not fan out into an unbounded reconciliation crawl.
+- Shipped import behavior: if auth is available, `tweetxvault import x-archive ...` runs bulk `tweets` / `likes` reconciliation and then drains all currently eligible sparse `TweetDetail` rows by default. `--no-enrich` skips the per-item phase, `--detail-lookups N` bounds one import invocation, and bare `tweetxvault import enrich` resumes all currently eligible rows.
 - Shipped Grailbird behavior: `tweetxvault import grailbird <input_dir> <output_dir>` converts pre-2018 CSV-based archives into the same minimal YTD layout used by `import x-archive`; when `user_details.js` is missing, the converted archive intentionally leaves owner metadata unset so a later authenticated sync/import follow-up can establish the real archive owner instead of persisting a fake placeholder id.
-- Track per-tweet live-enrichment status/result so explicit terminal misses stop retrying; only item-level lookup failures should mark `terminal_unavailable`.
+- Initial enrichment and recurring resurrection are separate queues. Explicit unavailable results become `terminal_unavailable`; genuine temporary request failures and ambiguous focal absences remain retryable without proving that a tweet is dead. Ordinary sync never runs initial enrichment and performs at most 200 reason-aware resurrection attempts.
+- TweetDetail results are explicitly classified as available, explicitly unavailable, or absent. Tombstones are associated with a focal tweet only through an exact result ID or exact focal entry ID, and three consecutive absent focal results stop a worker as a response-shape failure. Thread expansion persists positively associated tombstones but leaves absent targets retryable for a future invocation.
+- Unexpected parser, response-shape, storage, or programming errors abort enrichment/resurrection after flushing prior completed work; only recognized API/transport failures become per-row retries. Resurrection transport failures do not advance the completed-unavailable retry counter.
+- Resurrection selection is ordered and limited in SQL. Same-author probes and boosts are marked due in storage before they are queued, so hitting the 200-request budget does not lose the recovery signal.
+- SQLite schema v3 creates and validates an atomic pre-v3 backup, preserves unknown legacy reasons in diagnostic detail, clears stale scheduler fields from available rows, and runs only bounded indexed tombstone repair. The explicit `repair legacy-tombstones --scan-timeline-captures` command owns the optional expensive scan.
+- Currently available tweet objects share the `done`/`resurrected` state set for downstream consumers such as tagging and Web health. Any successful live timeline ingestion clears prior unavailable reason/detail and scheduler metadata.
 - Absence from a later live likes/bookmarks collection does **not** by itself mean the tweet is unavailable or that archive provenance should be removed.
 - Remaining archive-import follow-ups after the initial production rollout:
   - tighten `_copy_exported_media(...)` so archive media copy does not scan every `media` row when only one imported archive's tweet ids are relevant
@@ -598,7 +605,9 @@ tweetxvault auth check                # run shared preflight, report local + rem
 tweetxvault auth refresh-ids          # force query id refresh
 
 tweetxvault import x-archive ARCHIVE  # zip or extracted directory
+tweetxvault import x-archive ARCHIVE --no-enrich
 tweetxvault import x-archive ARCHIVE --detail-lookups 100
+tweetxvault import enrich             # all currently eligible sparse rows
 ```
 
 `--limit N` limits persisted sync pagination to N pages per collection (useful for testing or cautious first runs).

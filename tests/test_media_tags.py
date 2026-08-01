@@ -63,13 +63,18 @@ def test_tagging_eligibility_filters_dedupes_orders_and_limits(paths) -> None:
     assert store is not None
     _seed_tag_candidate(store, "newest", created_at_ts=30)
     _seed_tag_candidate(store, "older", created_at_ts=20)
+    _seed_tag_candidate(store, "resurrected", created_at_ts=25, enrichment_state="resurrected")
     _seed_tag_candidate(store, "pending", created_at_ts=50, enrichment_state="pending")
     _seed_tag_candidate(store, "no-media", created_at_ts=40, with_media=False)
     _seed_tag_candidate(store, "tagged", created_at_ts=60)
     store.update_media_tags("tagged", ["Existing"])
 
     assert store.get_eligible_tweets_for_tagging(limit=1) == ["newest"]
-    assert store.get_eligible_tweets_for_tagging(limit=20) == ["newest", "older"]
+    assert store.get_eligible_tweets_for_tagging(limit=20) == [
+        "newest",
+        "resurrected",
+        "older",
+    ]
     store.close()
 
 

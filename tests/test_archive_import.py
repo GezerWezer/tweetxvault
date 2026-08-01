@@ -22,6 +22,7 @@ from tweetxvault.exceptions import (
     APIResponseError,
     ArchiveOwnerMismatchError,
     ConfigError,
+    RepeatedFocalAbsenceError,
     StaleQueryIdError,
 )
 from tweetxvault.storage import open_archive_store
@@ -356,7 +357,8 @@ def test_import_x_archive_directory_populates_archive_and_copies_media(
     }
     assert tweet_objects["100"]["source"] == "x_archive"
     assert tweet_objects["200"]["enrichment_state"] == "terminal_unavailable"
-    assert tweet_objects["200"]["enrichment_reason"] == "deleted"
+    assert tweet_objects["200"]["enrichment_reason"] == "archive_deleted"
+    assert tweet_objects["200"]["enrichment_retry_eligible"] == 0
     assert tweet_objects["300"]["enrichment_state"] == "pending"
 
     media_rows = store._query(expr="record_type = 'media'")
@@ -367,6 +369,8 @@ def test_import_x_archive_directory_populates_archive_and_copies_media(
 
     manifest_rows = store._query(expr="record_type = 'import_manifest'")
     manifest_counts = json.loads(manifest_rows[0]["counts_json"])
+    assert manifest_rows[0]["enrichment_followup_status"] == "enrichment_complete"
+    assert manifest_rows[0]["enrichment_aborted_reason"] is None
     assert manifest_counts["pending_enrichment"] == 1
     store.close()
 
@@ -498,7 +502,7 @@ def test_repeated_import_can_reuse_existing_archive_for_enrich_followup(
         return ["likes"], [], _auth_bundle()
 
     async def fake_enrich_pending_rows(**kwargs):
-        assert kwargs["limit"] is None
+        assert kwargs["limit"] == archive_import._DETAIL_ENRICH_PAGE_SIZE
         return 3, 1, 2, 4
 
     monkeypatch.setattr(archive_import, "_run_live_reconciliation", fake_reconciliation)
@@ -625,6 +629,7 @@ def test_enrich_imported_archive_reuses_existing_import_state(
     result = asyncio.run(
         enrich_imported_archive(
             limit=25,
+            reconcile_live=True,
             config=AppConfig(),
             paths=paths,
             console=_console(),
@@ -688,6 +693,46 @@ def test_enrich_imported_archive_can_skip_live_reconciliation(
     assert result.detail_terminal_unavailable == 0
     assert result.detail_transient_failures == 1
     assert result.pending_enrichment == 2
+
+
+def test_unlimited_archive_followup_processes_bounded_pages(
+    paths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    selected_pages = iter((2, 2, 1))
+    limits: list[int | None] = []
+    trackers: list[object] = []
+
+    async def fake_enrich_pending_rows(**kwargs):
+        limits.append(kwargs["limit"])
+        trackers.append(kwargs["absence_tracker"])
+        selected = next(selected_pages)
+        return archive_import.ArchiveEnrichResult(
+            selected=selected,
+            completed=selected,
+            detail_lookups=selected,
+            pending_enrichment=0,
+        )
+
+    monkeypatch.setattr(archive_import, "_DETAIL_ENRICH_PAGE_SIZE", 2)
+    monkeypatch.setattr(archive_import, "_enrich_pending_rows", fake_enrich_pending_rows)
+
+    result = asyncio.run(
+        archive_import._run_archive_followup(
+            collections=[],
+            detail_limit=None,
+            reconcile_live=False,
+            config=AppConfig(),
+            paths=paths,
+            auth_bundle=_auth_bundle(),
+            transport=None,
+            console=_console(),
+        )
+    )
+
+    assert limits == [2, 2, 2]
+    assert trackers[0] is trackers[1] is trackers[2]
+    assert result.selected == 5
+    assert result.completed == 5
 
 
 def test_enrich_pending_rows_batches_detail_writes(paths, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -776,6 +821,580 @@ def test_enrich_pending_rows_batches_detail_writes(paths, monkeypatch: pytest.Mo
     tweet_object_rows = store.list_tweet_objects_for_enrichment()
     store.close()
     assert tweet_object_rows == []
+
+
+def test_enrich_pending_rows_classifies_http_200_tombstone_as_unavailable(
+    paths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = open_archive_store(paths, create=True)
+    assert store is not None
+    store._merge_records(
+        [
+            store._record(
+                row_key="tweet_object:900",
+                record_type="tweet_object",
+                tweet_id="900",
+                enrichment_state="pending",
+                source="x_archive",
+            )
+        ]
+    )
+    store.close()
+
+    @asynccontextmanager
+    async def fake_locked_archive_job(*, config=None, paths=None, console=None):
+        opened = open_archive_store(paths, create=False)
+        assert opened is not None
+        try:
+            yield SimpleNamespace(store=opened, mark_dirty=lambda **_kwargs: None)
+        finally:
+            opened.close()
+
+    async def fake_resolve_query_ids(*_args, **_kwargs):
+        return {"TweetDetail": "detail-query-id"}
+
+    async def fake_fetch_page(*args, **_kwargs):
+        payload = make_tweet_detail_response(
+            [
+                {
+                    "__typename": "TweetTombstone",
+                    "rest_id": "900",
+                    "tombstone": {"text": {"text": "These posts are protected."}},
+                }
+            ]
+        )
+        return httpx.Response(200, json=payload, request=httpx.Request("GET", args[1]))
+
+    class DummyClient:
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr(archive_import, "locked_archive_job", fake_locked_archive_job)
+    monkeypatch.setattr(archive_import, "resolve_query_ids", fake_resolve_query_ids)
+    monkeypatch.setattr(
+        archive_import, "build_async_client", lambda *_args, **_kwargs: DummyClient()
+    )
+    monkeypatch.setattr(archive_import, "fetch_page", fake_fetch_page)
+
+    result = asyncio.run(
+        archive_import._enrich_pending_rows(
+            limit=None,
+            config=AppConfig(),
+            paths=paths,
+            auth_bundle=_auth_bundle(),
+            transport=None,
+            console=_console(),
+        )
+    )
+
+    assert result.selected == 1
+    assert result.classified_unavailable == 1
+    assert result.pending_enrichment == 0
+    store = open_archive_store(paths, create=False)
+    assert store is not None
+    row = store._get_row("tweet_object:900")
+    assert row is not None
+    assert row["enrichment_state"] == "terminal_unavailable"
+    assert row["enrichment_reason"] == "protected_account"
+    assert row["enrichment_detail"] == "These posts are protected."
+    assert row["enrichment_retry_eligible"] == 1
+    store.close()
+
+
+def test_enrich_pending_rows_defers_one_ambiguous_focal_absence(
+    paths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = open_archive_store(paths, create=True)
+    assert store is not None
+    store._merge_records(
+        [
+            store._record(
+                row_key="tweet_object:1",
+                record_type="tweet_object",
+                tweet_id="1",
+                enrichment_state="pending",
+            )
+        ]
+    )
+    store.close()
+
+    @asynccontextmanager
+    async def fake_locked_archive_job(*, config=None, paths=None, console=None):
+        opened = open_archive_store(paths, create=False)
+        assert opened is not None
+        try:
+            yield SimpleNamespace(store=opened, mark_dirty=lambda **_kwargs: None)
+        finally:
+            opened.close()
+
+    async def fake_resolve_query_ids(*_args, **_kwargs):
+        return {"TweetDetail": "detail-query-id"}
+
+    async def fake_fetch_page(*args, **_kwargs):
+        payload = make_tweet_detail_response([make_tweet_result("999", "unrelated")])
+        return httpx.Response(200, json=payload, request=httpx.Request("GET", args[1]))
+
+    class DummyClient:
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr(archive_import, "locked_archive_job", fake_locked_archive_job)
+    monkeypatch.setattr(archive_import, "resolve_query_ids", fake_resolve_query_ids)
+    monkeypatch.setattr(
+        archive_import, "build_async_client", lambda *_args, **_kwargs: DummyClient()
+    )
+    monkeypatch.setattr(archive_import, "fetch_page", fake_fetch_page)
+
+    result = asyncio.run(
+        archive_import._enrich_pending_rows(
+            limit=None,
+            config=AppConfig(),
+            paths=paths,
+            auth_bundle=_auth_bundle(),
+            transport=None,
+            console=_console(),
+        )
+    )
+
+    assert result.transient_failures == 1
+    assert result.classified_unavailable == 0
+    store = open_archive_store(paths, create=False)
+    assert store is not None
+    row = store._get_row("tweet_object:1")
+    assert row["enrichment_state"] == "transient_failure"
+    assert row["enrichment_reason"] == "focal_tweet_absent"
+    assert "identifiable focal result" in row["enrichment_detail"]
+    assert row["enrichment_next_retry_at"] is not None
+    store.close()
+
+
+def test_enrich_pending_rows_aborts_after_three_absences_and_flushes_prior_rows(
+    paths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = open_archive_store(paths, create=True)
+    assert store is not None
+    store._merge_records(
+        [
+            store._record(
+                row_key=f"tweet_object:{tweet_id}",
+                record_type="tweet_object",
+                tweet_id=tweet_id,
+                enrichment_state="pending",
+            )
+            for tweet_id in ("1", "2", "3", "4", "5")
+        ]
+    )
+    store.close()
+    attempts: list[str] = []
+
+    @asynccontextmanager
+    async def fake_locked_archive_job(*, config=None, paths=None, console=None):
+        opened = open_archive_store(paths, create=False)
+        assert opened is not None
+        try:
+            yield SimpleNamespace(store=opened, mark_dirty=lambda **_kwargs: None)
+        finally:
+            opened.close()
+
+    async def fake_resolve_query_ids(*_args, **_kwargs):
+        return {"TweetDetail": "detail-query-id"}
+
+    async def fake_fetch_page(*args, **_kwargs):
+        _operation, variables = request_details(args[1])
+        tweet_id = variables["focalTweetId"]
+        attempts.append(tweet_id)
+        if tweet_id == "1":
+            payload = make_tweet_detail_response(
+                [make_tweet_result("1", "completed before breaker", user_id="42")]
+            )
+        else:
+            payload = make_tweet_detail_response([make_tweet_result("999", "unrelated")])
+        return httpx.Response(200, json=payload, request=httpx.Request("GET", args[1]))
+
+    class DummyClient:
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr(archive_import, "locked_archive_job", fake_locked_archive_job)
+    monkeypatch.setattr(archive_import, "resolve_query_ids", fake_resolve_query_ids)
+    monkeypatch.setattr(
+        archive_import, "build_async_client", lambda *_args, **_kwargs: DummyClient()
+    )
+    monkeypatch.setattr(archive_import, "fetch_page", fake_fetch_page)
+
+    with pytest.raises(RepeatedFocalAbsenceError):
+        asyncio.run(
+            archive_import._enrich_pending_rows(
+                limit=None,
+                config=AppConfig(),
+                paths=paths,
+                auth_bundle=_auth_bundle(),
+                transport=None,
+                console=_console(),
+            )
+        )
+
+    assert attempts == ["1", "2", "3", "4"]
+    store = open_archive_store(paths, create=False)
+    assert store is not None
+    assert store._get_row("tweet_object:1")["enrichment_state"] == "done"
+    for tweet_id in ("2", "3", "4"):
+        assert store._get_row(f"tweet_object:{tweet_id}")["enrichment_state"] == (
+            "transient_failure"
+        )
+    assert store._get_row("tweet_object:5")["enrichment_state"] == "pending"
+    store.close()
+
+
+def test_enrich_focal_absence_counter_resets_on_explicit_and_available_results(
+    paths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tweet_ids = ("1", "2", "3", "4", "5")
+    store = open_archive_store(paths, create=True)
+    assert store is not None
+    store._merge_records(
+        [
+            store._record(
+                row_key=f"tweet_object:{tweet_id}",
+                record_type="tweet_object",
+                tweet_id=tweet_id,
+                enrichment_state="pending",
+            )
+            for tweet_id in tweet_ids
+        ]
+    )
+    store.close()
+
+    @asynccontextmanager
+    async def fake_locked_archive_job(*, config=None, paths=None, console=None):
+        opened = open_archive_store(paths, create=False)
+        assert opened is not None
+        try:
+            yield SimpleNamespace(store=opened, mark_dirty=lambda **_kwargs: None)
+        finally:
+            opened.close()
+
+    async def fake_resolve_query_ids(*_args, **_kwargs):
+        return {"TweetDetail": "detail-query-id"}
+
+    async def fake_fetch_page(*args, **_kwargs):
+        _operation, variables = request_details(args[1])
+        tweet_id = variables["focalTweetId"]
+        if tweet_id == "2":
+            result = {
+                "__typename": "TweetUnavailable",
+                "rest_id": tweet_id,
+                "reason": "This account is suspended.",
+            }
+        elif tweet_id == "4":
+            result = make_tweet_result(tweet_id, "available reset", user_id="42")
+        else:
+            result = make_tweet_result("999", "unrelated")
+        payload = make_tweet_detail_response([result])
+        return httpx.Response(200, json=payload, request=httpx.Request("GET", args[1]))
+
+    class DummyClient:
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr(archive_import, "locked_archive_job", fake_locked_archive_job)
+    monkeypatch.setattr(archive_import, "resolve_query_ids", fake_resolve_query_ids)
+    monkeypatch.setattr(
+        archive_import, "build_async_client", lambda *_args, **_kwargs: DummyClient()
+    )
+    monkeypatch.setattr(archive_import, "fetch_page", fake_fetch_page)
+
+    result = asyncio.run(
+        archive_import._enrich_pending_rows(
+            limit=None,
+            config=AppConfig(),
+            paths=paths,
+            auth_bundle=_auth_bundle(),
+            transport=None,
+            console=_console(),
+        )
+    )
+
+    assert result.selected == 5
+    assert result.classified_unavailable == 1
+    assert result.completed == 1
+    assert result.transient_failures == 3
+
+
+def test_enrich_pending_rows_flushes_when_client_close_fails(
+    paths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = open_archive_store(paths, create=True)
+    assert store is not None
+    store._merge_records(
+        [
+            store._record(
+                row_key="tweet_object:1",
+                record_type="tweet_object",
+                tweet_id="1",
+                enrichment_state="pending",
+            )
+        ]
+    )
+    store.close()
+
+    @asynccontextmanager
+    async def fake_locked_archive_job(*, config=None, paths=None, console=None):
+        opened = open_archive_store(paths, create=False)
+        assert opened is not None
+        try:
+            yield SimpleNamespace(store=opened, mark_dirty=lambda **_kwargs: None)
+        finally:
+            opened.close()
+
+    async def fake_resolve_query_ids(*_args, **_kwargs):
+        return {"TweetDetail": "detail-query-id"}
+
+    async def fake_fetch_page(*args, **_kwargs):
+        payload = make_tweet_detail_response([make_tweet_result("1", "complete")])
+        return httpx.Response(200, json=payload, request=httpx.Request("GET", args[1]))
+
+    class FailingCloseClient:
+        async def aclose(self) -> None:
+            raise RuntimeError("close failed")
+
+    monkeypatch.setattr(archive_import, "locked_archive_job", fake_locked_archive_job)
+    monkeypatch.setattr(archive_import, "resolve_query_ids", fake_resolve_query_ids)
+    monkeypatch.setattr(
+        archive_import,
+        "build_async_client",
+        lambda *_args, **_kwargs: FailingCloseClient(),
+    )
+    monkeypatch.setattr(archive_import, "fetch_page", fake_fetch_page)
+
+    with pytest.raises(RuntimeError, match="close failed"):
+        asyncio.run(
+            archive_import._enrich_pending_rows(
+                limit=None,
+                config=AppConfig(),
+                paths=paths,
+                auth_bundle=_auth_bundle(),
+                transport=None,
+                console=_console(),
+            )
+        )
+
+    store = open_archive_store(paths, create=False)
+    assert store is not None
+    assert store._get_row("tweet_object:1")["enrichment_state"] == "done"
+    store.close()
+
+
+def test_enrich_pending_rows_flushes_completed_writes_on_interrupt(
+    paths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = open_archive_store(paths, create=True)
+    assert store is not None
+    store._merge_records(
+        [
+            store._record(
+                row_key=f"tweet_object:{tweet_id}",
+                record_type="tweet_object",
+                tweet_id=tweet_id,
+                enrichment_state="pending",
+            )
+            for tweet_id in ("1", "2")
+        ]
+    )
+    store.close()
+
+    @asynccontextmanager
+    async def fake_locked_archive_job(*, config=None, paths=None, console=None):
+        store = open_archive_store(paths, create=False)
+        assert store is not None
+        try:
+            yield SimpleNamespace(store=store, mark_dirty=lambda **_kwargs: None)
+        finally:
+            store.close()
+
+    async def fake_resolve_query_ids(*_args, **_kwargs):
+        return {"TweetDetail": "detail-query-id"}
+
+    attempts = 0
+
+    async def fake_fetch_page(*args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 2:
+            raise KeyboardInterrupt
+        payload = make_tweet_detail_response([make_tweet_result("1", "complete", user_id="42")])
+        return httpx.Response(200, json=payload, request=httpx.Request("GET", args[1]))
+
+    class DummyClient:
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr(archive_import, "locked_archive_job", fake_locked_archive_job)
+    monkeypatch.setattr(archive_import, "resolve_query_ids", fake_resolve_query_ids)
+    monkeypatch.setattr(
+        archive_import, "build_async_client", lambda *_args, **_kwargs: DummyClient()
+    )
+    monkeypatch.setattr(archive_import, "fetch_page", fake_fetch_page)
+
+    with pytest.raises(KeyboardInterrupt):
+        asyncio.run(
+            archive_import._enrich_pending_rows(
+                limit=None,
+                config=AppConfig(),
+                paths=paths,
+                auth_bundle=_auth_bundle(),
+                transport=None,
+                console=_console(),
+            )
+        )
+
+    store = open_archive_store(paths, create=False)
+    assert store is not None
+    assert store._get_row("tweet_object:1")["enrichment_state"] == "done"
+    assert store._get_row("tweet_object:2")["enrichment_state"] == "pending"
+    store.close()
+
+
+def test_enrich_pending_rows_aborts_on_unexpected_parser_error_without_mutating_rows(
+    paths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = open_archive_store(paths, create=True)
+    assert store is not None
+    store._merge_records(
+        [
+            store._record(
+                row_key=f"tweet_object:{tweet_id}",
+                record_type="tweet_object",
+                tweet_id=tweet_id,
+                enrichment_state="pending",
+            )
+            for tweet_id in ("1", "2")
+        ]
+    )
+    store.close()
+
+    @asynccontextmanager
+    async def fake_locked_archive_job(*, config=None, paths=None, console=None):
+        store = open_archive_store(paths, create=False)
+        assert store is not None
+        try:
+            yield SimpleNamespace(store=store, mark_dirty=lambda **_kwargs: None)
+        finally:
+            store.close()
+
+    async def fake_resolve_query_ids(*_args, **_kwargs):
+        return {"TweetDetail": "detail-query-id"}
+
+    attempts = 0
+
+    async def fake_fetch_page(*args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        payload = make_tweet_detail_response(
+            [make_tweet_result("1", "would be complete", user_id="42")]
+        )
+        return httpx.Response(200, json=payload, request=httpx.Request("GET", args[1]))
+
+    class DummyClient:
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr(archive_import, "locked_archive_job", fake_locked_archive_job)
+    monkeypatch.setattr(archive_import, "resolve_query_ids", fake_resolve_query_ids)
+    monkeypatch.setattr(
+        archive_import, "build_async_client", lambda *_args, **_kwargs: DummyClient()
+    )
+    monkeypatch.setattr(archive_import, "fetch_page", fake_fetch_page)
+    monkeypatch.setattr(
+        archive_import,
+        "parse_tweet_detail_response",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(TypeError("parser bug")),
+    )
+
+    with pytest.raises(TypeError, match="parser bug"):
+        asyncio.run(
+            archive_import._enrich_pending_rows(
+                limit=None,
+                config=AppConfig(),
+                paths=paths,
+                auth_bundle=_auth_bundle(),
+                transport=None,
+                console=_console(),
+            )
+        )
+
+    assert attempts == 1
+    store = open_archive_store(paths, create=False)
+    assert store is not None
+    assert store._get_row("tweet_object:1")["enrichment_state"] == "pending"
+    assert store._get_row("tweet_object:2")["enrichment_state"] == "pending"
+    store.close()
+
+
+def test_enrich_pending_rows_keeps_known_transport_errors_per_row_retryable(
+    paths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = open_archive_store(paths, create=True)
+    assert store is not None
+    store._merge_records(
+        [
+            store._record(
+                row_key="tweet_object:1",
+                record_type="tweet_object",
+                tweet_id="1",
+                enrichment_state="pending",
+            )
+        ]
+    )
+    store.close()
+
+    @asynccontextmanager
+    async def fake_locked_archive_job(*, config=None, paths=None, console=None):
+        store = open_archive_store(paths, create=False)
+        assert store is not None
+        try:
+            yield SimpleNamespace(store=store, mark_dirty=lambda **_kwargs: None)
+        finally:
+            store.close()
+
+    async def fake_resolve_query_ids(*_args, **_kwargs):
+        return {"TweetDetail": "detail-query-id"}
+
+    async def fake_fetch_page(*args, **_kwargs):
+        request = httpx.Request("GET", args[1])
+        raise httpx.ConnectError("offline", request=request)
+
+    class DummyClient:
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr(archive_import, "locked_archive_job", fake_locked_archive_job)
+    monkeypatch.setattr(archive_import, "resolve_query_ids", fake_resolve_query_ids)
+    monkeypatch.setattr(
+        archive_import, "build_async_client", lambda *_args, **_kwargs: DummyClient()
+    )
+    monkeypatch.setattr(archive_import, "fetch_page", fake_fetch_page)
+
+    result = asyncio.run(
+        archive_import._enrich_pending_rows(
+            limit=None,
+            config=AppConfig(),
+            paths=paths,
+            auth_bundle=_auth_bundle(),
+            transport=None,
+            console=_console(),
+        )
+    )
+
+    assert result.transient_failures == 1
+    store = open_archive_store(paths, create=False)
+    assert store is not None
+    row = store._get_row("tweet_object:1")
+    assert row["enrichment_state"] == "transient_failure"
+    assert row["enrichment_reason"] is None
+    assert row["enrichment_retry_count"] == 1
+    assert row["enrichment_next_retry_at"] is not None
+    store.close()
 
 
 def test_archive_live_reconciliation_skips_resuming_saved_backfills(
@@ -1144,7 +1763,7 @@ def test_import_x_archive_detail_api_errors_become_transient_failures(
     store.close()
 
 
-def test_import_x_archive_detail_stale_query_id_leaves_rows_retryable(
+def test_import_x_archive_detail_stale_query_id_aborts_and_leaves_row_untouched(
     paths, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     archive_dir = _write_archive_dir(tmp_path)
@@ -1169,21 +1788,17 @@ def test_import_x_archive_detail_stale_query_id_leaves_rows_retryable(
     )
     monkeypatch.setattr(archive_import, "fetch_page", fake_fetch_page)
 
-    result = asyncio.run(
-        import_x_archive(
-            archive_dir,
-            detail_lookups=1,
-            config=AppConfig(),
-            paths=paths,
-            console=_console(),
+    with pytest.raises(archive_import.ArchiveEnrichmentAborted, match="stale query id") as exc:
+        asyncio.run(
+            import_x_archive(
+                archive_dir,
+                detail_lookups=1,
+                config=AppConfig(),
+                paths=paths,
+                console=_console(),
+            )
         )
-    )
-
-    assert result.detail_lookups == 0
-    assert result.detail_terminal_unavailable == 0
-    assert result.detail_transient_failures == 0
-    assert result.pending_enrichment == 1
-    assert any("detail enrichment failed: stale query id" in warning for warning in result.warnings)
+    assert isinstance(exc.value.cause, StaleQueryIdError)
 
     store = open_archive_store(paths, create=False)
     assert store is not None
@@ -1191,8 +1806,42 @@ def test_import_x_archive_detail_stale_query_id_leaves_rows_retryable(
     assert tweet_object["enrichment_state"] == "pending"
     assert tweet_object["enrichment_http_status"] is None
     manifest_row = store._query(expr="record_type = 'import_manifest'", limit=1)[0]
-    manifest_counts = json.loads(manifest_row["counts_json"])
-    assert manifest_counts["pending_enrichment"] == 1
+    assert manifest_row["status"] == "completed"
+    assert manifest_row["enrichment_followup_status"] == "enrichment_aborted"
+    assert "stale query id" in manifest_row["enrichment_aborted_reason"]
+    store.close()
+
+
+def test_import_x_archive_finalizes_manifest_when_followup_is_interrupted(
+    paths, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    archive_dir = _write_archive_dir(tmp_path)
+
+    async def interrupt_followup(**_kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(archive_import, "_run_archive_followup", interrupt_followup)
+
+    with pytest.raises(archive_import.ArchiveEnrichmentInterrupted):
+        asyncio.run(
+            import_x_archive(
+                archive_dir,
+                config=AppConfig(),
+                paths=paths,
+                console=_console(),
+            )
+        )
+
+    store = open_archive_store(paths, create=False)
+    assert store is not None
+    manifest = store._query(expr="record_type = 'import_manifest'", limit=1)[0]
+    counts = json.loads(manifest["counts_json"])
+    assert manifest["status"] == "completed"
+    assert manifest["enrichment_followup_status"] == "enrichment_interrupted"
+    assert manifest["enrichment_aborted_reason"] == "KeyboardInterrupt"
+    assert counts["pending_enrichment"] == store.count_incomplete_initial_enrichment()
+    assert "transient_due" in counts
+    assert "transient_delayed" in counts
     store.close()
 
 

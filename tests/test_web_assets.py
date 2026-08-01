@@ -40,6 +40,14 @@ def test_index_loads_local_assets_in_dependency_order():
     assert 'x-data="tweetApp()"' in html
     assert 'x-data="searchAutocomplete()"' in html
     assert 'aria-label="Scroll to top"' in html
+    assert 'x-show="archiveEnrichmentIncomplete > 0"' in html
+    assert "tweetxvault import enrich" in html
+    assert 'x-text="statsHealth.enrichment.available.toLocaleString()"' in html
+    assert 'x-text="statsHealth.enrichment.done.toLocaleString()"' not in html
+
+    app_js = (WEB_DIR / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    assert "fetchArchiveEnrichmentStatus" in app_js
+    assert "d.enrichment?.incomplete" in app_js
 
 
 @pytest.mark.parametrize(

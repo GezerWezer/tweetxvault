@@ -22,7 +22,12 @@ from rich.table import Table
 from rich.text import Text
 
 from tweetxvault import __version__
-from tweetxvault.archive_import import enrich_imported_archive, import_x_archive
+from tweetxvault.archive_import import (
+    ArchiveEnrichmentAborted,
+    ArchiveEnrichmentInterrupted,
+    enrich_imported_archive,
+    import_x_archive,
+)
 from tweetxvault.articles import refresh_articles
 from tweetxvault.auth import (
     BrowserCandidate,
@@ -41,6 +46,7 @@ from tweetxvault.extractor import extract_status_id_from_url
 from tweetxvault.grailbird import convert_archive as convert_grailbird_archive
 from tweetxvault.media import download_media
 from tweetxvault.query_ids import QueryIdStore, refresh_query_ids
+from tweetxvault.reminders import print_pending_archive_enrichment_reminder
 from tweetxvault.storage import open_archive_store
 from tweetxvault.sync import (
     ProcessLock,
@@ -58,14 +64,15 @@ auth_app = typer.Typer(no_args_is_help=True, help="Check auth and refresh query 
 export_app = typer.Typer(no_args_is_help=True, help="Export the local archive.")
 import_app = typer.Typer(no_args_is_help=True, help="Import and enrich official X archives.")
 media_app = typer.Typer(no_args_is_help=True, help="Download archived tweet media.")
+repair_app = typer.Typer(no_args_is_help=True, help="Repair recoverable legacy archive rows.")
 SYNC_GROUP_HELP = (
     "Run the normal sync pass. Without a subcommand, this syncs bookmarks and likes, "
-    "then runs archive enrich, thread expansion, article refresh, media download, "
-    "and unfurl unless you skip them."
+    "then runs thread expansion, resurrection checks, article refresh, media download, "
+    "and URL unfurl unless skipped."
 )
 SYNC_ALL_HELP = (
-    "Sync bookmarks and likes, then run archive enrich, thread expansion, article "
-    "refresh, media download, and unfurl unless skipped."
+    "Sync bookmarks and likes, then run thread expansion, resurrection checks, article "
+    "refresh, media download, and URL unfurl unless skipped."
 )
 sync_app = typer.Typer(
     invoke_without_command=True,
@@ -79,6 +86,7 @@ app.add_typer(auth_app, name="auth", help="Check auth and refresh query IDs.")
 app.add_typer(export_app, name="export", help="Export the local archive.")
 app.add_typer(import_app, name="import", help="Import and enrich official X archives.")
 app.add_typer(media_app, name="media", help="Download archived tweet media.")
+app.add_typer(repair_app, name="repair", help="Repair recoverable legacy archive rows.")
 app.add_typer(
     sync_app,
     name="sync",
@@ -112,7 +120,7 @@ HEAD_ONLY_HELP = (
     "Does not resume older historical backfill state."
 )
 SYNC_LIMIT_HELP = "Maximum number of pages to fetch for this run."
-SYNC_SKIP_ENRICH_HELP = "Skip automatic archive TweetDetail enrichment after sync."
+SYNC_SKIP_RESURRECTION_HELP = "Skip bounded unavailable-tweet resurrection checks after sync."
 SYNC_SKIP_ARTICLES_HELP = "Skip automatic article-body refresh after sync."
 SYNC_SKIP_MEDIA_HELP = "Skip automatic media downloads after sync."
 SYNC_SKIP_UNFURL_HELP = "Skip automatic URL unfurls after sync."
@@ -134,9 +142,9 @@ SYNC_HEAD_ONLY_OPTION = Annotated[
     bool,
     typer.Option("--head-only", help=HEAD_ONLY_HELP),
 ]
-SYNC_SKIP_ENRICH_OPTION = Annotated[
+SYNC_SKIP_RESURRECTION_OPTION = Annotated[
     bool,
-    typer.Option("--skip-enrich", help=SYNC_SKIP_ENRICH_HELP),
+    typer.Option("--skip-resurrection", help=SYNC_SKIP_RESURRECTION_HELP),
 ]
 SYNC_SKIP_ARTICLES_OPTION = Annotated[
     bool,
@@ -419,11 +427,14 @@ def _parse_search_collections(value: str | None, console: Console) -> set[str] |
 
 
 def _open_store_for_read(console: Console):
+    from tweetxvault.reminders import print_archive_migration_report
+
     config, paths = load_config()
     store = open_archive_store(paths, create=False, config=config)
     if store is None:
         console.print("[red]No local archive found.[/red]")
         raise typer.Exit(1)
+    print_archive_migration_report(console, store)
     return store, paths
 
 
@@ -447,15 +458,30 @@ def _print_archive_followup(console: Console, result: Any) -> None:
             "live reconciliation: " + ", ".join(result.reconciled_collections),
             highlight=False,
         )
+    pending_untouched = getattr(result, "pending_untouched", result.pending_enrichment)
+    transient_due = getattr(result, "transient_due", 0)
+    transient_delayed = getattr(result, "transient_delayed", 0)
     console.print(
         "detail enrichment: "
         f"{result.detail_lookups} refreshed, "
         f"{result.detail_terminal_unavailable} terminal, "
         f"{result.detail_transient_failures} transient failures, "
-        f"{result.pending_enrichment} pending"
+        f"{pending_untouched} pending untouched, "
+        f"{transient_due} transient due, "
+        f"{transient_delayed} transient delayed"
     )
     for warning in result.warnings:
         console.print(f"[yellow]{warning}[/yellow]")
+
+
+def _print_archive_enrichment_reminder(console: Console, paths, config) -> None:
+    store = open_archive_store(paths, create=False, config=config)
+    if store is None:
+        return
+    try:
+        print_pending_archive_enrichment_reminder(console, store)
+    finally:
+        store.close()
 
 
 def _run_sync_command(
@@ -486,20 +512,18 @@ def _run_sync_command(
 
 def _sync_followup_plan(
     *,
-    skip_enrich: bool,
+    skip_resurrection: bool,
     skip_articles: bool,
     skip_media: bool,
     skip_unfurl: bool,
     skip_threads: bool,
-    retry_failed: bool = False,
 ) -> SyncFollowupPlan:
     return SyncFollowupPlan(
-        enrich=not skip_enrich,
+        resurrection=not skip_resurrection,
         articles=not skip_articles,
         media=not skip_media,
         unfurl=not skip_unfurl,
         threads=not skip_threads,
-        retry_failed=retry_failed,
     )
 
 
@@ -513,21 +537,19 @@ def _run_sync_all_command(
     browser: str | None,
     profile: str | None,
     profile_path: Path | None,
-    skip_enrich: bool,
+    skip_resurrection: bool,
     skip_articles: bool,
     skip_media: bool,
     skip_unfurl: bool,
     skip_threads: bool,
-    retry_failed: bool,
     max_linked_depth: int | None = None,
 ) -> None:
     followups = _sync_followup_plan(
-        skip_enrich=skip_enrich,
+        skip_resurrection=skip_resurrection,
         skip_articles=skip_articles,
         skip_media=skip_media,
         skip_unfurl=skip_unfurl,
         skip_threads=skip_threads,
-        retry_failed=retry_failed,
     )
     console, outcome = _run_sync_command(
         browser=browser,
@@ -597,18 +619,11 @@ def sync_default(
     browser: SYNC_BROWSER_OPTION = None,
     profile: SYNC_PROFILE_OPTION = None,
     profile_path: SYNC_PROFILE_PATH_OPTION = None,
-    skip_enrich: SYNC_SKIP_ENRICH_OPTION = False,
+    skip_resurrection: SYNC_SKIP_RESURRECTION_OPTION = False,
     skip_articles: SYNC_SKIP_ARTICLES_OPTION = False,
     skip_media: SYNC_SKIP_MEDIA_OPTION = False,
     skip_unfurl: SYNC_SKIP_UNFURL_OPTION = False,
     skip_threads: SYNC_SKIP_THREADS_OPTION = False,
-    retry_failed: Annotated[
-        bool,
-        typer.Option(
-            "--retry-failed",
-            help="Retry all previously failed/dead tweets in one batch.",
-        ),
-    ] = False,
     max_linked_depth: SYNC_MAX_LINKED_DEPTH_OPTION = None,
 ) -> None:
     if ctx.invoked_subcommand is not None:
@@ -622,12 +637,11 @@ def sync_default(
         browser=browser,
         profile=profile,
         profile_path=profile_path,
-        skip_enrich=skip_enrich,
+        skip_resurrection=skip_resurrection,
         skip_articles=skip_articles,
         skip_media=skip_media,
         skip_unfurl=skip_unfurl,
         skip_threads=skip_threads,
-        retry_failed=retry_failed,
         max_linked_depth=max_linked_depth,
     )
 
@@ -651,26 +665,18 @@ def _register_sync_collection_command(collection: str):
         browser: SYNC_BROWSER_OPTION = None,
         profile: SYNC_PROFILE_OPTION = None,
         profile_path: SYNC_PROFILE_PATH_OPTION = None,
-        skip_enrich: SYNC_SKIP_ENRICH_OPTION = False,
+        skip_resurrection: SYNC_SKIP_RESURRECTION_OPTION = False,
         skip_articles: SYNC_SKIP_ARTICLES_OPTION = False,
         skip_media: SYNC_SKIP_MEDIA_OPTION = False,
         skip_unfurl: SYNC_SKIP_UNFURL_OPTION = False,
         skip_threads: SYNC_SKIP_THREADS_OPTION = False,
-        retry_failed: Annotated[
-            bool,
-            typer.Option(
-                "--retry-failed",
-                help="Retry all previously failed/dead tweets in one batch.",
-            ),
-        ] = False,
     ) -> None:
         followups = _sync_followup_plan(
-            skip_enrich=skip_enrich,
+            skip_resurrection=skip_resurrection,
             skip_articles=skip_articles,
             skip_media=skip_media,
             skip_unfurl=skip_unfurl,
             skip_threads=skip_threads,
-            retry_failed=retry_failed,
         )
         console, result = _run_sync_command(
             browser=browser,
@@ -938,18 +944,11 @@ def sync_everything(
     browser: SYNC_BROWSER_OPTION = None,
     profile: SYNC_PROFILE_OPTION = None,
     profile_path: SYNC_PROFILE_PATH_OPTION = None,
-    skip_enrich: SYNC_SKIP_ENRICH_OPTION = False,
+    skip_resurrection: SYNC_SKIP_RESURRECTION_OPTION = False,
     skip_articles: SYNC_SKIP_ARTICLES_OPTION = False,
     skip_media: SYNC_SKIP_MEDIA_OPTION = False,
     skip_unfurl: SYNC_SKIP_UNFURL_OPTION = False,
     skip_threads: SYNC_SKIP_THREADS_OPTION = False,
-    retry_failed: Annotated[
-        bool,
-        typer.Option(
-            "--retry-failed",
-            help="Retry all previously failed/dead tweets in one batch.",
-        ),
-    ] = False,
     max_linked_depth: SYNC_MAX_LINKED_DEPTH_OPTION = None,
 ) -> None:
     _run_sync_all_command(
@@ -961,12 +960,11 @@ def sync_everything(
         browser=browser,
         profile=profile,
         profile_path=profile_path,
-        skip_enrich=skip_enrich,
+        skip_resurrection=skip_resurrection,
         skip_articles=skip_articles,
         skip_media=skip_media,
         skip_unfurl=skip_unfurl,
         skip_threads=skip_threads,
-        retry_failed=retry_failed,
         max_linked_depth=max_linked_depth,
     )
 
@@ -1315,22 +1313,21 @@ def import_x_archive_command(
     enrich: Annotated[
         bool,
         typer.Option(
-            "--enrich",
+            "--enrich/--no-enrich",
             help=(
-                "Fetch TweetDetail for all pending sparse archive tweets after bulk live syncs. "
-                "If this archive was already imported, reuse the existing import and run only "
-                "the follow-up enrichment."
+                "Automatically complete sparse archive TweetDetail enrichment after import. "
+                "Bulk live reconciliation still runs with --no-enrich."
             ),
         ),
-    ] = False,
+    ] = True,
     detail_lookups: Annotated[
         int,
         typer.Option(
             "--detail-lookups",
             min=0,
             help=(
-                "Maximum number of pending sparse tweets to enrich by fetching X's "
-                "per-tweet TweetDetail API after bulk live syncs."
+                "Bound automatic TweetDetail enrichment to this many sparse tweets for this "
+                "import invocation."
             ),
         ),
     ] = 0,
@@ -1362,6 +1359,8 @@ def import_x_archive_command(
     debug_auth: DEBUG_AUTH_OPTION = False,
 ) -> None:
     console = _configure_logging()
+    config = None
+    paths = None
     try:
         config, paths = load_config()
         config, auth_bundle = _prepare_auth_override(
@@ -1386,6 +1385,22 @@ def import_x_archive_command(
                 console=console,
             )
         )
+    except ArchiveEnrichmentInterrupted as exc:
+        console.print("Archive import is complete.", highlight=False)
+        console.print("\nArchive enrichment was interrupted.", highlight=False)
+        console.print(
+            f"{exc.remaining:,} sparse archive tweets remain incomplete.",
+            highlight=False,
+        )
+        console.print("\nContinue later with:\n  tweetxvault import enrich", highlight=False)
+        raise typer.Exit(130) from exc
+    except ArchiveEnrichmentAborted as exc:
+        console.print("Archive import is complete.", highlight=False)
+        console.print("\nAutomatic archive enrichment stopped:", highlight=False)
+        console.print(f"[red]{exc.cause}[/red]")
+        console.print(f"{exc.remaining:,} sparse archive tweets remain incomplete.")
+        console.print("\nContinue later with:\n  tweetxvault import enrich", highlight=False)
+        raise typer.Exit(2) from exc
     except ConfigError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
@@ -1395,6 +1410,8 @@ def import_x_archive_command(
 
     if result.skipped and not result.followup_performed:
         console.print("archive import skipped: already imported")
+        assert config is not None and paths is not None
+        _print_archive_enrichment_reminder(console, paths, config)
         return
     if result.skipped:
         console.print(
@@ -1411,6 +1428,8 @@ def import_x_archive_command(
         f"{result.counts.get('media_files_copied', 0)} media files copied"
     )
     _print_archive_followup(console, result)
+    assert config is not None and paths is not None
+    _print_archive_enrichment_reminder(console, paths, config)
     _maybe_restart_web(console)
 
 
@@ -1425,11 +1444,11 @@ def import_archive_enrich(
             "--limit",
             min=1,
             help=(
-                "Maximum number of pending sparse archive tweets to enrich via X's "
-                "per-tweet TweetDetail API after bulk live syncs."
+                "Maximum sparse tweets to process in this continuation run. "
+                "Omit to process every currently eligible row."
             ),
         ),
-    ] = 200,
+    ] = None,
     browser: SYNC_BROWSER_OPTION = None,
     profile: SYNC_PROFILE_OPTION = None,
     profile_path: SYNC_PROFILE_PATH_OPTION = None,
@@ -1455,6 +1474,16 @@ def import_archive_enrich(
                 console=console,
             )
         )
+    except ArchiveEnrichmentInterrupted as exc:
+        console.print("Archive enrichment was interrupted.", highlight=False)
+        console.print(f"{exc.remaining:,} tweets remain incomplete.", highlight=False)
+        console.print("Run `tweetxvault import enrich` to continue.", highlight=False)
+        raise typer.Exit(130) from exc
+    except ArchiveEnrichmentAborted as exc:
+        console.print(f"[red]{exc}[/red]")
+        console.print(f"{exc.remaining:,} tweets remain incomplete.", highlight=False)
+        console.print("Run `tweetxvault import enrich` to continue.", highlight=False)
+        raise typer.Exit(2) from exc
     except ConfigError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
@@ -1464,6 +1493,73 @@ def import_archive_enrich(
 
     console.print("archive enrich: existing imported archive data", highlight=False)
     _print_archive_followup(console, result)
+    _print_archive_enrichment_reminder(console, paths, config)
+
+
+@repair_app.command(
+    "legacy-tombstones",
+    help="Recover richer content for legacy unavailable tweet tombstones.",
+)
+def repair_legacy_tombstones(
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Report recoverable legacy rows without modifying the archive.",
+        ),
+    ] = False,
+    limit: Annotated[
+        int | None,
+        typer.Option(
+            "--limit",
+            min=1,
+            help="Maximum number of suspicious legacy tombstone rows to inspect.",
+        ),
+    ] = None,
+    scan_timeline_captures: Annotated[
+        bool,
+        typer.Option(
+            "--scan-timeline-captures",
+            help="Also scan large timeline captures for richer recovery candidates.",
+        ),
+    ] = False,
+) -> None:
+    from tweetxvault.reminders import print_archive_migration_report
+
+    console = _configure_logging()
+    config, paths = load_config()
+    lock = ProcessLock(paths.lock_file)
+    lock.acquire()
+    store = None
+    try:
+        store = open_archive_store(paths, create=False, config=config)
+        if store is None:
+            raise ConfigError("No local archive found.")
+        print_archive_migration_report(console, store)
+        report = store.repair_legacy_terminal_rows(
+            limit=limit,
+            scan_timeline_captures=scan_timeline_captures,
+            dry_run=dry_run,
+        )
+    except ConfigError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+    finally:
+        if store is not None:
+            store.close()
+        lock.release()
+
+    prefix = "legacy tombstone dry run" if dry_run else "legacy tombstone repair"
+    content_label = "recoverable" if dry_run else "repaired"
+    author_label = "recoverable" if dry_run else "restored"
+    console.print(
+        f"{prefix}: {report['legacy_terminal_rows_scanned']:,} scanned, "
+        f"{report['content_rows_repaired']:,} content rows {content_label}, "
+        f"{report['author_rows_repaired']:,} authors {author_label}, "
+        f"{report['rows_still_missing_author']:,} still missing authors, "
+        f"{report['rows_without_richer_source']:,} without a richer local source",
+        highlight=False,
+    )
 
 
 @media_app.command("download", help="Download archived tweet media files.")
@@ -1700,10 +1796,17 @@ def stats_archive() -> None:
             (
                 f"{stats.pending_enrichment_count} pending, "
                 f"{stats.transient_enrichment_failure_count} retryable failures, "
-                f"{stats.terminal_enrichment_count} terminal, "
+                f"{getattr(stats, 'retryable_unavailable_count', stats.terminal_enrichment_count)} "
+                "retryable unavailable, "
+                f"{getattr(stats, 'permanent_unavailable_count', 0)} permanent unavailable, "
                 f"{stats.resurrected_enrichment_count} resurrected, "
                 f"{stats.done_enrichment_count} done"
             ),
+        )
+        followup.add_row(
+            "Tweet resurrection",
+            f"{getattr(stats, 'due_resurrection_count', 0)} unavailable tweets currently due "
+            "for checking",
         )
         followup.add_row(
             "Articles refresh",
@@ -1766,6 +1869,7 @@ def stats_archive() -> None:
             ),
         )
         console.print(legend)
+        print_pending_archive_enrichment_reminder(console, store)
     finally:
         store.close()
 

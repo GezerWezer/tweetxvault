@@ -187,8 +187,8 @@ This probes the API without writing any data and reports credential status and e
 ### Syncing
 
 ```bash
-# Normal archive maintenance: sync bookmarks + likes, then run archive enrich,
-# thread expansion, article refresh, media download, and unfurl.
+# Normal archive maintenance: sync bookmarks + likes, then run thread expansion,
+# bounded resurrection checks, article refresh, media download, and unfurl.
 uv run tweetxvault sync
 
 # Explicit alias for the same default sync pass
@@ -222,7 +222,7 @@ uv run tweetxvault sync --skip-media --skip-unfurl
 ```
 
 `--article-backfill` updates stored `raw_json` and normalized secondary rows inline, so it does not require a follow-up `tweetxvault rehydrate`.
-By default, `tweetxvault sync` and `tweetxvault sync all` both cover bookmarks + likes, then visibly run the follow-up archive-maintenance passes for TweetDetail enrich, threads, preview-only articles, media, and unfurls. Authored tweets stay opt-in via `tweetxvault sync tweets`.
+By default, `tweetxvault sync` and `tweetxvault sync all` both cover bookmarks + likes, then visibly run thread expansion, bounded unavailable-tweet resurrection checks, preview-only article refresh, media download, unfurl, and configured media tagging. Initial X-archive enrichment is a separate finite import job and never runs during ordinary sync. Authored tweets stay opt-in via `tweetxvault sync tweets`.
 `--head-only` is the escape hatch when an old saved backfill cursor is no longer useful: it clears that cursor for the targeted collection and runs only the normal head pass. It cannot be combined with `--full`, `--backfill`, or `--article-backfill`.
 
 Common sync flags:
@@ -231,8 +231,7 @@ Common sync flags:
 - `--backfill`: keep walking older pages past duplicate detection when you want more history without resetting state.
 - `--head-only`: clear a saved older-history cursor and do only the normal head pass; use this to stop `resume older`.
 - `--article-backfill`: rewalk existing pages to refresh article-bearing tweets after article extraction changes.
-- `--retry-failed`: retry all previously failed (dead/deleted) tweets during enrichment/thread expansion runs.
-- `--skip-enrich`, `--skip-threads`, `--skip-articles`, `--skip-media`, `--skip-unfurl`: skip one or more automatic follow-up archive-maintenance jobs for just that sync run.
+- `--skip-resurrection`, `--skip-threads`, `--skip-articles`, `--skip-media`, `--skip-unfurl`: skip one or more automatic follow-up archive-maintenance jobs for just that sync run.
 - `--limit N`: cap the run to `N` fetched pages for debugging, sampling, or shorter catch-up runs.
 - `--browser`, `--profile`, `--profile-path`: force a specific browser/profile for cookie extraction on just that run.
 
@@ -269,21 +268,22 @@ uv run tweetxvault media download
 uv run tweetxvault unfurl
 ```
 
-Every command in that follow-up path supports `--limit`, so you can do bounded
-incremental tests first. `media download` and `unfurl` additionally support
+The bare `import enrich` command processes every currently eligible initial-enrichment row;
+use `--limit N` for a bounded continuation run. The other commands in that follow-up path
+also support `--limit`. `media download` and `unfurl` additionally support
 `--retry-failed` if you want to revisit rows that previously failed.
 
 ### Importing an X archive
 
 ```bash
-# Import an official X archive ZIP or extracted directory
+# Import an official X archive and automatically enrich every currently eligible sparse row
 uv run tweetxvault import x-archive ~/Downloads/twitter-archive.zip
 
 # Clear previously imported archive-owned rows/media and reimport from scratch
 uv run tweetxvault import x-archive ~/Downloads/twitter-archive.zip --regen
 
-# Fetch TweetDetail for every remaining sparse archive tweet after the automatic bulk tweets/likes reconciliation
-uv run tweetxvault import x-archive ~/Downloads/twitter-archive.zip --enrich
+# Import and run bulk live reconciliation, but leave sparse TweetDetail work for later
+uv run tweetxvault import x-archive ~/Downloads/twitter-archive.zip --no-enrich
 
 # Run a bounded TweetDetail follow-up after the automatic bulk tweets/likes reconciliation
 uv run tweetxvault import x-archive ~/Downloads/twitter-archive --detail-lookups 100
@@ -298,12 +298,12 @@ uv run tweetxvault import enrich
 uv run tweetxvault import enrich --limit 500
 ```
 
-The importer maps authored tweets, deleted authored tweets, likes, and exported `tweets_media/` files into the same SQLite archive used by live sync. It applies the same archive-owner guardrail as sync, runs bulk live `tweets` / `likes` reconciliation automatically when auth is available, and keeps sparse archive-only rows in a tracked pending state until you choose how much per-tweet follow-up to run. 
+The importer maps authored tweets, deleted authored tweets, likes, and exported `tweets_media/` files into the same SQLite archive used by live sync. It applies the same archive-owner guardrail as sync, runs bulk live `tweets` / `likes` reconciliation when auth is available, and then drains all currently eligible sparse TweetDetail rows by default. Progress is committed in batches. If enrichment is interrupted, the local archive import remains complete and the command prints `tweetxvault import enrich` as the continuation command.
 
 Import follow-up options:
-- Default import does **no per-tweet TweetDetail pass**. It only imports the archive and runs the bulk live collection reconciliation.
-- `--detail-lookups N` runs a bounded TweetDetail pass for at most `N` pending sparse tweets after the bulk live syncs.
-- `--enrich` runs the TweetDetail pass for **all** currently pending sparse tweets after the bulk live syncs.
+- Default import runs the TweetDetail pass for **all currently eligible** sparse tweets after bulk live reconciliation.
+- `--no-enrich` skips only the long per-tweet pass; bulk live reconciliation still runs.
+- `--detail-lookups N` bounds automatic TweetDetail enrichment to at most `N` selected sparse tweets for that import invocation.
 - `--regen` clears archive-import-owned rows, import manifests, and copied archive media files before reimporting. It leaves live-synced rows intact.
 
 ### Importing old "Grailbird" archives (pre-2018)
@@ -536,13 +536,21 @@ uv run tweetxvault optimize
 # Rebuild normalized tweet fields and secondary objects from stored raw JSON
 uv run tweetxvault rehydrate
 
+# Recover richer legacy tombstone rows; add --dry-run or --limit N as needed
+uv run tweetxvault repair legacy-tombstones
+
+# Explicitly include the potentially expensive timeline-capture scan
+uv run tweetxvault repair legacy-tombstones --scan-timeline-captures
+
 # Force-refresh query IDs from Twitter's JS bundles
 uv run tweetxvault auth refresh-ids
 ```
 
 `tweetxvault stats` reports overall post/article totals, per-collection counts plus first/last tweet timestamps, storage health details such as DB/media size, and follow-up queues for archive enrichment, thread expansion, and dead-tweet resurrection. 
 
-**Tombstones & Resurrection:** When `tweetxvault` encounters an HTTP 410 or a `TerminalUnavailableError` during syncs, it safely flags the tweet as a dead `__tombstone__` (e.g., deleted, private, or suspended account). It logs this state (`terminal_enrichment`) to prevent infinite network loops. However, because authors sometimes un-suspend or restore accounts, `tweetxvault` runs an automatic "resurrection" trickle pass at the end of normal sync jobs. It silently re-tests the oldest 500 tombstoned tweets to see if they've come back online. You can view the terminal and resurrected counts via `tweetxvault stats`.
+**Tombstones & Resurrection:** TweetDetail tombstones retain their original type, message, entities, and raw response while also receiving a stable reason such as `protected_account`, `suspended_account`, `account_missing`, `deleted_by_author`, or `unavailable_unknown`. A tombstone changes availability only when it can be positively associated with the requested tweet. If the focal tweet is absent from a response, tweetxvault treats that as a retryable response-shape ambiguity; three consecutive absences stop the worker before a broken parser or API shape can mass-classify rows. Confirmed archive deletions and deleted-by-author posts are never retried automatically. Each normal sync checks at most 200 due, retryable unavailable tweets with reason-weighted scheduling. A successful account-level recovery persists a few same-author probes as immediately due and can prioritize a small same-account burst, always inside the same 200-request budget. `tweetxvault stats` reports initial-enrichment completeness and resurrection eligibility separately.
+
+SQLite schema upgrades create a validated `archive.db.pre-schema-v3...bak` before changing an existing database and print the backup plus legacy-repair summary once. Startup repair is deliberately bounded to indexed local candidates; use `tweetxvault repair legacy-tombstones --scan-timeline-captures` only when you want the deeper scan.
 
 Long-running archive writers such as `sync`, `import enrich`, `threads expand`,
 `articles refresh`, `media download`, and `unfurl` now do a best-effort compact

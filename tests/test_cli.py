@@ -126,8 +126,9 @@ def test_sync_help_lists_subcommand_descriptions() -> None:
     assert result.exit_code == 0
     assert "Run the normal sync pass." in result.stdout
     assert "Without a subcommand" in result.stdout
-    assert "archive enrich" in result.stdout
-    assert "--skip-enrich" in result.stdout
+    assert "archive enrich" not in result.stdout
+    assert "resurrection checks" in result.stdout
+    assert "--skip-resurrection" in result.stdout
     assert "--skip-threads" in result.stdout
     assert "bookmarks" in result.stdout
     assert "Sync bookmarked tweets." in result.stdout
@@ -144,7 +145,7 @@ def test_sync_all_help_describes_default_followups() -> None:
 
     assert result.exit_code == 0
     assert "Sync bookmarks and likes" in result.stdout
-    assert "archive enrich" in result.stdout
+    assert "resurrection checks" in result.stdout
     assert "--skip-media" in result.stdout
     assert "--skip-unfurl" in result.stdout
 
@@ -156,7 +157,7 @@ def test_sync_likes_help_describes_flags() -> None:
     assert "Reset saved sync state" in result.stdout
     assert "Continue older history past duplicates" in result.stdout
     assert "Clear any saved backfill cursor" in result.stdout
-    assert "Maximum number of pages to fetch for this" in result.stdout
+    assert "Maximum number of pages to fetch" in result.stdout
 
 
 def test_import_x_archive_help_describes_sample_limit() -> None:
@@ -164,8 +165,32 @@ def test_import_x_archive_help_describes_sample_limit() -> None:
 
     assert result.exit_code == 0
     assert "--sample-limit" in result.stdout
-    assert "stores a sampled manifest" in result.stdout
+    normalized = " ".join(result.stdout.split())
+    assert "sampled manifest" in normalized
     assert "--detail-lookups" in result.stdout
+    assert "--no-enrich" in result.stdout
+    assert "[default: enrich]" in result.stdout
+
+
+def test_import_enrich_help_has_no_default_limit() -> None:
+    result = runner.invoke(cli.app, ["import", "enrich", "--help"])
+
+    assert result.exit_code == 0
+    assert "--limit" in result.stdout
+    assert "[default: 200]" not in result.stdout
+
+
+def test_legacy_tombstone_repair_help_exposes_bounded_deep_scan_options() -> None:
+    result = runner.invoke(
+        cli.app,
+        ["repair", "legacy-tombstones", "--help"],
+        env={"COLUMNS": "140"},
+    )
+
+    assert result.exit_code == 0
+    assert "--dry-run" in result.stdout
+    assert "--limit" in result.stdout
+    assert "--scan-timeline-captures" in result.stdout
 
 
 def test_root_help_lists_group_descriptions() -> None:
@@ -184,6 +209,8 @@ def test_root_help_lists_group_descriptions() -> None:
     assert "Import and enrich official X archives." in result.stdout
     assert "media" in result.stdout
     assert "Download archived tweet media." in result.stdout
+    assert "repair" in result.stdout
+    assert "Repair recoverable legacy archive rows." in result.stdout
     assert "threads" in result.stdout
     assert "Expand archived tweet threads." in result.stdout
     assert "view" in result.stdout
@@ -230,7 +257,7 @@ def test_view_bookmarks_prints_rows(paths, monkeypatch) -> None:
 
     cli.view_bookmarks(limit=5)
 
-    output = buffer.getvalue()
+    output = " ".join(buffer.getvalue().split())
     assert "bookmark tweet" in output
     assert "bookmarks archive" in output
     assert "LOCAL-TIME" in output
@@ -246,7 +273,7 @@ def test_view_tweets_prints_rows(paths, monkeypatch) -> None:
 
     cli.view_tweets(limit=5)
 
-    output = buffer.getvalue()
+    output = " ".join(buffer.getvalue().split())
     assert "authored tweet" in output
     assert "tweets archive" in output
     assert "bookmark tweet" not in output
@@ -859,10 +886,13 @@ def test_sync_default_skip_flags_disable_selected_followups(paths, monkeypatch) 
 
     monkeypatch.setattr(cli, "sync_all", fake_sync_all)
 
-    result = runner.invoke(cli.app, ["sync", "--skip-media", "--skip-threads"])
+    result = runner.invoke(
+        cli.app, ["sync", "--skip-resurrection", "--skip-media", "--skip-threads"]
+    )
 
     assert result.exit_code == 0
     assert forwarded["followups"] == cli.SyncFollowupPlan(
+        resurrection=False,
         media=False,
         threads=False,
     )
@@ -1121,18 +1151,51 @@ def test_import_x_archive_reports_runner_result(paths, monkeypatch, tmp_path: Pa
     assert captured == {
         "archive": archive_path,
         "regen": True,
-        "enrich": False,
+        "enrich": True,
         "detail_lookups": 25,
         "sample_limit": 100,
         "debug": True,
         "detail_delay": 0,
         "auth_bundle": None,
     }
-    output = buffer.getvalue()
+    output = " ".join(buffer.getvalue().split())
     assert "archive import: 2 authored, 1 deleted authored, 3 likes, 4 media files copied" in output
     assert "live reconciliation: tweets, likes" in output
-    assert "detail enrichment: 5 refreshed, 1 terminal, 2 transient failures, 9 pending" in output
+    assert (
+        "detail enrichment: 5 refreshed, 1 terminal, 2 transient failures, "
+        "9 pending untouched, 0 transient due, 0 transient delayed"
+    ) in output
     assert "archive does not contain a bookmark dataset" in output
+
+
+def test_import_x_archive_interrupt_reports_completed_import_and_continuation(
+    paths, monkeypatch, tmp_path: Path
+) -> None:
+    buffer = StringIO()
+    _capture_console(monkeypatch, buffer)
+    monkeypatch.setattr(cli, "load_config", lambda: (AppConfig(), paths))
+    monkeypatch.setattr(
+        cli,
+        "_prepare_auth_override",
+        lambda config, console, **kwargs: (config, None),
+    )
+
+    async def fake_import_x_archive(*_args, **_kwargs):
+        raise cli.ArchiveEnrichmentInterrupted(12_481)
+
+    monkeypatch.setattr(cli, "import_x_archive", fake_import_x_archive)
+    archive_path = tmp_path / "archive.zip"
+    archive_path.write_bytes(b"placeholder")
+
+    with pytest.raises(typer.Exit) as excinfo:
+        cli.import_x_archive_command(archive_path)
+
+    assert excinfo.value.exit_code == 130
+    output = buffer.getvalue()
+    assert "Archive import is complete." in output
+    assert "Archive enrichment was interrupted." in output
+    assert "12,481 sparse archive tweets remain incomplete." in output
+    assert "tweetxvault import enrich" in output
 
 
 def test_import_x_archive_enrich_reuses_existing_import(paths, monkeypatch, tmp_path: Path) -> None:
@@ -1200,11 +1263,12 @@ def test_import_x_archive_enrich_reuses_existing_import(paths, monkeypatch, tmp_
         "sample_limit": None,
         "debug": False,
     }
-    output = buffer.getvalue().replace("\n", " ")
+    output = " ".join(buffer.getvalue().split())
     assert "already present; keeping existing imported data and running" in output
     assert "follow-up enrichment" in output
     assert "live reconciliation: likes" in output
-    assert "detail enrichment: 7 refreshed, 0 terminal, 1 transient failures, 5 pending" in output
+    assert "detail enrichment: 7 refreshed, 0 terminal, 1 transient failures" in output
+    assert "5 pending untouched" in output
 
 
 def test_import_enrich_runs_followup_for_existing_imports(paths, monkeypatch) -> None:
@@ -1248,11 +1312,54 @@ def test_import_enrich_runs_followup_for_existing_imports(paths, monkeypatch) ->
     cli.import_archive_enrich(limit=50)
 
     assert captured == {"limit": 50, "auth_bundle": None, "detail_delay": 0}
-    output = buffer.getvalue()
+    output = " ".join(buffer.getvalue().split())
     assert "archive enrich: existing imported archive data" in output
     assert "live reconciliation: tweets, likes" in output
-    assert "detail enrichment: 9 refreshed, 2 terminal, 1 transient failures, 4 pending" in output
+    assert "detail enrichment: 9 refreshed, 2 terminal, 1 transient failures" in output
+    assert "4 pending untouched" in output
     assert "detail enrichment failed: upstream 429" in output
+
+
+@pytest.mark.parametrize(
+    ("raised", "exit_code", "expected"),
+    [
+        (
+            cli.ArchiveEnrichmentInterrupted(12_481),
+            130,
+            "Archive enrichment was interrupted.",
+        ),
+        (
+            cli.ArchiveEnrichmentAborted(17, TypeError("parser bug")),
+            2,
+            "Archive enrichment stopped after TypeError: parser bug",
+        ),
+    ],
+)
+def test_import_enrich_reports_interruption_or_systemic_abort(
+    paths, monkeypatch, raised, exit_code: int, expected: str
+) -> None:
+    buffer = StringIO()
+    _capture_console(monkeypatch, buffer)
+    monkeypatch.setattr(cli, "load_config", lambda: (AppConfig(), paths))
+    monkeypatch.setattr(
+        cli,
+        "_prepare_auth_override",
+        lambda config, console, **kwargs: (config, None),
+    )
+
+    async def fail_enrichment(**_kwargs):
+        raise raised
+
+    monkeypatch.setattr(cli, "enrich_imported_archive", fail_enrichment)
+
+    with pytest.raises(typer.Exit) as excinfo:
+        cli.import_archive_enrich()
+
+    assert excinfo.value.exit_code == exit_code
+    output = buffer.getvalue()
+    assert expected in output
+    assert "tweetxvault import enrich" in output
+    assert ("12,481" if exit_code == 130 else "17") in output
 
 
 def test_expand_archive_threads_refresh_requires_targets(paths, monkeypatch) -> None:
@@ -1358,6 +1465,9 @@ def test_stats_archive_renders_summary_tables(paths, monkeypatch) -> None:
                 pending_enrichment_count=2,
                 transient_enrichment_failure_count=1,
                 terminal_enrichment_count=3,
+                retryable_unavailable_count=2,
+                permanent_unavailable_count=1,
+                due_resurrection_count=2,
                 resurrected_enrichment_count=1,
                 done_enrichment_count=4,
                 preview_article_count=5,
@@ -1369,6 +1479,9 @@ def test_stats_archive_renders_summary_tables(paths, monkeypatch) -> None:
 
         def close(self) -> None:
             self.closed = True
+
+        def count_incomplete_initial_enrichment(self) -> int:
+            return 3
 
     store = FakeStore()
     monkeypatch.setattr(cli, "open_archive_store", lambda _paths, create=False, config=None: store)
@@ -1390,7 +1503,13 @@ def test_stats_archive_renders_summary_tables(paths, monkeypatch) -> None:
     assert "run optimize" in normalized
     assert "Follow-Up" in normalized
     assert "Archive enrich (TweetDetail)" in normalized
-    assert "2 pending, 1 retryable failures, 3 terminal, 1 resurrected, 4 done" in normalized
+    assert (
+        "2 pending, 1 retryable failures, 2 retryable unavailable, "
+        "1 permanent unavailable, 1 resurrected, 4 done"
+    ) in normalized
+    assert "Tweet resurrection" in normalized
+    assert "2 unavailable tweets currently due" in normalized
+    assert "Archive enrichment is incomplete: 3 tweets remain." in normalized
     assert "Rehydrate gaps (local rebuild)" in normalized
     assert "6 tweets missing normalized tweet_object rows" in normalized
     assert "Threads expand (TweetDetail)" in normalized

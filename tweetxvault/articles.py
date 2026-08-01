@@ -131,11 +131,11 @@ async def refresh_articles(
                         )
                         pacer.observe(response, status=status)
                         payload = response.json()
-                        tweet = parse_tweet_detail_response(payload, tweet_id)
-                        if tweet is None:
+                        focal = parse_tweet_detail_response(payload, tweet_id)
+                        if not focal.is_available or focal.tweet is None:
                             raise ValueError(f"TweetDetail did not include focal tweet {tweet_id}.")
                         store.persist_tweet_detail(
-                            tweet=tweet,
+                            tweet=focal.tweet,
                             raw_json=payload,
                             http_status=response.status_code,
                         )
