@@ -347,36 +347,30 @@ class ArchiveStore:
                 raise
 
     def _migrate_schema(self) -> None:
-        table_existed = self._archive_table_exists()
         current_version = self._get_schema_version()
         if current_version > SCHEMA_VERSION:
             raise RuntimeError(
                 f"Archive schema version {current_version} is newer than this build supports "
                 f"({SCHEMA_VERSION})."
             )
-        missing_columns = set(ARCHIVE_COLUMNS) - self._archive_column_names()
-        requires_migration = table_existed and (
-            current_version < SCHEMA_VERSION or bool(missing_columns)
-        )
+        if current_version == SCHEMA_VERSION:
+            return
+
+        if not self._archive_table_exists():
+            self._create_latest_schema()
+            return
+
+        self._migrate_legacy_database(current_version)
+
+    def _create_latest_schema(self) -> None:
         col_def = ", ".join(f"{name} {COLUMN_TYPES[name]}" for name in ARCHIVE_COLUMNS)
-        if not table_existed:
-            with self.conn:
-                self.conn.execute(f"CREATE TABLE archive ({col_def})")
-                self._backfill_created_at_timestamps()
-                self._create_fts_schema()
-                self._create_archive_indexes()
-                self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-            self._require_quick_check("after schema creation")
-            return
+        with self.conn:
+            self.conn.execute(f"CREATE TABLE archive ({col_def})")
+            self._create_fts_schema()
+            self._create_archive_indexes()
+            self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
-        if not requires_migration:
-            with self.conn:
-                self._backfill_created_at_timestamps()
-                self._create_fts_schema()
-                self._create_archive_indexes()
-            self._require_quick_check("after schema check")
-            return
-
+    def _migrate_legacy_database(self, current_version: int) -> None:
         self._require_quick_check("before migration")
         before_counts = self._row_counts_by_type()
         sample_keys = [
@@ -387,49 +381,24 @@ class ArchiveStore:
         ]
         backup_path = self._backup_before_migration(SCHEMA_VERSION)
 
-        version = current_version
-        if version < 1 or missing_columns:
-            with self.conn:
-                self._migrate_to_v1()
-                if version < 1:
-                    self.conn.execute("PRAGMA user_version = 1")
-                    version = 1
-        if version < 2:
-            with self.conn:
-                self._migrate_to_v2_enrichment_scheduler()
-                self.conn.execute("PRAGMA user_version = 2")
-            version = 2
-        if version < 3 or missing_columns:
-            with self.conn:
-                repair_counts = self._migrate_to_v3_resurrection_repairs()
-                self._validate_migration(before_counts, sample_keys)
-                self.conn.execute("PRAGMA user_version = 3")
-            self.migration_report = MigrationReport(
-                from_version=current_version,
-                to_version=SCHEMA_VERSION,
-                backup_path=backup_path,
-                **repair_counts,
-            )
+        with self.conn:
+            self._add_missing_archive_columns()
+            self._backfill_created_at_timestamps()
+            self._create_fts_schema()
+            self._backfill_enrichment_scheduler()
+            self._clear_available_enrichment_scheduler()
+            self._create_archive_indexes()
+            repair_counts = self._repair_legacy_terminal_rows()
+            self._validate_migration(before_counts, sample_keys)
+            self._require_quick_check("after migration")
+            self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
-        self._require_quick_check("after migration")
-
-    def _migrate_to_v1(self) -> None:
-        self._add_missing_archive_columns()
-        self._backfill_created_at_timestamps()
-        self._create_fts_schema()
-        self._create_archive_indexes()
-
-    def _migrate_to_v2_enrichment_scheduler(self) -> None:
-        self._add_missing_archive_columns()
-        self._backfill_enrichment_scheduler()
-        self._create_archive_indexes()
-
-    def _migrate_to_v3_resurrection_repairs(self) -> dict[str, int]:
-        self._add_missing_archive_columns()
-        self._backfill_enrichment_scheduler()
-        self._clear_available_enrichment_scheduler()
-        self._create_archive_indexes()
-        return self._repair_legacy_terminal_rows()
+        self.migration_report = MigrationReport(
+            from_version=current_version,
+            to_version=SCHEMA_VERSION,
+            backup_path=backup_path,
+            **repair_counts,
+        )
 
     def _archive_table_exists(self) -> bool:
         return (
@@ -899,12 +868,22 @@ class ArchiveStore:
                 dry_run=dry_run,
             )
 
+    def rebuild_search_index(self) -> None:
+        """Finalize timestamp and full-text indexes after an explicit bulk import."""
+        with self.conn:
+            self._backfill_created_at_timestamps()
+            self.conn.execute("INSERT INTO archive_fts(archive_fts) VALUES('rebuild')")
+
+    def check_integrity(self, *, full: bool = False) -> list[str]:
+        """Run an explicit SQLite integrity diagnostic and return every result row."""
+        pragma = "integrity_check" if full else "quick_check"
+        return [str(row[0]) for row in self.conn.execute(f"PRAGMA {pragma}").fetchall()]
+
     def _validate_migration(
         self,
         before_counts: dict[str | None, int],
         sample_keys: list[str],
     ) -> None:
-        self._require_quick_check("during migration validation")
         after_counts = self._row_counts_by_type()
         if before_counts != after_counts:
             raise RuntimeError(
@@ -4368,13 +4347,7 @@ def open_archive_store(
 def _database_requires_schema_migration(db_path: Path) -> bool:
     connection = sqlite3.connect(db_path)
     try:
-        table_exists = connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'archive'"
-        ).fetchone()
-        if table_exists is None:
-            return True
         version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        columns = {row[1] for row in connection.execute("PRAGMA table_info(archive)").fetchall()}
-        return version < SCHEMA_VERSION or bool(set(ARCHIVE_COLUMNS) - columns)
+        return version != SCHEMA_VERSION
     finally:
         connection.close()

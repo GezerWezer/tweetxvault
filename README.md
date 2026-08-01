@@ -533,6 +533,12 @@ uv run tweetxvault stats
 # Vacuum and optimize the SQLite database
 uv run tweetxvault optimize
 
+# Run a fast SQLite integrity diagnostic explicitly
+uv run tweetxvault db check
+
+# Run SQLite's more exhaustive integrity diagnostic
+uv run tweetxvault db check --full
+
 # Rebuild normalized tweet fields and secondary objects from stored raw JSON
 uv run tweetxvault rehydrate
 
@@ -550,7 +556,7 @@ uv run tweetxvault auth refresh-ids
 
 **Tombstones & Resurrection:** TweetDetail tombstones retain their original type, message, entities, and raw response while also receiving a stable reason such as `protected_account`, `suspended_account`, `account_missing`, `deleted_by_author`, or `unavailable_unknown`. A tombstone changes availability only when it can be positively associated with the requested tweet. If the focal tweet is absent from a response, tweetxvault treats that as a retryable response-shape ambiguity; three consecutive absences stop the worker before a broken parser or API shape can mass-classify rows. Confirmed archive deletions and deleted-by-author posts are never retried automatically. Each normal sync checks at most 200 due, retryable unavailable tweets with reason-weighted scheduling. A successful account-level recovery persists a few same-author probes as immediately due and can prioritize a small same-account burst, always inside the same 200-request budget. `tweetxvault stats` reports initial-enrichment completeness and resurrection eligibility separately.
 
-SQLite schema upgrades create a validated `archive.db.pre-schema-v3...bak` before changing an existing database and print the backup plus legacy-repair summary once. Startup repair is deliberately bounded to indexed local candidates; use `tweetxvault repair legacy-tombstones --scan-timeline-captures` only when you want the deeper scan.
+Already-current SQLite databases open with a cheap schema-version read and do not run integrity scans, index setup, or legacy repair during ordinary sync stages. A pre-v3 database still receives a validated `archive.db.pre-schema-v3...bak` before one direct upgrade to the current schema, and prints the backup plus legacy-repair summary once. Run `tweetxvault db check` (or `--full`) when you explicitly want an integrity scan. Startup repair during a real legacy upgrade is deliberately bounded to indexed local candidates; use `tweetxvault repair legacy-tombstones --scan-timeline-captures` only when you want the deeper scan.
 
 Long-running archive writers such as `sync`, `import enrich`, `threads expand`,
 `articles refresh`, `media download`, and `unfurl` now do a best-effort compact

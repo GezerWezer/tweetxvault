@@ -11,6 +11,16 @@ Hard constraints:
 
 Definition of done: passes `uv run ruff format --check`, `uv run ruff check`, and `uv run pytest`.
 
+## Remove sync-stage database delays (2026-08-01)
+
+- [x] Make current-schema database opens return after the schema-version check.
+- [x] Keep quick/integrity checks, schema setup, indexes, and legacy repair off routine opens.
+- [x] Create fresh databases directly at the latest schema without backups or historical stages.
+- [x] Collapse existing legacy SQLite upgrades into one validated, additive direct-to-v3 path.
+- [x] Finalize LanceDB imports explicitly without invoking legacy SQLite migration behavior.
+- [x] Add `tweetxvault db check [--full]` for user-invoked SQLite diagnostics.
+- [x] Pass focused migration/sync/CLI tests and full repository validation.
+
 ## Archive enrichment and reason-aware resurrection (2026-08-01)
 
 - [x] Add versioned, backed-up, additive SQLite migration for enrichment scheduler metadata.

@@ -61,6 +61,7 @@ from tweetxvault.unfurl import unfurl_urls
 app = typer.Typer(no_args_is_help=True)
 article_app = typer.Typer(no_args_is_help=True, help="Refresh archived article bodies.")
 auth_app = typer.Typer(no_args_is_help=True, help="Check auth and refresh query IDs.")
+db_app = typer.Typer(no_args_is_help=True, help="Inspect the local SQLite archive database.")
 export_app = typer.Typer(no_args_is_help=True, help="Export the local archive.")
 import_app = typer.Typer(no_args_is_help=True, help="Import and enrich official X archives.")
 media_app = typer.Typer(no_args_is_help=True, help="Download archived tweet media.")
@@ -83,6 +84,7 @@ view_app = typer.Typer(no_args_is_help=True, help="Render archived tweets in the
 
 app.add_typer(article_app, name="articles", help="Refresh archived article bodies.")
 app.add_typer(auth_app, name="auth", help="Check auth and refresh query IDs.")
+app.add_typer(db_app, name="db", help="Inspect the local SQLite archive database.")
 app.add_typer(export_app, name="export", help="Export the local archive.")
 app.add_typer(import_app, name="import", help="Import and enrich official X archives.")
 app.add_typer(media_app, name="media", help="Download archived tweet media.")
@@ -1728,6 +1730,37 @@ def optimize_archive() -> None:
     except ProcessLockError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(2) from exc
+
+
+@db_app.command("check", help="Run an explicit SQLite database integrity check.")
+def check_database(
+    full: Annotated[
+        bool,
+        typer.Option(
+            "--full",
+            help="Run SQLite integrity_check instead of the faster quick_check.",
+        ),
+    ] = False,
+) -> None:
+    console = _configure_logging()
+    store, paths = _open_store_for_read(console)
+    pragma = "integrity_check" if full else "quick_check"
+    try:
+        results = store.check_integrity(full=full)
+    except Exception as exc:
+        console.print(f"[red]database {pragma} failed: {exc}[/red]")
+        raise typer.Exit(2) from exc
+    finally:
+        store.close()
+
+    if results == ["ok"]:
+        console.print(f"database {pragma}: ok ({paths.database_path})", highlight=False)
+        return
+
+    console.print(f"[red]database {pragma} reported problems:[/red]")
+    for result in results:
+        console.print(result, highlight=False)
+    raise typer.Exit(2)
 
 
 @app.command("stats")

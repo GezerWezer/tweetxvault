@@ -24,6 +24,7 @@ from tweetxvault.config import AppConfig
 from tweetxvault.exceptions import ConfigError, ProcessLockError, TweetXVaultError
 from tweetxvault.query_ids import QueryIdStore
 from tweetxvault.storage import open_archive_store
+from tweetxvault.storage.backend import ArchiveStore
 from tweetxvault.sync import ProcessLock, RemotePreflightError, sync_all, sync_collection
 
 
@@ -236,6 +237,57 @@ async def test_sync_collection_runs_followups_when_requested(
 
     assert result.pages_fetched == 1
     assert calls == [sync_module.SyncFollowupPlan()]
+
+
+@pytest.mark.asyncio
+async def test_sync_stage_database_opens_never_run_quick_check(
+    paths,
+    config: AppConfig,
+    auth_bundle,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _save_query_ids(paths)
+    initial = open_archive_store(paths, create=True, config=config)
+    assert initial is not None
+    initial.close()
+    quick_check_stages: list[str] = []
+
+    monkeypatch.setattr(
+        ArchiveStore,
+        "_require_quick_check",
+        lambda _self, stage: quick_check_stages.append(stage),
+    )
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        _operation, variables = _op_and_variables(request)
+        count = int(variables["count"])
+        tweet_ids = ["probe"] if count == 1 else ["1"]
+        return httpx.Response(200, json=make_bookmarks_response(tweet_ids), request=request)
+
+    async def fake_followups(**_kwargs) -> None:
+        for _stage in range(5):
+            stage_store = open_archive_store(paths, create=False, config=config)
+            assert stage_store is not None
+            stage_store.close()
+
+    monkeypatch.setattr(sync_module, "_run_auto_followups", fake_followups)
+
+    result = await sync_collection(
+        "bookmarks",
+        full=False,
+        limit=None,
+        config=config,
+        paths=paths,
+        auth_bundle=auth_bundle,
+        query_ids={"Bookmarks": "qid-bookmarks"},
+        transport=httpx.MockTransport(handler),
+        console=_console(),
+        sleep=lambda _: asyncio.sleep(0),
+        followups=sync_module.SyncFollowupPlan(),
+    )
+
+    assert result.pages_fetched == 1
+    assert quick_check_stages == []
 
 
 @pytest.mark.asyncio

@@ -193,6 +193,15 @@ def test_legacy_tombstone_repair_help_exposes_bounded_deep_scan_options() -> Non
     assert "--scan-timeline-captures" in result.stdout
 
 
+def test_database_check_help_exposes_full_integrity_option() -> None:
+    result = runner.invoke(cli.app, ["db", "check", "--help"])
+
+    assert result.exit_code == 0
+    assert "--full" in result.stdout
+    assert "integrity_check" in result.stdout
+    assert "quick_check" in result.stdout
+
+
 def test_root_help_lists_group_descriptions() -> None:
     result = runner.invoke(cli.app, ["--help"])
 
@@ -201,6 +210,8 @@ def test_root_help_lists_group_descriptions() -> None:
     assert "Run the normal sync pass." in result.stdout
     assert "auth" in result.stdout
     assert "Check auth and refresh query IDs." in result.stdout
+    assert "db" in result.stdout
+    assert "Inspect the local SQLite archive database." in result.stdout
     assert "articles" in result.stdout
     assert "Refresh archived article bodies." in result.stdout
     assert "export" in result.stdout
@@ -1411,6 +1422,70 @@ def test_optimize_archive_uses_write_lock(paths, monkeypatch) -> None:
     assert store.closed is True
     assert "vacuuming database..." in buffer.getvalue()
     assert "vacuum complete." in buffer.getvalue()
+
+
+@pytest.mark.parametrize(
+    ("full", "expected_pragma"),
+    [(False, "quick_check"), (True, "integrity_check")],
+)
+def test_database_check_runs_requested_diagnostic_and_closes_store(
+    paths,
+    monkeypatch: pytest.MonkeyPatch,
+    full: bool,
+    expected_pragma: str,
+) -> None:
+    buffer = StringIO()
+    _capture_console(monkeypatch, buffer)
+
+    class FakeStore:
+        def __init__(self) -> None:
+            self.full_values: list[bool] = []
+            self.closed = False
+
+        def check_integrity(self, *, full: bool = False) -> list[str]:
+            self.full_values.append(full)
+            return ["ok"]
+
+        def close(self) -> None:
+            self.closed = True
+
+    store = FakeStore()
+    monkeypatch.setattr(cli, "_open_store_for_read", lambda _console: (store, paths))
+
+    cli.check_database(full=full)
+
+    assert store.full_values == [full]
+    assert store.closed is True
+    assert f"database {expected_pragma}: ok" in buffer.getvalue()
+
+
+def test_database_check_reports_integrity_problems(
+    paths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    buffer = StringIO()
+    _capture_console(monkeypatch, buffer)
+
+    class FakeStore:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def check_integrity(self, *, full: bool = False) -> list[str]:
+            assert full is False
+            return ["row 10 missing from index"]
+
+        def close(self) -> None:
+            self.closed = True
+
+    store = FakeStore()
+    monkeypatch.setattr(cli, "_open_store_for_read", lambda _console: (store, paths))
+
+    with pytest.raises(typer.Exit) as excinfo:
+        cli.check_database()
+
+    assert excinfo.value.exit_code == 2
+    assert store.closed is True
+    assert "row 10 missing from index" in buffer.getvalue()
 
 
 def test_stats_archive_renders_summary_tables(paths, monkeypatch) -> None:

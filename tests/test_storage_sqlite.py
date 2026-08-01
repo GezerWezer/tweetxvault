@@ -6,12 +6,14 @@ from pathlib import Path
 
 import pytest
 
+import tweetxvault.storage.backend as storage_backend
 from tests.conftest import make_tweet_detail_response, make_tweet_result
 from tweetxvault.config import AppConfig, DatabaseConfig
 from tweetxvault.storage import open_archive_store
 from tweetxvault.storage.backend import (
     ARCHIVE_COLUMNS,
     COLUMN_TYPES,
+    ENRICHMENT_INDEXES,
     SCHEMA_VERSION,
     ArchiveStore,
 )
@@ -153,6 +155,109 @@ def test_fts_triggers_follow_insert_update_and_delete(paths) -> None:
 
     store._delete("row_key = 'tweet:bookmark::1'")
     assert store.search_fts("replacement") == []
+    store.close()
+
+
+def test_current_schema_open_skips_checks_repairs_and_schema_maintenance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "archive.db"
+    initial = ArchiveStore(db_path, create=True)
+    initial.close()
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("current-schema open performed migration maintenance")
+
+    for method_name in (
+        "_archive_table_exists",
+        "_archive_column_names",
+        "_require_quick_check",
+        "_backup_before_migration",
+        "_backfill_created_at_timestamps",
+        "_create_fts_schema",
+        "_create_archive_indexes",
+        "_repair_legacy_terminal_rows",
+    ):
+        monkeypatch.setattr(ArchiveStore, method_name, unexpected)
+
+    current = ArchiveStore(db_path, create=True)
+
+    assert current.migration_report is None
+    assert current.conn.total_changes == 0
+    assert list(tmp_path.glob("*.bak")) == []
+    current.close()
+
+
+def test_current_schema_lock_probe_reads_only_user_version(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "archive.db"
+    initial = ArchiveStore(db_path, create=True)
+    initial.close()
+    statements: list[str] = []
+    original_connect = sqlite3.connect
+
+    def tracing_connect(*args, **kwargs):
+        connection = original_connect(*args, **kwargs)
+        connection.set_trace_callback(statements.append)
+        return connection
+
+    monkeypatch.setattr(storage_backend.sqlite3, "connect", tracing_connect)
+
+    assert storage_backend._database_requires_schema_migration(db_path) is False
+    assert statements == ["PRAGMA user_version"]
+
+
+def test_new_database_creates_latest_schema_without_migration_work(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "archive.db"
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("new database entered the legacy migration path")
+
+    monkeypatch.setattr(ArchiveStore, "_migrate_legacy_database", unexpected)
+    monkeypatch.setattr(ArchiveStore, "_require_quick_check", unexpected)
+    monkeypatch.setattr(ArchiveStore, "_backup_before_migration", unexpected)
+    monkeypatch.setattr(ArchiveStore, "_repair_legacy_terminal_rows", unexpected)
+
+    store = ArchiveStore(db_path, create=True)
+
+    assert store.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    assert set(ARCHIVE_COLUMNS) == {
+        row["name"] for row in store.conn.execute("PRAGMA table_info(archive)")
+    }
+    assert (
+        store.conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'archive_fts'"
+        ).fetchone()
+        is not None
+    )
+    assert set(ENRICHMENT_INDEXES).issubset(
+        {
+            row["name"]
+            for row in store.conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")
+        }
+    )
+    assert list(tmp_path.glob("*.bak")) == []
+    store.close()
+
+
+def test_explicit_integrity_checks_select_quick_or_full_pragma(paths) -> None:
+    store = open_archive_store(paths, create=True)
+    assert store is not None
+    statements: list[str] = []
+    store.conn.set_trace_callback(statements.append)
+
+    assert store.check_integrity() == ["ok"]
+    assert store.check_integrity(full=True) == ["ok"]
+
+    store.conn.set_trace_callback(None)
+    assert "PRAGMA quick_check" in statements
+    assert "PRAGMA integrity_check" in statements
     store.close()
 
 
@@ -508,6 +613,7 @@ def test_explicit_legacy_repair_can_scan_timeline_captures(paths) -> None:
 
 def test_schema_v2_migrates_to_v3_with_backup_reason_preservation_and_repairs(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     db_path = tmp_path / "archive.db"
     definitions = []
@@ -591,6 +697,31 @@ def test_schema_v2_migrates_to_v3_with_backup_reason_preservation_and_repairs(
     connection.commit()
     connection.close()
 
+    quick_check_stages: list[str] = []
+    backup_calls = 0
+    repair_calls = 0
+    original_quick_check = ArchiveStore._require_quick_check
+    original_backup = ArchiveStore._backup_before_migration
+    original_repair = ArchiveStore._repair_legacy_terminal_rows
+
+    def tracked_quick_check(self: ArchiveStore, stage: str) -> None:
+        quick_check_stages.append(stage)
+        original_quick_check(self, stage)
+
+    def tracked_backup(self: ArchiveStore, target_version: int) -> Path:
+        nonlocal backup_calls
+        backup_calls += 1
+        return original_backup(self, target_version)
+
+    def tracked_repair(self: ArchiveStore, **kwargs) -> dict[str, int]:
+        nonlocal repair_calls
+        repair_calls += 1
+        return original_repair(self, **kwargs)
+
+    monkeypatch.setattr(ArchiveStore, "_require_quick_check", tracked_quick_check)
+    monkeypatch.setattr(ArchiveStore, "_backup_before_migration", tracked_backup)
+    monkeypatch.setattr(ArchiveStore, "_repair_legacy_terminal_rows", tracked_repair)
+
     first = ArchiveStore(db_path, create=True)
     assert first.conn.execute("PRAGMA user_version").fetchone()[0] == 3
     assert first.migration_report is not None
@@ -621,6 +752,9 @@ def test_schema_v2_migrates_to_v3_with_backup_reason_preservation_and_repairs(
     assert second.migration_report is None
     second.close()
     assert list(tmp_path.glob("archive.db.pre-schema-v3.*.bak")) == backups
+    assert quick_check_stages == ["before migration", "after migration"]
+    assert backup_calls == 1
+    assert repair_calls == 1
 
 
 def test_migration_backup_failure_leaves_original_unchanged_and_no_artifacts(

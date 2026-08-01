@@ -10,6 +10,7 @@ import pytest
 
 from tweetxvault.config import AppConfig
 from tweetxvault.storage import migrate, open_archive_store
+from tweetxvault.storage.backend import SCHEMA_VERSION, ArchiveStore
 
 
 class FakeLegacyTable:
@@ -85,6 +86,10 @@ class FakeStore:
         self.conn = connection or FakeConnection()
         self.label = label
         self.closed = False
+
+    def rebuild_search_index(self) -> None:
+        self.conn.execute("INSERT INTO archive_fts(archive_fts) VALUES('rebuild')")
+        self.conn.commit()
 
     def close(self) -> None:
         self.closed = True
@@ -658,6 +663,32 @@ def test_destination_initialization_failure_prevents_workers(
 
     assert result.status == "destination_failed"
     assert "Failed to" in capsys.readouterr().out
+
+
+def test_lancedb_migration_creates_latest_schema_without_legacy_upgrade(
+    monkeypatch: pytest.MonkeyPatch,
+    paths,
+) -> None:
+    install_legacy_source(monkeypatch, paths, total_rows=0)
+    install_worker_sequence(monkeypatch, [migrate.WORKER_END_OF_TABLE])
+    monkeypatch.setattr(migrate, "_create_progress", lambda _total: None)
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("new LanceDB destination entered the legacy SQLite migration path")
+
+    monkeypatch.setattr(ArchiveStore, "_migrate_legacy_database", unexpected)
+    monkeypatch.setattr(ArchiveStore, "_backup_before_migration", unexpected)
+
+    result = migrate.run_migration()
+
+    assert result.status == "complete"
+    assert result.fts_rebuilt is True
+    connection = sqlite3.connect(paths.database_path)
+    try:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    finally:
+        connection.close()
+    assert list(paths.data_dir.glob("archive.db.pre-schema-v*.bak")) == []
 
 
 def test_realistic_rerun_preserves_existing_rows_and_backfills_search_data(

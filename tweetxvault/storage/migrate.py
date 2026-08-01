@@ -197,8 +197,6 @@ def _copy_batches(
 def _rebuild_fts(config: Any, paths: Any) -> bool:
     print("Rebuilding Full-Text Search index (this may take a few moments)...")
     try:
-        # create=True reruns schema migrations after the workers have inserted rows.
-        # In particular, it backfills created_at_ts before search indexes are used.
         store = open_archive_store(paths, create=True, config=config)
     except Exception as error:
         print(f"Warning: Failed to open SQLite store for FTS rebuild: {error}")
@@ -207,8 +205,7 @@ def _rebuild_fts(config: Any, paths: Any) -> bool:
         print("Warning: Failed to open SQLite store for FTS rebuild.")
         return False
     try:
-        store.conn.execute("INSERT INTO archive_fts(archive_fts) VALUES('rebuild')")
-        store.conn.commit()
+        store.rebuild_search_index()
         return True
     except Exception as error:
         print(f"Warning: Failed to rebuild FTS index: {error}")

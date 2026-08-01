@@ -1,3 +1,22 @@
+- 2026-08-01 (Remove sync-stage database delays)
+  - Changed current schema-v3 opens to trust the cheap `PRAGMA user_version` result and skip
+    quick checks, column/index inspection, FTS setup, timestamp backfills, backups, and legacy
+    tombstone repair during ordinary sync-stage connections.
+  - Split fresh schema creation from one direct pre-v3 migration path. New databases create the
+    latest schema without backups or historical stages; legacy archives retain pre/post checks,
+    a validated atomic backup, additive columns/indexes, scheduler normalization, row validation,
+    and the one-time bounded tombstone repair.
+  - Made LanceDB import finalization explicitly backfill timestamps and rebuild FTS instead of
+    relying on current-schema reopen side effects, and added `tweetxvault db check [--full]` for
+    user-invoked `quick_check` / `integrity_check` diagnostics.
+  - Added regressions for version-only current opens, direct fresh creation, direct protected
+    legacy migration, one-time repair, LanceDB destinations, explicit diagnostics, and repeated
+    mocked sync-stage opens.
+  - Validation passed all 685 pytest cases, repository-wide Ruff lint, scoped Ruff format for
+    every changed Python file, compileall, `git diff --check`, and all 18 browser-asset tests.
+    Repository-wide Ruff format still reports two pre-existing untouched files:
+    `tests/test_auth.py` and `tests/web/test_storage_stats_routes.py`.
+
 - 2026-08-01 (Archive enrichment final hardening)
   - Added explicit available/explicit-unavailable/absent focal result kinds and a shared
     three-response circuit breaker across initial enrichment, resurrection, and threads;
