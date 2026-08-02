@@ -191,16 +191,16 @@ async def fetch_page(
     )
 
 
-def _extract_raw_tweet_result_entries(
+def _extract_tweet_result_slots(
     content: dict[str, Any],
     entry_id: str | None,
-) -> list[tuple[dict[str, Any], str | None]]:
-    results: list[tuple[dict[str, Any], str | None]] = []
+) -> list[tuple[dict[str, Any], str | None, dict[str, Any]]]:
+    slots: list[tuple[dict[str, Any], str | None, dict[str, Any]]] = []
     item_content = content.get("itemContent") or content.get("content", {}).get("itemContent")
     if isinstance(item_content, dict):
-        result = item_content.get("tweet_results", {}).get("result")
-        if isinstance(result, dict):
-            results.append((result, entry_id))
+        tweet_results = item_content.get("tweet_results")
+        if isinstance(tweet_results, dict):
+            slots.append((tweet_results, entry_id, item_content))
 
     for item in content.get("items", []):
         if not isinstance(item, dict):
@@ -208,12 +208,30 @@ def _extract_raw_tweet_result_entries(
         nested_item = item.get("item", {})
         nested_content = nested_item.get("itemContent")
         if isinstance(nested_content, dict):
-            result = nested_content.get("tweet_results", {}).get("result")
-            if isinstance(result, dict):
+            tweet_results = nested_content.get("tweet_results")
+            if isinstance(tweet_results, dict):
                 nested_entry_id = item.get("entryId") or nested_item.get("entryId") or entry_id
-                results.append(
-                    (result, str(nested_entry_id) if nested_entry_id is not None else None)
+                slots.append(
+                    (
+                        tweet_results,
+                        str(nested_entry_id) if nested_entry_id is not None else None,
+                        nested_content,
+                    )
                 )
+    return slots
+
+
+def _extract_raw_tweet_result_entries(
+    content: dict[str, Any],
+    entry_id: str | None,
+) -> list[tuple[dict[str, Any], str | None]]:
+    results: list[tuple[dict[str, Any], str | None]] = []
+    for tweet_results, result_entry_id, _item_content in _extract_tweet_result_slots(
+        content, entry_id
+    ):
+        result = tweet_results.get("result")
+        if isinstance(result, dict):
+            results.append((result, result_entry_id))
     return results
 
 
@@ -318,12 +336,22 @@ def parse_tweet_detail_response(
     data: dict[str, Any],
     focal_tweet_id: str,
 ) -> FocalTweetDetailResult:
+    empty_focal_result: dict[str, Any] | None = None
     for entry in _iter_entries(data):
         entry_id = str(entry.get("entryId") or "")
         sort_index = entry.get("sortIndex")
-        for raw_result, result_entry_id in _extract_raw_tweet_result_entries(
-            entry.get("content", {}), entry_id
-        ):
+        result_slots = _extract_tweet_result_slots(entry.get("content", {}), entry_id)
+        for tweet_results, result_entry_id, item_content in result_slots:
+            raw_result = tweet_results.get("result")
+            if not isinstance(raw_result, dict):
+                if (
+                    tweet_results == {}
+                    and item_content.get("__typename") == "TimelineTweet"
+                    and item_content.get("itemType") == "TimelineTweet"
+                    and _entry_id_targets_tweet(result_entry_id, focal_tweet_id)
+                ):
+                    empty_focal_result = tweet_results
+                continue
             result = unwrap_tweet_result(raw_result)
             if result is None:
                 continue
@@ -353,6 +381,20 @@ def parse_tweet_detail_response(
                     kind=FocalResultKind.EXPLICIT_UNAVAILABLE,
                     unavailable=unavailable,
                 )
+    if empty_focal_result is not None:
+        return FocalTweetDetailResult(
+            kind=FocalResultKind.EXPLICIT_UNAVAILABLE,
+            unavailable=TweetUnavailableInfo(
+                tweet_id=focal_tweet_id,
+                typename="TweetResultEmpty",
+                reason="unavailable_unknown",
+                detail=(
+                    "TweetDetail returned an empty tweet_results object for the requested "
+                    "focal entry."
+                ),
+                raw_result=empty_focal_result,
+            ),
+        )
     return FocalTweetDetailResult(
         kind=FocalResultKind.ABSENT,
         unavailable=TweetUnavailableInfo(

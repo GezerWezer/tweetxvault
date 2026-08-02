@@ -14,6 +14,8 @@ Definition of done: passes `uv run ruff format --check`, `uv run ruff check`, an
 ## Nested tombstone matching and full enrichment snapshots (2026-08-01)
 
 - [x] Match direct and nested `*-tweet-<id>` entry IDs with exact suffix boundaries.
+- [x] Recognize an exact focal entry with live X's empty `tweet_results` sentinel as retryable
+  unavailable while leaving nonempty malformed results absent.
 - [x] Preserve explicit nonmatching `rest_id` precedence and structured tombstone details.
 - [x] Keep the three-response focal-absence breaker and reset it for nested tombstones.
 - [x] Remove the internal 500-row page and select one stable eligible snapshot per command.

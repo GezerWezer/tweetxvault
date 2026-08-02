@@ -1,3 +1,15 @@
+- 2026-08-01 (Live empty TweetDetail result sentinel)
+  - Diagnosed the production enrichment breaker with two read-only single-tweet probes: X returned
+    HTTP 200 with an exact `tweet-1731078129152586204` `TimelineTweet` entry but an empty
+    `tweet_results` object, no GraphQL errors, and no tombstone result.
+  - Added narrow focal association for exactly empty result containers, recorded as
+    `TweetResultEmpty` / retryable `unavailable_unknown`; unrelated empty entries and nonempty
+    malformed result containers remain `ABSENT`, preserving the three-response circuit breaker.
+  - Added direct/nested parser boundaries, available-result precedence, malformed-shape, worker
+    persistence, retry eligibility, and existing breaker regressions.
+  - Validation passed the full pytest suite, repository-wide Ruff lint, scoped Ruff format,
+    compileall, `git diff --check`, and all 18 browser-asset tests.
+
 - 2026-08-01 (Nested TweetDetail tombstones and full enrichment snapshots)
   - Matched focal tombstones from direct `tweet-<id>` entries and boundary-safe nested
     `*-tweet-<id>` entries while preserving explicit nonmatching `rest_id` precedence, original

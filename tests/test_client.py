@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections import deque
 from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -52,6 +53,21 @@ def _detail_entry(entry_id: str, result: dict[str, object]) -> dict[str, object]
     return {
         "entryId": entry_id,
         "content": {"itemContent": {"tweet_results": {"result": result}}},
+    }
+
+
+def _empty_detail_entry(entry_id: str) -> dict[str, Any]:
+    return {
+        "entryId": entry_id,
+        "content": {
+            "__typename": "TimelineTimelineItem",
+            "entryType": "TimelineTimelineItem",
+            "itemContent": {
+                "__typename": "TimelineTweet",
+                "itemType": "TimelineTweet",
+                "tweet_results": {},
+            },
+        },
     }
 
 
@@ -197,6 +213,91 @@ def test_parse_tweet_detail_matches_focal_tombstone_by_exact_entry_id() -> None:
     assert focal.is_explicitly_unavailable
     assert focal.unavailable.reason == "suspended_account"
     assert focal.unavailable.raw_result is unavailable
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_parse_tweet_detail_matches_empty_focal_result_sentinel(nested: bool) -> None:
+    empty_results: dict[str, object] = {}
+    if nested:
+        entry: dict[str, Any] = {
+            "entryId": "conversationthread-999",
+            "content": {
+                "items": [
+                    {
+                        "entryId": "conversationthread-999-tweet-123",
+                        "item": {
+                            "itemContent": {
+                                "__typename": "TimelineTweet",
+                                "itemType": "TimelineTweet",
+                                "tweet_results": empty_results,
+                            }
+                        },
+                    }
+                ]
+            },
+        }
+    else:
+        entry = _empty_detail_entry("tweet-123")
+        empty_results = entry["content"]["itemContent"]["tweet_results"]
+
+    focal = parse_tweet_detail_response(_detail_payload([entry]), "123")
+
+    assert focal.kind == FocalResultKind.EXPLICIT_UNAVAILABLE
+    assert focal.unavailable is not None
+    assert focal.unavailable.tweet_id == "123"
+    assert focal.unavailable.typename == "TweetResultEmpty"
+    assert focal.unavailable.reason == "unavailable_unknown"
+    assert focal.unavailable.detail == (
+        "TweetDetail returned an empty tweet_results object for the requested focal entry."
+    )
+    assert focal.unavailable.raw_result is empty_results
+
+
+@pytest.mark.parametrize(
+    "entry_id",
+    ["tweet-1234", "conversationthread-999-tweet-1234", "tweet-999"],
+)
+def test_parse_tweet_detail_rejects_unrelated_empty_result_sentinel(entry_id: str) -> None:
+    focal = parse_tweet_detail_response(
+        _detail_payload([_empty_detail_entry(entry_id)]),
+        "123",
+    )
+
+    assert focal.kind == FocalResultKind.ABSENT
+
+
+def test_parse_tweet_detail_keeps_nonempty_malformed_focal_result_absent() -> None:
+    entry = _empty_detail_entry("tweet-123")
+    entry["content"]["itemContent"]["tweet_results"] = {"unexpected": True}
+
+    focal = parse_tweet_detail_response(_detail_payload([entry]), "123")
+
+    assert focal.kind == FocalResultKind.ABSENT
+
+
+def test_parse_tweet_detail_keeps_non_timeline_tweet_empty_result_absent() -> None:
+    entry = _empty_detail_entry("tweet-123")
+    entry["content"]["itemContent"]["itemType"] = "TimelineUser"
+
+    focal = parse_tweet_detail_response(_detail_payload([entry]), "123")
+
+    assert focal.kind == FocalResultKind.ABSENT
+
+
+def test_parse_tweet_detail_prefers_available_focal_over_empty_sentinel() -> None:
+    focal = parse_tweet_detail_response(
+        _detail_payload(
+            [
+                _empty_detail_entry("tweet-123"),
+                _detail_entry("tweet-123", make_tweet_result("123", "available focal")),
+            ]
+        ),
+        "123",
+    )
+
+    assert focal.kind == FocalResultKind.AVAILABLE
+    assert focal.tweet is not None
+    assert focal.tweet.tweet_id == "123"
 
 
 @pytest.mark.parametrize(

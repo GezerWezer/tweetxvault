@@ -51,6 +51,33 @@ def _detail_entry_payload(entry_id: str, result: dict[str, object]) -> dict[str,
     }
 
 
+def _empty_detail_entry_payload(entry_id: str) -> dict[str, object]:
+    return {
+        "data": {
+            "threaded_conversation_with_injections_v2": {
+                "instructions": [
+                    {
+                        "entries": [
+                            {
+                                "entryId": entry_id,
+                                "content": {
+                                    "__typename": "TimelineTimelineItem",
+                                    "entryType": "TimelineTimelineItem",
+                                    "itemContent": {
+                                        "__typename": "TimelineTweet",
+                                        "itemType": "TimelineTweet",
+                                        "tweet_results": {},
+                                    },
+                                },
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+    }
+
+
 def _write_archive_dir(
     base: Path,
     *,
@@ -1042,21 +1069,38 @@ def test_enrich_pending_rows_batches_detail_writes(paths, monkeypatch: pytest.Mo
 
 
 @pytest.mark.parametrize(
-    ("message", "expected_reason", "retry_eligible"),
+    ("message", "expected_reason", "retry_eligible", "expected_detail"),
     [
-        ("These posts are protected.", "protected_account", 1),
-        ("This account is suspended.", "suspended_account", 1),
-        ("This account doesn't exist.", "account_missing", 1),
-        ("This Post was deleted by the Post author.", "deleted_by_author", 0),
-        ("Dieses Posting ist nicht verfügbar.", "unavailable_unknown", 1),
+        ("These posts are protected.", "protected_account", 1, "These posts are protected."),
+        ("This account is suspended.", "suspended_account", 1, "This account is suspended."),
+        ("This account doesn't exist.", "account_missing", 1, "This account doesn't exist."),
+        (
+            "This Post was deleted by the Post author.",
+            "deleted_by_author",
+            0,
+            "This Post was deleted by the Post author.",
+        ),
+        (
+            "Dieses Posting ist nicht verfügbar.",
+            "unavailable_unknown",
+            1,
+            "Dieses Posting ist nicht verfügbar.",
+        ),
+        (
+            None,
+            "unavailable_unknown",
+            1,
+            "TweetDetail returned an empty tweet_results object for the requested focal entry.",
+        ),
     ],
 )
-def test_enrich_pending_rows_classifies_nested_tombstone_as_unavailable(
+def test_enrich_pending_rows_classifies_explicit_unavailable_shapes(
     paths,
     monkeypatch: pytest.MonkeyPatch,
-    message: str,
+    message: str | None,
     expected_reason: str,
     retry_eligible: int,
+    expected_detail: str,
 ) -> None:
     store = open_archive_store(paths, create=True)
     assert store is not None
@@ -1086,13 +1130,16 @@ def test_enrich_pending_rows_classifies_nested_tombstone_as_unavailable(
         return {"TweetDetail": "detail-query-id"}
 
     async def fake_fetch_page(*args, **_kwargs):
-        payload = _detail_entry_payload(
-            "conversationthread-777-tweet-900",
-            {
-                "__typename": "TweetTombstone",
-                "tombstone": {"text": {"text": message}},
-            },
-        )
+        if message is None:
+            payload = _empty_detail_entry_payload("tweet-900")
+        else:
+            payload = _detail_entry_payload(
+                "conversationthread-777-tweet-900",
+                {
+                    "__typename": "TweetTombstone",
+                    "tombstone": {"text": {"text": message}},
+                },
+            )
         return httpx.Response(200, json=payload, request=httpx.Request("GET", args[1]))
 
     class DummyClient:
@@ -1126,7 +1173,7 @@ def test_enrich_pending_rows_classifies_nested_tombstone_as_unavailable(
     assert row is not None
     assert row["enrichment_state"] == "terminal_unavailable"
     assert row["enrichment_reason"] == expected_reason
-    assert row["enrichment_detail"] == message
+    assert row["enrichment_detail"] == expected_detail
     assert row["enrichment_retry_eligible"] == retry_eligible
     store.close()
 
@@ -1276,10 +1323,10 @@ def test_enrich_pending_rows_aborts_after_three_absences_and_flushes_prior_rows(
     store.close()
 
 
-def test_enrich_focal_absence_counter_resets_on_explicit_and_available_results(
+def test_enrich_focal_absence_counter_resets_on_explicit_empty_and_available_results(
     paths, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    tweet_ids = ("1", "2", "3", "4", "5")
+    tweet_ids = ("1", "2", "3", "4", "5", "6", "7")
     store = open_archive_store(paths, create=True)
     assert store is not None
     store._merge_records(
@@ -1322,6 +1369,8 @@ def test_enrich_focal_absence_counter_resets_on_explicit_and_available_results(
             payload = make_tweet_detail_response(
                 [make_tweet_result(tweet_id, "available reset", user_id="42")]
             )
+        elif tweet_id == "6":
+            payload = _empty_detail_entry_payload(f"tweet-{tweet_id}")
         else:
             payload = make_tweet_detail_response([make_tweet_result("999", "unrelated")])
         return httpx.Response(200, json=payload, request=httpx.Request("GET", args[1]))
@@ -1348,10 +1397,10 @@ def test_enrich_focal_absence_counter_resets_on_explicit_and_available_results(
         )
     )
 
-    assert result.selected == 5
-    assert result.classified_unavailable == 1
+    assert result.selected == 7
+    assert result.classified_unavailable == 2
     assert result.completed == 1
-    assert result.transient_failures == 3
+    assert result.transient_failures == 4
 
 
 def test_enrich_pending_rows_flushes_when_client_close_fails(
