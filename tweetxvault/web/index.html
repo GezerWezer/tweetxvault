@@ -1459,20 +1459,25 @@
                                     </div>
                                 </div>
 
-                                <!-- Secondary row: Authors + Date Range -->
-                                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <!-- Secondary row: Authors + Date Range + Missing Tweets -->
+                                <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
                                     <div class="stats-card">
                                         <div class="stats-label">Authors <svg class="stats-info-icon" viewBox="0 0 24 24" fill="currentColor"><title>Distinct tweet authors in your archive</title><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path d="M11 17h2v-6h-2v6zm1-8a1 1 0 100-2 1 1 0 000 2z"/></svg></div>
                                         <div class="stats-value" x-text="statsSummary.profiles.toLocaleString()"></div>
                                         <div class="stats-subtitle">Unique profiles</div>
                                     </div>
-                                    <div class="stats-card">
+                                    <div class="stats-card md:col-span-2">
                                         <div class="stats-label">Date range</div>
                                         <div class="flex items-baseline gap-2 mt-1">
                                             <span class="text-lg font-extrabold text-[var(--text-primary)]" x-text="statsSummary.oldest_post || 'N/A'"></span>
                                             <span class="text-sm text-[var(--text-secondary)] font-medium">→</span>
                                             <span class="text-lg font-extrabold text-[var(--text-primary)]" x-text="statsSummary.newest_post || 'N/A'"></span>
                                         </div>
+                                    </div>
+                                    <div class="stats-card">
+                                        <div class="stats-label">Missing archive tweets <svg class="stats-info-icon" viewBox="0 0 24 24" fill="currentColor"><title>Imported archive tweets that X currently reports as unavailable, including protected and suspended accounts</title><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path d="M11 17h2v-6h-2v6zm1-8a1 1 0 100-2 1 1 0 000 2z"/></svg></div>
+                                        <div class="stats-value" x-text="statsSummary.missing_archive_tweets.toLocaleString()"></div>
+                                        <div class="stats-subtitle" x-text="statsSummary.missing_archive_pct.toFixed(1) + '% of ' + statsSummary.archive_tweets.toLocaleString() + ' imported tweets'"></div>
                                     </div>
                                 </div>
                             </div>
@@ -1510,39 +1515,107 @@
                         </template>
                     </div>
 
-                    <!-- ── Pipeline Health ──────────────────────────────────── -->
+                    <!-- ── Archive Status ───────────────────────────────────── -->
                     <div>
-                        <h3 class="stats-section-title mb-4">Pipeline health</h3>
+                        <div class="flex items-center justify-between mb-4">
+                            <h3 class="stats-section-title">Archive status</h3>
+                            <label class="flex items-center cursor-pointer select-none">
+                                <div class="relative">
+                                    <input type="checkbox" x-model="showEmptyUnavailableReasons" class="sr-only">
+                                    <div class="block bg-[var(--bg-tertiary)] w-10 h-6 rounded-full border border-[var(--border-color)]"></div>
+                                    <div :class="showEmptyUnavailableReasons ? 'translate-x-full bg-[var(--accent-color)]' : 'bg-[var(--text-secondary)]'"
+                                         class="dot absolute left-1 top-1 w-4 h-4 rounded-full transition transform"></div>
+                                </div>
+                                <div class="ml-2 text-sm font-bold text-[var(--text-primary)]">Show empty</div>
+                            </label>
+                        </div>
 
                         <template x-if="loadingStatsHealth">
-                            <div class="stats-grid">
-                                <template x-for="i in 4">
-                                    <div class="stats-card animate-pulse">
-                                        <div class="h-3 bg-[var(--bg-tertiary)] rounded w-2/3 mb-3"></div>
-                                        <div class="h-7 bg-[var(--bg-tertiary)] rounded w-1/3"></div>
-                                    </div>
-                                </template>
+                            <div class="space-y-3">
+                                <div class="stats-grid">
+                                    <template x-for="i in 4">
+                                        <div class="stats-card animate-pulse">
+                                            <div class="h-3 bg-[var(--bg-tertiary)] rounded w-2/3 mb-3"></div>
+                                            <div class="h-7 bg-[var(--bg-tertiary)] rounded w-1/3"></div>
+                                        </div>
+                                    </template>
+                                </div>
+                                <div class="stats-card h-20 animate-pulse"></div>
                             </div>
                         </template>
 
                         <template x-if="!loadingStatsHealth && statsHealth">
-                            <div class="stats-grid">
-                                <div class="stats-card">
-                                    <div class="stats-label">Enriched <svg class="stats-info-icon" viewBox="0 0 24 24" fill="currentColor"><title>Posts that have been fully enriched with metadata</title><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path d="M11 17h2v-6h-2v6zm1-8a1 1 0 100-2 1 1 0 000 2z"/></svg></div>
-                                    <div class="stats-value" x-text="statsHealth.enrichment.available.toLocaleString()"></div>
+                            <div class="space-y-3">
+                                <div class="stats-grid">
+                                    <div class="stats-card">
+                                        <div class="stats-label">Enriched <svg class="stats-info-icon" viewBox="0 0 24 24" fill="currentColor"><title>Archive tweets successfully enriched during initial processing</title><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path d="M11 17h2v-6h-2v6zm1-8a1 1 0 100-2 1 1 0 000 2z"/></svg></div>
+                                        <div class="stats-value" x-text="statsHealth.enrichment.done.toLocaleString()"></div>
+                                    </div>
+                                    <div class="stats-card">
+                                        <div class="stats-label">Threads <svg class="stats-info-icon" viewBox="0 0 24 24" fill="currentColor"><title>Conversation threads that have been expanded</title><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path d="M11 17h2v-6h-2v6zm1-8a1 1 0 100-2 1 1 0 000 2z"/></svg></div>
+                                        <div class="stats-value" x-text="statsHealth.threads_expanded.toLocaleString()"></div>
+                                        <div class="stats-subtitle">Conversations expanded</div>
+                                    </div>
+                                    <div class="stats-card">
+                                        <div class="stats-label">Missing enrichment <svg class="stats-info-icon" viewBox="0 0 24 24" fill="currentColor"><title>Archive tweets still pending enrichment or waiting to retry after a temporary failure</title><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path d="M11 17h2v-6h-2v6zm1-8a1 1 0 100-2 1 1 0 000 2z"/></svg></div>
+                                        <div class="stats-value" x-text="statsHealth.enrichment.incomplete.toLocaleString()"></div>
+                                        <div class="stats-subtitle" x-text="statsHealth.enrichment.pending.toLocaleString() + ' pending · ' + statsHealth.enrichment.transient.toLocaleString() + ' retrying'"></div>
+                                    </div>
+                                    <div class="stats-card">
+                                        <div class="stats-label">Resurrected <svg class="stats-info-icon" viewBox="0 0 24 24" fill="currentColor"><title>Previously unavailable tweets that became accessible again</title><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path d="M11 17h2v-6h-2v6zm1-8a1 1 0 100-2 1 1 0 000 2z"/></svg></div>
+                                        <div class="stats-value" x-text="statsHealth.enrichment.resurrected.toLocaleString()"></div>
+                                        <div class="stats-subtitle">Available again</div>
+                                    </div>
                                 </div>
+
                                 <div class="stats-card">
-                                    <div class="stats-label">Pending <svg class="stats-info-icon" viewBox="0 0 24 24" fill="currentColor"><title>Posts awaiting enrichment processing</title><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path d="M11 17h2v-6h-2v6zm1-8a1 1 0 100-2 1 1 0 000 2z"/></svg></div>
-                                    <div class="stats-value" x-text="statsHealth.enrichment.pending.toLocaleString()"></div>
+                                    <div class="stats-label">Unavailable tweets <svg class="stats-info-icon" viewBox="0 0 24 24" fill="currentColor"><title>Imported tweets that X currently reports as unavailable, including protected, suspended, withheld, and deleted tweets</title><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path d="M11 17h2v-6h-2v6zm1-8a1 1 0 100-2 1 1 0 000 2z"/></svg></div>
+                                    <div class="flex items-center gap-4 mt-1 min-w-0">
+                                        <div class="stats-value !mt-0 flex-shrink-0" x-text="statsHealth.enrichment.unavailable.total.toLocaleString()"></div>
+                                        <div class="w-px h-8 flex-shrink-0 bg-[var(--border-color)]" aria-hidden="true"></div>
+                                        <div class="flex-1 min-w-0 h-[31px] flex gap-1">
+                                            <template x-for="(reason, i) in getUnavailableBarReasons()" :key="reason.reason">
+                                                <div :style="'width: ' + getUnavailableSegmentWidth(reason) + '%'"
+                                                     :class="{
+                                                         'bg-[var(--accent-color)] border-[var(--accent-color)] opacity-100 shadow-[0_0_12px_rgba(var(--accent-rgb),0.35)]': hoveredUnavailableReason === reason.reason,
+                                                         'bg-[var(--text-secondary)] border-[var(--text-secondary)] opacity-40': hoveredUnavailableReason !== reason.reason,
+                                                         'rounded-l-lg': i === 0,
+                                                         'rounded-r-lg': i === getUnavailableBarReasons().length - 1
+                                                     }"
+                                                     class="archive-status-bar-seg h-full rounded-sm border shadow-sm transition-colors duration-150"
+                                                     @mouseenter="hoveredUnavailableReason = reason.reason"
+                                                     @mouseleave="hoveredUnavailableReason = null">
+                                                </div>
+                                            </template>
+                                        </div>
+                                    </div>
+                                    <div class="stats-subtitle" x-text="statsHealth.enrichment.unavailable.percent_of_archive.toFixed(1) + '% of imported archive tweets'"></div>
                                 </div>
-                                <div class="stats-card">
-                                    <div class="stats-label">Terminal <svg class="stats-info-icon" viewBox="0 0 24 24" fill="currentColor"><title>Posts that could not be enriched (deleted, protected, etc.)</title><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path d="M11 17h2v-6h-2v6zm1-8a1 1 0 100-2 1 1 0 000 2z"/></svg></div>
-                                    <div class="stats-value" x-text="statsHealth.enrichment.terminal.toLocaleString()"></div>
-                                </div>
-                                <div class="stats-card">
-                                    <div class="stats-label">Threads <svg class="stats-info-icon" viewBox="0 0 24 24" fill="currentColor"><title>Conversation threads that have been fully expanded</title><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path d="M11 17h2v-6h-2v6zm1-8a1 1 0 100-2 1 1 0 000 2z"/></svg></div>
-                                    <div class="stats-value" x-text="statsHealth.threads_expanded.toLocaleString()"></div>
-                                    <div class="stats-subtitle">Conversations expanded</div>
+
+                                <div class="stats-card" style="padding: 0; overflow: hidden;">
+                                    <template x-if="getUnavailableReasons().length === 0">
+                                        <div class="px-5 py-4 text-[14px] text-[var(--text-secondary)]">No unavailable tweets.</div>
+                                    </template>
+                                    <template x-for="(reason, i) in getUnavailableReasons()" :key="reason.reason">
+                                        <div class="archive-status-reason-row"
+                                             :class="hoveredUnavailableReason === reason.reason ? 'bg-[var(--bg-tertiary)]' : ''"
+                                             @mouseenter="hoveredUnavailableReason = reason.reason"
+                                             @mouseleave="hoveredUnavailableReason = null">
+                                            <div class="flex items-center justify-between px-5 py-3.5"
+                                                 :class="i > 0 ? 'border-t border-[var(--border-color)]' : ''">
+                                                <div class="min-w-0 pr-4">
+                                                    <div class="text-[14px] font-semibold text-[var(--text-primary)]" x-text="reason.label"></div>
+                                                    <div class="text-[12px] text-[var(--text-secondary)] mt-0.5" x-text="getUnavailableReasonStatus(reason)"></div>
+                                                </div>
+                                                <div class="text-right flex-shrink-0">
+                                                    <div class="text-[14px] font-semibold text-[var(--text-primary)]" x-text="reason.count.toLocaleString()"></div>
+                                                    <div class="text-[12px] font-medium text-[var(--text-secondary)]"
+                                                         :class="hoveredUnavailableReason === reason.reason ? 'text-[var(--accent-color)]' : ''"
+                                                         x-text="reason.percent_of_missing.toFixed(1) + '%'"></div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </template>
                                 </div>
                             </div>
                         </template>
@@ -1571,51 +1644,34 @@
 
                         <template x-if="!storageLoading && storageData">
                             <div>
-                                <!-- Total Storage hero card -->
+                                <!-- Total Storage hero card with inline segmented bar -->
                                 <div class="stats-card mb-3">
                                     <div class="stats-label">Total <svg class="stats-info-icon" viewBox="0 0 24 24" fill="currentColor"><title>Combined size of database and downloaded media</title><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path d="M11 17h2v-6h-2v6zm1-8a1 1 0 100-2 1 1 0 000 2z"/></svg></div>
-                                    <div class="stats-value" x-text="storageData.formatted_total"></div>
-                                </div>
-
-                                <div class="relative w-full" id="storage-diagram-container">
-                                    <!-- Segmented Bar -->
-                                    <div class="relative z-10 w-full h-10 flex transition-all duration-300 ease-in-out"
-                                     :class="storageGapsCollapsed ? 'gap-0' : 'gap-1'">
-                                    <template x-for="(seg, i) in getActiveStorageSegments()" :key="seg.id">
-                                        <div :style="'width: ' + getSegmentWidth(seg) + '%'" 
-                                             :class="{
-                                                 'bg-[var(--accent-color)] border-[var(--accent-color)] opacity-100 shadow-[0_0_12px_rgba(var(--accent-rgb),0.35)]': hoveredStorageId === seg.id,
-                                                 'bg-[var(--text-secondary)] border-[var(--text-secondary)] opacity-40': hoveredStorageId !== seg.id,
-                                                 'rounded-l-lg': i === 0,
-                                                 'rounded-r-lg': i === getActiveStorageSegments().length - 1
-                                             }"
-                                             class="storage-bar-seg h-full rounded-sm transition-[width] duration-500 ease-out cursor-pointer border shadow-sm"
-                                             @mouseenter="setHoveredStorage(seg.id)" 
-                                             @mouseleave="clearHoveredStorage()"
-                                             @click="toggleExpandStorage(seg.id)">
+                                    <div class="flex items-center gap-4 mt-1 min-w-0">
+                                        <div class="stats-value !mt-0 flex-shrink-0" x-text="storageData.formatted_total"></div>
+                                        <div class="w-px h-8 flex-shrink-0 bg-[var(--border-color)]" aria-hidden="true"></div>
+                                        <div class="flex-1 min-w-0 h-[31px] flex transition-all duration-300 ease-in-out"
+                                             :class="storageGapsCollapsed ? 'gap-0' : 'gap-1'">
+                                            <template x-for="(seg, i) in getActiveStorageSegments()" :key="seg.id">
+                                                <div :style="'width: ' + getSegmentWidth(seg) + '%'"
+                                                     :class="{
+                                                         'bg-[var(--accent-color)] border-[var(--accent-color)] opacity-100 shadow-[0_0_12px_rgba(var(--accent-rgb),0.35)]': hoveredStorageId === seg.id,
+                                                         'bg-[var(--text-secondary)] border-[var(--text-secondary)] opacity-40': hoveredStorageId !== seg.id,
+                                                         'rounded-l-lg': i === 0,
+                                                         'rounded-r-lg': i === getActiveStorageSegments().length - 1
+                                                     }"
+                                                     class="storage-bar-seg h-full rounded-sm transition-[width] duration-500 ease-out cursor-pointer border shadow-sm"
+                                                     @mouseenter="setHoveredStorage(seg.id)"
+                                                     @mouseleave="clearHoveredStorage()"
+                                                     @click="toggleExpandStorage(seg.id)">
+                                                </div>
+                                            </template>
                                         </div>
-                                    </template>
+                                    </div>
                                 </div>
-                                
-                                <!-- SVG Connector Lines -->
-                                <template x-for="(seg, i) in getActiveStorageSegments()" :key="seg.id">
-                                    <svg class="absolute top-0 left-0 w-full h-full pointer-events-none z-0 overflow-visible" style="min-height: 200px;">
-                                        <g stroke-linecap="round" stroke-linejoin="round">
-                                            <path :d="getTracePath(i)" 
-                                                  fill="none" 
-                                                  :stroke="hoveredStorageId === seg.id ? 'var(--accent-color)' : 'var(--text-secondary)'" 
-                                                  :stroke-opacity="hoveredStorageId === seg.id ? 1 : 0.40"
-                                                  :stroke-width="hoveredStorageId === seg.id ? 2.5 : 2" 
-                                                  stroke-dasharray="1000"
-                                                  :stroke-dashoffset="traceLinesDrawn ? 0 : 1000"
-                                                  class="transition-[stroke-dashoffset] duration-500 ease-out" />
-                                        </g>
-                                    </svg>
-                                </template>
 
                                 <!-- Category list inside a single card -->
-                                <div class="relative z-10 pt-12 pr-[45px]" id="storage-list-container">
-                                    <div class="stats-card" style="padding: 0; overflow: hidden;">
+                                <div class="stats-card" style="padding: 0; overflow: hidden;">
                                         <template x-for="(seg, i) in getActiveStorageSegments()" :key="seg.id">
                                             <div class="storage-row"
                                                  :class="hoveredStorageId === seg.id ? 'bg-[var(--bg-tertiary)]' : ''"
@@ -1655,9 +1711,7 @@
 
                                             </div>
                                         </template>
-                                    </div>
                                 </div>
-                            </div>
                             </div>
                         </template>
                     </div>

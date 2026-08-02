@@ -180,6 +180,8 @@ function tweetApp() {
         loadingStatsCollections: false,
         statsHealth: null,
         loadingStatsHealth: false,
+        showEmptyUnavailableReasons: false,
+        hoveredUnavailableReason: null,
         archiveEnrichmentIncomplete: 0,
         statsTags: null,
         loadingStatsTags: false,
@@ -189,10 +191,8 @@ function tweetApp() {
         storageDetailedView: false,
         storageGapsCollapsed: false,
         animatingStorageToggle: false,
-        traceLinesDrawn: true,
         hoveredStorageId: null,
         expandedStorageId: null,
-        storageRowY: [],
         
         THEMES: THEMES,
         currentTheme: 'classic-dark',
@@ -231,10 +231,6 @@ function tweetApp() {
                 this.loadFont(savedFont);
                 document.body.style.fontFamily = savedFontFamily;
             }
-
-            window.addEventListener('resize', () => {
-                if (this.storageData) this.updateStorageRowPositions();
-            });
 
             window.addEventListener('scroll', () => {
                 this.showScrollTop = window.scrollY > 300;
@@ -722,6 +718,44 @@ function tweetApp() {
                 });
         },
 
+        getUnavailableReasons() {
+            const reasons = this.statsHealth?.enrichment?.unavailable?.reasons || [];
+            return this.showEmptyUnavailableReasons
+                ? reasons
+                : reasons.filter(reason => (reason.count || 0) > 0);
+        },
+
+        getUnavailableBarReasons() {
+            const reasons = this.statsHealth?.enrichment?.unavailable?.reasons || [];
+            return reasons.filter(reason => (reason.count || 0) > 0);
+        },
+
+        getUnavailableSegmentWidth(reason) {
+            const reasons = this.getUnavailableBarReasons();
+            if (!reasons.length) return 0;
+
+            const minFloor = 1.2;
+            const logWeights = reasons.map(item => Math.log10(Math.max(10, item.count || 0)));
+            const totalLog = logWeights.reduce((total, weight) => total + weight, 0);
+            const rawWeights = reasons.map((item, index) => {
+                const linearPct = item.percent_of_missing || 0;
+                const logPct = totalLog > 0 ? (logWeights[index] / totalLog) * 100 : 0;
+                return Math.max(minFloor, (linearPct * 0.82) + (logPct * 0.18));
+            });
+            const totalWeight = rawWeights.reduce((total, weight) => total + weight, 0);
+            const index = reasons.findIndex(item => item.reason === reason.reason);
+            return index === -1 ? 0 : Math.max(minFloor, (rawWeights[index] / totalWeight) * 100);
+        },
+
+        getUnavailableReasonStatus(reason) {
+            const parts = [];
+            if ((reason.due || 0) > 0) parts.push(`${reason.due.toLocaleString()} due now`);
+            if ((reason.delayed || 0) > 0) parts.push(`${reason.delayed.toLocaleString()} scheduled`);
+            if ((reason.permanent || 0) > 0) parts.push(`${reason.permanent.toLocaleString()} permanent`);
+            if (parts.length) return parts.join(' · ');
+            return (reason.count || 0) > 0 ? 'Availability recorded' : 'No unavailable tweets';
+        },
+
         fetchArchiveEnrichmentStatus() {
             fetch('/api/stats/health')
                 .then(r => r.json())
@@ -731,8 +765,6 @@ function tweetApp() {
                 .catch(e => console.error('Failed to fetch archive enrichment status', e));
         },
 
-        storageRowY: [],
-        storageSegmentX: [],
         fetchStorageBreakdown() {
             this.storageLoading = true;
             fetch('/api/storage/breakdown')
@@ -740,7 +772,6 @@ function tweetApp() {
                 .then(d => {
                     this.storageData = d;
                     this.storageLoading = false;
-                    this.updateStorageRowPositions();
                 })
                 .catch(e => {
                     console.error('Failed to fetch storage stats', e);
@@ -783,104 +814,25 @@ function tweetApp() {
             if (this.animatingStorageToggle) return;
             this.animatingStorageToggle = true;
 
-            // Phase 1: Collapse all segment gaps so the bar becomes solid, and hide trace lines
+            // Phase 1: Collapse all segment gaps so the bar becomes solid.
             this.storageGapsCollapsed = true;
-            this.traceLinesDrawn = false;
 
-            // Phase 2: After 250ms (bar has collapsed to solid), flip state & layout
+            // Phase 2: After the bar becomes solid, flip state and reopen the gaps.
             setTimeout(() => {
                 this.storageDetailedView = !this.storageDetailedView;
                 this.expandedStorageId = null;
-                this.updateStorageRowPositions();
 
                 this.$nextTick(() => {
-                    this.updateStorageRowPositions();
-                    // Open/expand new segment gaps
                     this.storageGapsCollapsed = false;
-
-                    // Continuously update position tracking while width & gap CSS transitions run (600ms)
-                    const startTime = performance.now();
-                    const animate = (now) => {
-                        this.updateStorageRowPositions();
-                        if (now - startTime < 600) {
-                            requestAnimationFrame(animate);
-                        } else {
-                            // Segments & gaps are 100% static in final positions
-                            this.updateStorageRowPositions();
-                            // Draw new trace lines into exact fixed positions
-                            this.traceLinesDrawn = true;
-                            this.animatingStorageToggle = false;
-                        }
-                    };
-                    requestAnimationFrame(animate);
+                    setTimeout(() => {
+                        this.animatingStorageToggle = false;
+                    }, 600);
                 });
             }, 250);
         },
         toggleExpandStorage(id) {
             if (!this.storageDetailedView) return; // Only detailed view allows row expansion
             this.expandedStorageId = this.expandedStorageId === id ? null : id;
-            this.updateStorageRowPositions();
-            let frames = 0;
-            const animate = () => {
-                this.updateStorageRowPositions();
-                frames++;
-                if (frames < 35) {
-                    requestAnimationFrame(animate);
-                }
-            };
-            requestAnimationFrame(animate);
-        },
-        containerWidth: 0,
-        getStorageSegmentCenter(index) {
-            if (this.storageSegmentX && this.storageSegmentX[index] !== undefined) {
-                return this.storageSegmentX[index];
-            }
-            return 0;
-        },
-        getTracePath(i) {
-            if (!this.containerWidth || !this.storageRowY[i]) return '';
-            const w = this.containerWidth;
-            const totalSegs = this.getActiveStorageSegments().length;
-            const x0 = w - 45;
-            const y0 = this.storageRowY[i];
-            
-            const step = totalSegs > 1 ? (24 / (totalSegs - 1)) : 0;
-            const x1 = w - (32 - i * step);
-            const y2 = 80 - i * 4;
-            const segCenterPercent = this.getStorageSegmentCenter(i);
-            const x3 = (segCenterPercent / 100) * w;
-            const y4 = 40;
-
-            const r = Math.min(6, Math.abs(x1 - x0) / 2, Math.abs(y2 - y0) / 2, Math.abs(x3 - x1) / 2);
-
-            return `M ${x0} ${y0} H ${x1 - r} Q ${x1} ${y0}, ${x1} ${y0 - r} V ${y2 + r} Q ${x1} ${y2}, ${x1 - r} ${y2} H ${x3 + r} Q ${x3} ${y2}, ${x3} ${y2 - r} V ${y4}`;
-        },
-        updateStorageRowPositions() {
-            this.$nextTick(() => {
-                const container = document.getElementById('storage-diagram-container');
-                const rows = document.querySelectorAll('.storage-row');
-                const segments = document.querySelectorAll('.storage-bar-seg');
-                if (!container) return;
-                const containerRect = container.getBoundingClientRect();
-                this.containerWidth = containerRect.width;
-                
-                if (rows.length) {
-                    this.storageRowY = Array.from(rows).map(row => {
-                        const header = row.querySelector('.storage-row-header') || row;
-                        const headerRect = header.getBoundingClientRect();
-                        // Calculate exact Y center of the row header relative to container
-                        return (headerRect.top - containerRect.top) + (headerRect.height / 2);
-                    });
-                }
-
-                if (segments.length) {
-                    this.storageSegmentX = Array.from(segments).map(seg => {
-                        const segRect = seg.getBoundingClientRect();
-                        const centerPx = (segRect.left - containerRect.left) + (segRect.width / 2);
-                        return (centerPx / containerRect.width) * 100;
-                    });
-                }
-            });
         },
 
         updateSyncTime() {

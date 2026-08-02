@@ -23,6 +23,10 @@ def _stats_store() -> SimpleNamespace:
             key TEXT,
             value TEXT,
             enrichment_state TEXT,
+            enrichment_reason TEXT,
+            enrichment_retry_eligible INTEGER,
+            enrichment_next_retry_at TEXT,
+            deleted_at TEXT,
             conversation_id TEXT,
             status TEXT,
             raw_json TEXT
@@ -50,6 +54,13 @@ def test_summary_reports_counts_ranges_owner_and_latest_sync(make_web_client) ->
             ("metadata", None, None, None, None, "owner_user_id", "owner-42"),
         ],
     )
+    store.conn.executemany(
+        "INSERT INTO archive (record_type, tweet_id, enrichment_state) VALUES (?, ?, ?)",
+        [
+            ("tweet_object", "t1", "done"),
+            ("tweet_object", "t2", "terminal_unavailable"),
+        ],
+    )
     client = make_web_client(stats_routes.router, store=store)
 
     response = client.get("/api/stats/summary")
@@ -62,6 +73,9 @@ def test_summary_reports_counts_ranges_owner_and_latest_sync(make_web_client) ->
         "media_rows": 1,
         "urls": 1,
         "profiles": 2,
+        "archive_tweets": 2,
+        "missing_archive_tweets": 1,
+        "missing_archive_pct": 50.0,
         "oldest_post": "Nov 14, 2023",
         "newest_post": "Jan 15, 2027",
         "latest_sync": "Jun 15, 2025",
@@ -81,6 +95,9 @@ def test_summary_uses_empty_defaults(make_web_client) -> None:
         "media_rows": 0,
         "urls": 0,
         "profiles": 0,
+        "archive_tweets": 0,
+        "missing_archive_tweets": 0,
+        "missing_archive_pct": 0.0,
         "oldest_post": None,
         "newest_post": None,
         "latest_sync": None,
@@ -142,21 +159,32 @@ def test_health_reports_pipeline_counts(make_web_client) -> None:
     store = _stats_store()
     store.conn.executemany(
         """
-        INSERT INTO archive (record_type, enrichment_state, conversation_id, status)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO archive (
+            record_type, enrichment_state, enrichment_reason,
+            enrichment_retry_eligible, enrichment_next_retry_at,
+            conversation_id, status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
         [
-            ("tweet_object", "done", None, None),
-            ("tweet_object", "done", None, None),
-            ("tweet_object", "resurrected", None, None),
-            ("tweet_object", "pending", None, None),
-            ("tweet_object", "transient_failure", None, None),
-            ("tweet_object", "terminal_unavailable", None, None),
-            ("tweet", None, "c1", None),
-            ("tweet", None, "c1", None),
-            ("tweet", None, "c2", None),
-            ("article", None, None, "preview_only"),
-            ("article", None, None, "body_present"),
+            ("tweet_object", "done", None, None, None, None, None),
+            ("tweet_object", "done", None, None, None, None, None),
+            ("tweet_object", "resurrected", None, None, None, None, None),
+            ("tweet_object", "pending", None, None, None, None, None),
+            ("tweet_object", "transient_failure", None, None, None, None, None),
+            (
+                "tweet_object",
+                "terminal_unavailable",
+                "protected_account",
+                1,
+                None,
+                None,
+                None,
+            ),
+            ("tweet", None, None, None, None, "c1", None),
+            ("tweet", None, None, None, None, "c1", None),
+            ("tweet", None, None, None, None, "c2", None),
+            ("article", None, None, None, None, None, "preview_only"),
+            ("article", None, None, None, None, None, "body_present"),
         ],
     )
     client = make_web_client(stats_routes.router, store=store)
@@ -173,10 +201,96 @@ def test_health_reports_pipeline_counts(make_web_client) -> None:
             "transient": 1,
             "incomplete": 2,
             "terminal": 1,
+            "unavailable": {
+                "total": 1,
+                "percent_of_archive": 16.7,
+                "retryable": 1,
+                "due": 1,
+                "delayed": 0,
+                "permanent": 0,
+                "reasons": response.json()["enrichment"]["unavailable"]["reasons"],
+            },
         },
         "threads_expanded": 2,
         "preview_articles": 1,
     }
+    reasons = {
+        item["reason"]: item for item in response.json()["enrichment"]["unavailable"]["reasons"]
+    }
+    assert list(reasons) == [
+        "protected_account",
+        "suspended_account",
+        "account_missing",
+        "withheld",
+        "not_found",
+        "unavailable_unknown",
+        "deleted_by_author",
+        "archive_deleted",
+    ]
+    assert reasons["protected_account"] == {
+        "reason": "protected_account",
+        "label": "Protected account",
+        "count": 1,
+        "percent_of_missing": 100.0,
+        "percent_of_archive": 16.7,
+        "retryable": 1,
+        "due": 1,
+        "delayed": 0,
+        "permanent": 0,
+    }
+    assert reasons["unavailable_unknown"]["count"] == 0
+    assert reasons["deleted_by_author"]["permanent"] == 0
+
+
+def test_health_breaks_unavailable_tweets_down_by_reason_and_retry_state(
+    make_web_client,
+) -> None:
+    store = _stats_store()
+    store.conn.executemany(
+        """
+        INSERT INTO archive (
+            record_type, enrichment_state, enrichment_reason,
+            enrichment_retry_eligible, enrichment_next_retry_at, deleted_at
+        ) VALUES ('tweet_object', 'terminal_unavailable', ?, ?, ?, ?)
+        """,
+        [
+            ("unavailable_unknown", 1, "2999-01-01T00:00:00+00:00", None),
+            ("unavailable_unknown", 1, None, None),
+            ("suspended_account", 1, "2999-01-01T00:00:00+00:00", None),
+            ("deleted_by_author", 0, None, "2026-08-01T00:00:00+00:00"),
+        ],
+    )
+    store.conn.execute(
+        "INSERT INTO archive (record_type, enrichment_state) VALUES ('tweet_object', 'done')"
+    )
+    client = make_web_client(stats_routes.router, store=store)
+
+    data = client.get("/api/stats/health").json()["enrichment"]["unavailable"]
+
+    assert data == {
+        "total": 4,
+        "percent_of_archive": 80.0,
+        "retryable": 3,
+        "due": 1,
+        "delayed": 2,
+        "permanent": 1,
+        "reasons": data["reasons"],
+    }
+    reasons = {item["reason"]: item for item in data["reasons"]}
+    assert reasons["unavailable_unknown"] == {
+        "reason": "unavailable_unknown",
+        "label": "Unknown availability",
+        "count": 2,
+        "percent_of_missing": 50.0,
+        "percent_of_archive": 40.0,
+        "retryable": 2,
+        "due": 1,
+        "delayed": 1,
+        "permanent": 0,
+    }
+    assert reasons["suspended_account"]["delayed"] == 1
+    assert reasons["deleted_by_author"]["permanent"] == 1
+    assert reasons["archive_deleted"]["count"] == 0
 
 
 def test_tag_stats_reports_case_insensitive_usage_and_coverage(make_web_client) -> None:

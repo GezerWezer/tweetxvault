@@ -42,8 +42,12 @@ def test_index_loads_local_assets_in_dependency_order():
     assert 'aria-label="Scroll to top"' in html
     assert 'x-show="archiveEnrichmentIncomplete > 0"' in html
     assert "tweetxvault import enrich" in html
-    assert 'x-text="statsHealth.enrichment.available.toLocaleString()"' in html
-    assert 'x-text="statsHealth.enrichment.done.toLocaleString()"' not in html
+    assert ">Archive status<" in html
+    assert 'x-text="statsHealth.enrichment.done.toLocaleString()"' in html
+    assert 'x-text="statsHealth.enrichment.resurrected.toLocaleString()"' in html
+    assert 'x-text="statsHealth.enrichment.incomplete.toLocaleString()"' in html
+    assert 'x-model="showEmptyUnavailableReasons"' in html
+    assert 'x-text="statsHealth.enrichment.available.toLocaleString()"' not in html
 
     app_js = (WEB_DIR / "static" / "js" / "app.js").read_text(encoding="utf-8")
     assert "fetchArchiveEnrichmentStatus" in app_js

@@ -347,6 +347,7 @@ If you installed the `web` extra, you can browse your archive through an interac
 **Key Web UI Features:**
 - **History API Integration:** Browser back/forward buttons work flawlessly when diving in and out of threads, completely preserving scroll positions with zero flashing or resets.
 - **Native Render Fidelity:** Accurate styling for quoted tweets, circular avatars, and native rendering of cyan Twitter Polls. Article cards strip redundant `t.co` links, use `summary_large_image` thumbnails, and are fully clickable.
+- **Archive Analytics:** The overview reports unavailable imported tweets and their archive percentage. Archive status separates enrichment, thread expansion, missing enrichment, and resurrection, with an availability-reason breakdown. Storage shows an inline size breakdown in simplified or detailed form.
 - **Daemon Management:** Run the server safely in the background using native CLI daemon commands.
 
 The web server runs as a background daemon so you don't need to keep a terminal open:

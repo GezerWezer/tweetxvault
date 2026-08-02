@@ -431,7 +431,97 @@ test('tweet app starts with coherent list, panel, modal, and theme state', () =>
     assert.deepEqual(Array.from(app.panelStack), []);
     assert.equal(app.tagModalOpen, false);
     assert.equal(app.currentTheme, 'classic-dark');
+    assert.equal(app.showEmptyUnavailableReasons, false);
     assert.ok(Object.keys(app.THEMES).length >= 15);
+});
+
+test('archive status filters empty reasons and summarizes retry state', () => {
+    const context = browserContext();
+    const { tweetApp } = loadScripts(
+        context,
+        ['themes.js', 'app.js'],
+        '({tweetApp})',
+    );
+    const app = immediateComponent(tweetApp());
+    app.statsHealth = {
+        enrichment: {
+            unavailable: {
+                reasons: [
+                    {
+                        reason: 'unavailable_unknown',
+                        count: 2,
+                        percent_of_missing: 66.7,
+                        due: 1,
+                        delayed: 1,
+                        permanent: 0,
+                    },
+                    {
+                        reason: 'deleted_by_author',
+                        count: 1,
+                        percent_of_missing: 33.3,
+                        due: 0,
+                        delayed: 0,
+                        permanent: 1,
+                    },
+                    {
+                        reason: 'withheld',
+                        count: 0,
+                        percent_of_missing: 0,
+                        due: 0,
+                        delayed: 0,
+                        permanent: 0,
+                    },
+                ],
+            },
+        },
+    };
+
+    assert.deepEqual(
+        Array.from(app.getUnavailableReasons(), item => item.reason),
+        ['unavailable_unknown', 'deleted_by_author'],
+    );
+    assert.deepEqual(
+        Array.from(app.getUnavailableBarReasons(), item => item.reason),
+        ['unavailable_unknown', 'deleted_by_author'],
+    );
+    assert.equal(
+        app.getUnavailableReasonStatus(app.statsHealth.enrichment.unavailable.reasons[0]),
+        '1 due now · 1 scheduled',
+    );
+    assert.equal(
+        app.getUnavailableReasonStatus(app.statsHealth.enrichment.unavailable.reasons[1]),
+        '1 permanent',
+    );
+    assert.ok(
+        app.getUnavailableSegmentWidth(app.statsHealth.enrichment.unavailable.reasons[0])
+        > app.getUnavailableSegmentWidth(app.statsHealth.enrichment.unavailable.reasons[1]),
+    );
+
+    app.showEmptyUnavailableReasons = true;
+    assert.equal(app.getUnavailableReasons().length, 3);
+    assert.equal(app.getUnavailableBarReasons().length, 2);
+    assert.equal(
+        app.getUnavailableReasonStatus(app.statsHealth.enrichment.unavailable.reasons[2]),
+        'No unavailable tweets',
+    );
+});
+
+test('analytics markup exposes the Archive status cards and reason breakdown', () => {
+    const html = fs.readFileSync(
+        path.join(ROOT, 'tweetxvault', 'web', 'index.html'),
+        'utf8',
+    );
+
+    assert.match(html, />Archive status</);
+    assert.match(html, />Enriched /);
+    assert.match(html, />Threads /);
+    assert.match(html, />Missing enrichment /);
+    assert.match(html, />Resurrected /);
+    assert.match(html, />Unavailable tweets /);
+    assert.match(html, /x-model="showEmptyUnavailableReasons"/);
+    assert.match(html, /archive-status-bar-seg/);
+    assert.match(html, /archive-status-reason-row/);
+    assert.doesNotMatch(html, />Pipeline health</);
 });
 
 test('tweet fetching encodes search state, hydrates pagination, appends, and reports errors', async () => {

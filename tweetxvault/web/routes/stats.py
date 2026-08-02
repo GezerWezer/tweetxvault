@@ -15,6 +15,134 @@ router = APIRouter(
     dependencies=[Depends(verify_credentials)],
 )
 
+UNAVAILABLE_REASON_LABELS = (
+    ("protected_account", "Protected account"),
+    ("suspended_account", "Suspended account"),
+    ("account_missing", "Missing account"),
+    ("withheld", "Withheld"),
+    ("not_found", "Not found"),
+    ("unavailable_unknown", "Unknown availability"),
+    ("deleted_by_author", "Deleted by author"),
+    ("archive_deleted", "Deleted in archive"),
+)
+
+
+def _percentage(count: int, total: int) -> float:
+    return round((count / total) * 100, 1) if total else 0.0
+
+
+def _archive_availability_counts(conn: Any) -> tuple[int, int]:
+    row = conn.execute(
+        """
+        SELECT
+            count(*),
+            count(*) FILTER (WHERE enrichment_state = 'terminal_unavailable')
+        FROM archive
+        WHERE record_type = 'tweet_object'
+        """
+    ).fetchone()
+    return (int(row[0] or 0), int(row[1] or 0)) if row else (0, 0)
+
+
+def _unavailable_breakdown(
+    conn: Any,
+    *,
+    archive_total: int,
+    unavailable_total: int,
+) -> dict[str, Any]:
+    now = datetime.now(tz=UTC).isoformat()
+    rows = conn.execute(
+        """
+        SELECT
+            COALESCE(NULLIF(enrichment_reason, ''), 'unavailable_unknown') AS reason,
+            count(*) AS count,
+            sum(CASE
+                WHEN deleted_at IS NOT NULL
+                  OR enrichment_retry_eligible = 0
+                  OR enrichment_reason IN ('archive_deleted', 'deleted_by_author')
+                THEN 1 ELSE 0
+            END) AS permanent,
+            sum(CASE
+                WHEN deleted_at IS NULL
+                  AND enrichment_retry_eligible = 1
+                  AND COALESCE(enrichment_reason, '') NOT IN (
+                      'archive_deleted', 'deleted_by_author'
+                  )
+                THEN 1 ELSE 0
+            END) AS retryable,
+            sum(CASE
+                WHEN deleted_at IS NULL
+                  AND enrichment_retry_eligible = 1
+                  AND COALESCE(enrichment_reason, '') NOT IN (
+                      'archive_deleted', 'deleted_by_author'
+                  )
+                  AND (
+                      enrichment_next_retry_at IS NULL
+                      OR enrichment_next_retry_at <= ?
+                  )
+                THEN 1 ELSE 0
+            END) AS due,
+            sum(CASE
+                WHEN deleted_at IS NULL
+                  AND enrichment_retry_eligible = 1
+                  AND COALESCE(enrichment_reason, '') NOT IN (
+                      'archive_deleted', 'deleted_by_author'
+                  )
+                  AND enrichment_next_retry_at > ?
+                THEN 1 ELSE 0
+            END) AS delayed
+        FROM archive
+        WHERE record_type = 'tweet_object'
+          AND enrichment_state = 'terminal_unavailable'
+        GROUP BY COALESCE(NULLIF(enrichment_reason, ''), 'unavailable_unknown')
+        """,
+        (now, now),
+    ).fetchall()
+    counts_by_reason = {
+        str(row[0]): {
+            "count": int(row[1] or 0),
+            "permanent": int(row[2] or 0),
+            "retryable": int(row[3] or 0),
+            "due": int(row[4] or 0),
+            "delayed": int(row[5] or 0),
+        }
+        for row in rows
+    }
+
+    labels = dict(UNAVAILABLE_REASON_LABELS)
+    ordered_reasons = [reason for reason, _label in UNAVAILABLE_REASON_LABELS]
+    ordered_reasons.extend(sorted(set(counts_by_reason) - set(ordered_reasons)))
+    reasons = []
+    for reason in ordered_reasons:
+        counts = counts_by_reason.get(
+            reason,
+            {"count": 0, "permanent": 0, "retryable": 0, "due": 0, "delayed": 0},
+        )
+        count = counts["count"]
+        reasons.append(
+            {
+                "reason": reason,
+                "label": labels.get(reason, reason.replace("_", " ").title()),
+                "count": count,
+                "percent_of_missing": _percentage(count, unavailable_total),
+                "percent_of_archive": _percentage(count, archive_total),
+                "retryable": counts["retryable"],
+                "due": counts["due"],
+                "delayed": counts["delayed"],
+                "permanent": counts["permanent"],
+            }
+        )
+
+    return {
+        "total": unavailable_total,
+        "percent_of_archive": _percentage(unavailable_total, archive_total),
+        "retryable": sum(item["retryable"] for item in reasons),
+        "due": sum(item["due"] for item in reasons),
+        "delayed": sum(item["delayed"] for item in reasons),
+        "permanent": sum(item["permanent"] for item in reasons),
+        "reasons": reasons,
+    }
+
 
 def _format_ts(ts: int | float | str | None) -> str | None:
     if not ts:
@@ -64,6 +192,7 @@ def get_stats_summary(
         ).fetchone()[0]
         or 0
     )
+    archive_tweets, missing_archive_tweets = _archive_availability_counts(conn)
 
     range_row = conn.execute(
         """
@@ -96,6 +225,9 @@ def get_stats_summary(
         "media_rows": media_count,
         "urls": url_count,
         "profiles": profile_count,
+        "archive_tweets": archive_tweets,
+        "missing_archive_tweets": missing_archive_tweets,
+        "missing_archive_pct": _percentage(missing_archive_tweets, archive_tweets),
         "oldest_post": _format_ts(oldest_ts),
         "newest_post": _format_ts(newest_ts),
         "latest_sync": _format_ts(latest_sync_ts),
@@ -166,6 +298,7 @@ def get_stats_health(
 ) -> dict[str, Any]:
     """Return pipeline and processing health metrics."""
     conn = store.conn
+    archive_tweets, missing_archive_tweets = _archive_availability_counts(conn)
 
     enrich_done = (
         conn.execute(
@@ -211,17 +344,7 @@ def get_stats_health(
         ).fetchone()[0]
         or 0
     )
-    enrich_terminal = (
-        conn.execute(
-            """
-            SELECT count(*)
-            FROM archive
-            WHERE record_type = 'tweet_object'
-              AND enrichment_state = 'terminal_unavailable'
-            """
-        ).fetchone()[0]
-        or 0
-    )
+    enrich_terminal = missing_archive_tweets
     threads_expanded = (
         conn.execute(
             """
@@ -252,6 +375,11 @@ def get_stats_health(
             "transient": enrich_transient,
             "incomplete": enrich_pending + enrich_transient,
             "terminal": enrich_terminal,
+            "unavailable": _unavailable_breakdown(
+                conn,
+                archive_total=archive_tweets,
+                unavailable_total=enrich_terminal,
+            ),
         },
         "threads_expanded": threads_expanded,
         "preview_articles": preview_articles,

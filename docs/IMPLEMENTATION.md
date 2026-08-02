@@ -11,6 +11,22 @@ Hard constraints:
 
 Definition of done: passes `uv run ruff format --check`, `uv run ruff check`, and `uv run pytest`.
 
+## Web archive availability and storage clarity (2026-08-02)
+
+- [x] Add an Archive overview card for missing imported tweets and their archive percentage.
+- [x] Expose reason-specific unavailable counts, percentages, and retry state for future cards.
+- [x] Remove Storage connector traces and move the segmented bar into the Total card.
+- [x] Preserve the current Pipeline health presentation until its dedicated visual rework.
+- [x] Pass Web route, browser-asset, full-suite, and rendered browser validation.
+
+### Archive status presentation follow-up
+
+- [x] Rename Pipeline health to Archive status.
+- [x] Show enriched, expanded threads, missing enrichment, and resurrected summary cards.
+- [x] Add an unavailable-tweet total, reason bar, and storage-style reason list.
+- [x] Hide zero-count reasons by default with a Settings-style Show empty switch.
+- [x] Pass browser-asset, full-suite, and rendered desktop/mobile validation.
+
 ## Nested tombstone matching and full enrichment snapshots (2026-08-01)
 
 - [x] Match direct and nested `*-tweet-<id>` entry IDs with exact suffix boundaries.

@@ -1,3 +1,21 @@
+- 2026-08-02 (Web archive availability and storage clarity)
+  - Added an Archive overview card for TweetDetail rows currently unavailable on X, showing the
+    missing count and percentage across all imported archive tweet objects.
+  - Extended `/api/stats/health` with a stable, labeled reason catalog and per-reason archive
+    percentage, missing percentage, retryable, due, delayed, and permanent counts.
+  - Replaced Pipeline health with Archive status: distinct enriched, expanded-thread, missing-
+    enrichment, and resurrected cards plus an unavailable total, proportional reason bar, and
+    storage-style reason rows. A Settings-style switch reveals zero-count reasons without adding
+    empty segments to the bar.
+  - Removed Storage connector traces and their resize/animation bookkeeping, then moved the
+    segmented size bar beside the total with an inline vertical divider while retaining simplified,
+    detailed, hover, and expandable-row behavior.
+  - Corrected the overview grid after rendered inspection and verified desktop plus narrow-width
+    simplified/detailed layouts in the in-app browser against an isolated temporary archive.
+  - Validation passed the full pytest suite, repository-wide Ruff lint, scoped Ruff format,
+    compileall, `git diff --check`, all 20 browser-asset tests, and rendered browser QA. The
+    configured production archive was not opened or modified.
+
 - 2026-08-01 (Live empty TweetDetail result sentinel)
   - Diagnosed the production enrichment breaker with two read-only single-tweet probes: X returned
     HTTP 200 with an exact `tweet-1731078129152586204` `TimelineTweet` entry but an empty
