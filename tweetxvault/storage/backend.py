@@ -2603,6 +2603,21 @@ class ArchiveStore:
         rows = self.conn.execute(query, (*AVAILABLE_ENRICHMENT_STATES, limit)).fetchall()
         return [row["tweet_id"] for row in rows]
 
+    def count_eligible_tweets_for_tagging(self) -> int:
+        state_placeholders = ", ".join("?" for _state in AVAILABLE_ENRICHMENT_STATES)
+        query = f"""
+            SELECT COUNT(DISTINCT t.tweet_id)
+            FROM archive t
+            JOIN archive o ON o.tweet_id = t.tweet_id AND o.record_type = 'tweet_object'
+            JOIN archive m ON m.tweet_id = t.tweet_id AND m.record_type = 'media'
+            LEFT JOIN archive tg ON tg.tweet_id = t.tweet_id AND tg.record_type = 'media_tag'
+            WHERE t.record_type = 'tweet'
+              AND o.enrichment_state IN ({state_placeholders})
+              AND tg.tweet_id IS NULL
+        """
+        row = self.conn.execute(query, AVAILABLE_ENRICHMENT_STATES).fetchone()
+        return int(row[0]) if row is not None else 0
+
     def delete_media_tag(self, tweet_id: str) -> None:
         self.conn.execute(
             "DELETE FROM archive WHERE record_type = 'media_tag' AND tweet_id = ?", (tweet_id,)

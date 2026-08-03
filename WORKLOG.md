@@ -1,3 +1,23 @@
+- 2026-08-02 (Unified pipeline CLI research and design)
+  - Audited every long-running sync/import follow-up, its queue-selection conditions, available
+    metrics, current Rich/tqdm/direct-print paths, tests, and cron/non-TTY behavior before editing.
+  - Chose one semantic command-lifecycle reporter: dynamic work-backed steps, one randomized
+    spinner per command, Twitter-blue live progress with an issues-only sidebar, and bounded plain
+    service logs without terminal control sequences.
+  - Timeline pagination has no remote total, so unlimited sync will show determinate current-page
+    work and omit a fabricated whole-run percentage/ETA; exact queues retain rate and ETA output.
+  - Implemented `PipelineReporter` across sync, archive import/enrichment, threads, resurrection,
+    articles, media, URL unfurling, conditional tagging, and conditional Web restart. Nested tqdm
+    and direct status output are suppressed while the shared lifecycle is active.
+  - Steps are admitted only after the corresponding queue/dataset/backfill condition is known;
+    current item identifiers, durable counts, retry/cooldown state, bytes, rates, and per-step ETA
+    are derived from each worker rather than simulator filler.
+  - Non-TTY/systemd mode emits bounded plain semantic records (10%/30-second milestones plus
+    important retry/commit events) with coalesced issues and no ANSI/redraw frames. Added renderer,
+    service-log, lifecycle cleanup, conditional sync/import/follow-up, and CLI regressions.
+  - Validation passed repository-wide Ruff, compileall, `git diff --check`, the full pytest suite,
+    and CLI help regressions. The configured production archive was not opened or modified.
+
 - 2026-08-02 (Web archive availability and storage clarity)
   - Added an Archive overview card for TweetDetail rows currently unavailable on X, showing the
     missing count and percentage across all imported archive tweet objects.

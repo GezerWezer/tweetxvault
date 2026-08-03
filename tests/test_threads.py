@@ -14,6 +14,7 @@ from tweetxvault.exceptions import (
     RateLimitExhaustedError,
     RepeatedFocalAbsenceError,
 )
+from tweetxvault.pipeline import PipelineReporter
 from tweetxvault.query_ids import QueryIdStore
 from tweetxvault.resurrection import resurrect_due_tweets
 from tweetxvault.storage import open_archive_store
@@ -419,18 +420,25 @@ async def test_expand_threads_explicit_targets_skip_already_expanded_by_default(
     def unexpected_request(request: httpx.Request) -> httpx.Response:
         raise AssertionError(f"should not refetch explicit target without --refresh: {request.url}")
 
-    second = await expand_threads(
-        targets=["100"],
-        config=config,
-        paths=paths,
-        auth_bundle=auth_bundle,
-        transport=httpx.MockTransport(unexpected_request),
+    reporter = PipelineReporter(
+        Console(file=StringIO(), force_terminal=False, color_system=None),
+        "threads",
+        interactive=False,
     )
+    with reporter:
+        second = await expand_threads(
+            targets=["100"],
+            config=config,
+            paths=paths,
+            auth_bundle=auth_bundle,
+            transport=httpx.MockTransport(unexpected_request),
+        )
 
     assert second.processed == 0
     assert second.expanded == 0
     assert second.failed == 0
     assert second.skipped == 1
+    assert not reporter.has_step("threads")
 
 
 @pytest.mark.asyncio

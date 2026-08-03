@@ -22,6 +22,7 @@ from tests.conftest import (
 from tweetxvault.client.timelines import TimelineTweet
 from tweetxvault.config import AppConfig
 from tweetxvault.exceptions import ConfigError, ProcessLockError, TweetXVaultError
+from tweetxvault.pipeline import PipelineReporter
 from tweetxvault.query_ids import QueryIdStore
 from tweetxvault.storage import open_archive_store
 from tweetxvault.storage.backend import ArchiveStore
@@ -513,25 +514,25 @@ async def test_sync_collection_head_only_clears_saved_backfill_state(
             )
         raise AssertionError(f"unexpected request cursor {cursor}")
 
-    second = await sync_collection(
-        "bookmarks",
-        full=False,
-        head_only=True,
-        limit=None,
-        config=config,
-        paths=paths,
-        auth_bundle=auth_bundle,
-        query_ids={"Bookmarks": "qid-bookmarks"},
-        transport=httpx.MockTransport(second_handler),
-        console=console,
-        sleep=lambda _: asyncio.sleep(0),
-    )
+    reporter = PipelineReporter(console, "sync", interactive=False)
+    with reporter:
+        second = await sync_collection(
+            "bookmarks",
+            full=False,
+            head_only=True,
+            limit=None,
+            config=config,
+            paths=paths,
+            auth_bundle=auth_bundle,
+            query_ids={"Bookmarks": "qid-bookmarks"},
+            transport=httpx.MockTransport(second_handler),
+            console=console,
+            sleep=lambda _: asyncio.sleep(0),
+        )
 
     assert second.pages_fetched == 1
-    output = console_buffer.getvalue()
-    assert "bookmarks: starting head pass" in output
-    assert "bookmarks head: page 1, page_tweets 2, total_tweets 2, stop=duplicate" in output
-    assert "bookmarks: resuming saved backfill pass" not in output
+    assert reporter.has_step("sync:bookmarks:head")
+    assert not reporter.has_step("sync:bookmarks:backfill")
 
     store = open_archive_store(paths, create=False)
     assert store is not None
@@ -601,23 +602,25 @@ async def test_sync_collection_clears_saved_backfill_after_empty_backfill_page(
             )
         raise AssertionError(f"unexpected request cursor {cursor}")
 
-    second = await sync_collection(
-        "bookmarks",
-        full=False,
-        limit=None,
-        config=config,
-        paths=paths,
-        auth_bundle=auth_bundle,
-        query_ids={"Bookmarks": "qid-bookmarks"},
-        transport=httpx.MockTransport(second_handler),
-        console=console,
-        sleep=lambda _: asyncio.sleep(0),
-    )
+    reporter = PipelineReporter(console, "sync", interactive=False)
+    with reporter:
+        second = await sync_collection(
+            "bookmarks",
+            full=False,
+            limit=None,
+            config=config,
+            paths=paths,
+            auth_bundle=auth_bundle,
+            query_ids={"Bookmarks": "qid-bookmarks"},
+            transport=httpx.MockTransport(second_handler),
+            console=console,
+            sleep=lambda _: asyncio.sleep(0),
+        )
 
     assert second.pages_fetched == 2
-    output = console_buffer.getvalue()
-    assert "bookmarks: resuming saved backfill pass" in output
-    assert "bookmarks backfill: page 1, page_tweets 0, total_tweets 0, stop=empty" in output
+    assert reporter.has_step("sync:bookmarks:head")
+    assert reporter.has_step("sync:bookmarks:backfill")
+    assert reporter._step_by_key["sync:bookmarks:backfill"].summary.endswith("X returned no tweets")
 
     store = open_archive_store(paths, create=False)
     assert store is not None

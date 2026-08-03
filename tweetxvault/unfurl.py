@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from html import unescape
+from urllib.parse import urlsplit
 
 import httpx
 from rich.console import Console
@@ -13,6 +14,7 @@ from tweetxvault.config import DEFAULT_USER_AGENT, AppConfig, XDGPaths
 from tweetxvault.extractor import canonicalize_url
 from tweetxvault.interactive import emit_status, progress_callback, status_printer
 from tweetxvault.jobs import locked_archive_job
+from tweetxvault.pipeline import current_pipeline
 from tweetxvault.utils import utc_now
 
 _TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
@@ -70,7 +72,8 @@ async def unfurl_urls(
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> UrlUnfurlResult:
     console = console or Console(stderr=True)
-    status = status_printer(console, "unfurl")
+    pipeline = current_pipeline()
+    status = None if pipeline is not None else status_printer(console, "unfurl")
     async with locked_archive_job(config=config, paths=paths, console=console) as job:
         config = job.config
         store = job.store
@@ -89,6 +92,32 @@ async def unfurl_urls(
             status,
             f"fetching metadata for {len(rows)} saved URLs{mode_suffix}{limit_suffix}",
         )
+        step_key = "urls"
+        if pipeline is not None:
+            scope = "saved URLs · redirects followed · canonical metadata persisted"
+            if retry_failed:
+                scope += " · retrying failed rows"
+            first_url = (
+                rows[0].get("final_url")
+                or rows[0].get("expanded_url")
+                or rows[0].get("canonical_url")
+                or rows[0].get("url")
+                or "unknown URL"
+            )
+            first_host = urlsplit(str(first_url)).netloc or str(first_url)
+            pipeline.add_step(
+                step_key,
+                "URLs",
+                total=len(rows),
+                unit="URLs",
+                detail=scope,
+                rate_unit="URLs/s",
+            )
+            pipeline.start_step(
+                step_key,
+                activity=f"Fetching metadata from {first_host}",
+                counters="0 processed · 0 updated · 0 failed",
+            )
 
         async with httpx.AsyncClient(
             follow_redirects=True,
@@ -124,6 +153,21 @@ async def unfurl_urls(
                             or row.get("canonical_url")
                             or row.get("url")
                         )
+                        if pipeline is not None:
+                            host = (
+                                urlsplit(str(request_url)).netloc
+                                if request_url is not None
+                                else "missing URL"
+                            )
+                            pipeline.update_step(
+                                step_key,
+                                completed=index - 1,
+                                activity=f"Fetching metadata from {host or request_url}",
+                                counters=(
+                                    f"{index - 1} processed · {result.updated} updated · "
+                                    f"{result.failed} failed"
+                                ),
+                            )
                         if not isinstance(request_url, str) or not request_url:
                             pending_updates.append(
                                 store.build_url_unfurl_update(
@@ -209,7 +253,12 @@ async def unfurl_urls(
                                 )
                             )
                             result.failed += 1
-                            if console:
+                            if pipeline is not None:
+                                pipeline.issue(
+                                    f"URL {row['row_key']}: {exc}",
+                                    dedupe_key="urls:unfurl-failure",
+                                )
+                            elif console:
                                 console.print(
                                     f"url {row['row_key']}: failed ({exc})",
                                     highlight=False,
@@ -217,8 +266,22 @@ async def unfurl_urls(
                         if len(pending_updates) >= _UPDATE_BATCH_SIZE:
                             flush_updates()
                     finally:
+                        if pipeline is not None:
+                            pipeline.update_step(
+                                step_key,
+                                completed=index,
+                                counters=(
+                                    f"{index} processed · {result.updated} updated · "
+                                    f"{result.failed} failed"
+                                ),
+                            )
                         if progress is not None:
                             progress(index, len(rows))
 
             flush_updates()
+        if pipeline is not None:
+            pipeline.complete_step(
+                step_key,
+                f"{result.processed} processed · {result.updated} updated · {result.failed} failed",
+            )
         return result

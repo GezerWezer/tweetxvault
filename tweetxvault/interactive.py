@@ -8,6 +8,8 @@ from typing import Any
 
 from rich.console import Console
 
+from tweetxvault.pipeline import current_pipeline
+
 
 def _log_phase(console: Console, prefix: str, message: str) -> None:
     console.print(f"{prefix}: {message}", highlight=False)
@@ -35,7 +37,7 @@ def progress_callback(
     unit: str,
     leave: bool = False,
 ) -> Iterator[Callable[[int, int], None] | None]:
-    if not console.is_terminal or total <= 0:
+    if current_pipeline() is not None or not console.is_terminal or total <= 0:
         yield None
         return
 

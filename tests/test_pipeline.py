@@ -1,0 +1,236 @@
+from __future__ import annotations
+
+import random
+import time
+from io import StringIO
+
+import pytest
+from rich.console import Console
+from rich.text import Text
+
+from tweetxvault.pipeline import (
+    SPINNER_FRAMES,
+    TWITTER_BLUE,
+    PipelineReporter,
+    current_pipeline,
+)
+
+
+def _console(output: StringIO, *, width: int = 160) -> Console:
+    return Console(
+        file=output,
+        force_terminal=False,
+        color_system=None,
+        width=width,
+    )
+
+
+def test_reporter_chooses_one_spinner_for_the_command_lifecycle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chosen: list[tuple[str, ...]] = []
+
+    def choose(names: tuple[str, ...]) -> str:
+        chosen.append(names)
+        return "cascade"
+
+    monkeypatch.setattr(random, "choice", choose)
+    reporter = PipelineReporter(_console(StringIO()), "sync", interactive=False)
+
+    with reporter:
+        reporter.add_step("bookmarks", "Bookmarks", total=10, unit="tweets")
+        reporter.start_step("bookmarks", activity="Fetching bookmark timeline page 1")
+        reporter.complete_step("bookmarks", "10 tweets stored")
+        reporter.add_step("threads", "Threads", total=2, unit="tweets")
+        reporter.start_step("threads", activity="Expanding thread for tweet 123")
+        reporter.complete_step("threads", "2 threads expanded")
+
+    assert chosen == [tuple(SPINNER_FRAMES)]
+    assert reporter.spinner_name == "cascade"
+
+
+def test_finished_pipeline_drops_steps_that_never_became_relevant() -> None:
+    reporter = PipelineReporter(_console(StringIO()), "sync", interactive=False)
+
+    with reporter:
+        reporter.add_step("bookmarks", "Bookmarks", total=1, unit="pages")
+        reporter.start_step("bookmarks", activity="Fetching bookmark timeline page 1")
+        reporter.complete_step("bookmarks", "1 page fetched")
+        reporter.add_step("media", "Media", total=1, unit="files")
+        reporter.remove_step("media")
+
+    assert [step.key for step in reporter.steps] == ["bookmarks"]
+
+
+def test_render_uses_determinate_twitter_blue_progress_with_useful_metadata() -> None:
+    output = StringIO()
+    console = _console(output)
+    reporter = PipelineReporter(console, "tweetxvault sync", interactive=False)
+    reporter.add_step(
+        "threads",
+        "Threads",
+        total=100,
+        unit="tweets",
+        detail="23 expanded · 1 unavailable · 0 retrying",
+        rate_unit="tweets/s",
+    )
+    reporter.start_step(
+        "threads",
+        activity="Fetching conversation context for tweet 189223",
+        counters="24 inspected · 23 expanded · 1 unavailable",
+    )
+    reporter.update_step("threads", completed=25)
+    reporter._step_by_key["threads"].started_at = time.monotonic() - 5
+    reporter.issue(
+        "Could not fetch thread context for tweet 189222; continuing.",
+        dedupe_key="thread-context",
+    )
+
+    console.print(reporter)
+    rendered = output.getvalue()
+
+    assert "Fetching conversation context for tweet 189223" in rendered
+    assert "24 inspected · 23 expanded · 1 unavailable" in rendered
+    assert "25/100 tweets · 25.0%" in rendered
+    assert "tweets/s" in rendered
+    assert "ETA ~" in rendered
+    assert "Could not fetch thread context for tweet 189222" in rendered
+    assert "elapsed" not in rendered.lower()
+    assert "overall eta" not in rendered.lower()
+    assert TWITTER_BLUE == "#1DA1F2"
+
+
+def test_live_render_uses_twitter_blue_truecolor(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    output = StringIO()
+    console = Console(
+        file=output,
+        force_terminal=True,
+        color_system="truecolor",
+        width=140,
+    )
+    reporter = PipelineReporter(
+        console,
+        "sync",
+        spinner_name="wave",
+        interactive=False,
+    )
+    reporter.add_step("media", "Media", total=4, unit="files")
+    reporter.start_step("media", activity="Downloading photo for tweet 123")
+    reporter.update_step("media", completed=2)
+
+    console.print(reporter)
+
+    assert "\x1b[38;2;29;161;242m" in output.getvalue()
+
+
+def test_captured_worker_output_only_adds_actual_warnings_and_errors_to_issues() -> None:
+    reporter = PipelineReporter(_console(StringIO()), "sync", interactive=False)
+    reporter.add_step("tagging", "Tagging", total=2, unit="tweets")
+    reporter.start_step("tagging", activity="Preparing Gemini batch")
+    captured = reporter.capture_console("tagging")
+
+    captured.print("Generating tags for tweet 123")
+    captured.print("[yellow]Gemini API busy; retrying[/yellow]")
+    captured.print(Text("Gemini rejected tweet 124", style="red"))
+
+    assert reporter._step_by_key["tagging"].activity == "Generating tags for tweet 123"
+    assert [issue.level for issue in reporter.issues] == ["warning", "error"]
+    assert all("Generating tags" not in issue.message for issue in reporter.issues)
+
+
+def test_system_output_is_plain_detailed_and_bounded() -> None:
+    output = StringIO()
+    reporter = PipelineReporter(
+        _console(output),
+        "tweetxvault sync",
+        interactive=False,
+        log_interval_seconds=3600,
+    )
+
+    with reporter:
+        reporter.add_step(
+            "threads",
+            "Threads",
+            total=1000,
+            unit="tweets",
+            detail="conversation membership and linked context",
+        )
+        reporter.start_step(
+            "threads",
+            activity="Expanding thread for tweet 1",
+            counters="0 expanded · 0 unavailable",
+        )
+        for index in range(1, 1001):
+            reporter.update_step(
+                "threads",
+                completed=index,
+                activity=f"Expanding thread for tweet {index}",
+                counters=f"{index} inspected · {index - 1} expanded",
+            )
+            reporter.issue(
+                f"Could not fetch linked context for tweet {index}",
+                dedupe_key="linked-context",
+            )
+        reporter.complete_step("threads", "999 expanded · 1 unavailable")
+        reporter.final_note("Sync completed with one recoverable issue.")
+
+    rendered = output.getvalue()
+    lines = rendered.splitlines()
+    progress_lines = [line for line in lines if " | Threads | progress | " in line]
+    issue_lines = [line for line in lines if " | issue | warning | " in line]
+
+    assert "tweetxvault sync | command | start" in rendered
+    assert "conversation membership and linked context" in rendered
+    assert "tweetxvault sync | Threads | complete | 999 expanded · 1 unavailable" in rendered
+    assert "tweetxvault sync | command | complete | Sync completed" in rendered
+    assert 10 <= len(progress_lines) <= 12
+    assert len(issue_lines) < 50
+    assert "occurrences=1000" in rendered
+    assert "\x1b" not in rendered
+    assert "\r" not in rendered
+    assert not any(frame.strip() and frame in rendered for frame in SPINNER_FRAMES["cascade"])
+
+
+def test_systemd_environment_disables_live_rendering_even_with_a_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("INVOCATION_ID", "service-run-id")
+    reporter = PipelineReporter(
+        Console(file=StringIO(), force_terminal=True, color_system="truecolor"),
+        "sync",
+    )
+
+    assert reporter.interactive is False
+
+
+def test_explicit_diagnostics_are_structured_but_not_added_as_issues() -> None:
+    output = StringIO()
+    reporter = PipelineReporter(_console(output), "archive import", interactive=False)
+
+    with reporter:
+        reporter.detail("debug", "archive hash: 1.24s for 8,192 bytes")
+
+    assert (
+        "archive import | debug | detail | archive hash: 1.24s for 8,192 bytes" in output.getvalue()
+    )
+    assert reporter.issues == []
+
+
+def test_reporter_cleans_up_context_and_records_failure() -> None:
+    output = StringIO()
+    reporter = PipelineReporter(_console(output), "sync", interactive=False)
+
+    with pytest.raises(RuntimeError, match="network failed"):
+        with reporter:
+            assert current_pipeline() is reporter
+            reporter.add_step("bookmarks", "Bookmarks", total=1, unit="pages")
+            reporter.start_step("bookmarks", activity="Fetching page 1")
+            raise RuntimeError("network failed")
+
+    assert current_pipeline() is None
+    assert reporter._step_by_key["bookmarks"].state == "failed"
+    assert [(issue.level, issue.message) for issue in reporter.issues] == [
+        ("error", "network failed")
+    ]
+    assert "sync | command | failed | network failed" in output.getvalue()

@@ -16,6 +16,7 @@ from tests.conftest import (
 )
 from tweetxvault.client.timelines import TimelineTweet
 from tweetxvault.media import download_media
+from tweetxvault.pipeline import PipelineReporter
 from tweetxvault.storage import open_archive_store
 from tweetxvault.storage.backend import ArchiveStore
 
@@ -127,14 +128,21 @@ async def test_download_media_updates_rows_and_files(paths, config) -> None:
     finally:
         store.close()
 
-    repeat = await download_media(
-        config=config,
-        paths=paths,
-        transport=httpx.MockTransport(handler),
+    reporter = PipelineReporter(
+        Console(file=StringIO(), force_terminal=False, color_system=None),
+        "media",
+        interactive=False,
     )
+    with reporter:
+        repeat = await download_media(
+            config=config,
+            paths=paths,
+            transport=httpx.MockTransport(handler),
+        )
     assert repeat.processed == 0
     assert repeat.downloaded == 0
     assert repeat.skipped == 0
+    assert not reporter.has_step("media")
 
 
 @pytest.mark.asyncio

@@ -21,6 +21,7 @@ from tweetxvault.config import AppConfig, XDGPaths
 from tweetxvault.exceptions import ConfigError
 from tweetxvault.interactive import emit_status, progress_callback, status_printer
 from tweetxvault.jobs import locked_archive_job, resolve_job_context
+from tweetxvault.pipeline import current_pipeline
 from tweetxvault.query_ids import QueryIdStore, refresh_query_ids
 from tweetxvault.utils import resolve_query_ids
 
@@ -58,10 +59,27 @@ async def refresh_articles(
 ) -> ArticleRefreshResult:
     config, paths = resolve_job_context(config=config, paths=paths)
     console = console or Console(stderr=True)
-    status = status_printer(console, "articles refresh")
+    pipeline = current_pipeline()
+    status = None if pipeline is not None else status_printer(console, "articles refresh")
     if auth_bundle is None:
+        if pipeline is not None:
+            pipeline.add_step(
+                "articles-auth",
+                "Authentication",
+                total=1,
+                unit="session",
+                detail="resolve the configured X browser session",
+                show_rate=False,
+                show_eta=False,
+            )
+            pipeline.start_step(
+                "articles-auth",
+                activity="Resolving X authentication for article refresh",
+            )
         emit_status(status, "resolving auth bundle")
         auth_bundle = resolve_auth_bundle(config)
+        if pipeline is not None:
+            pipeline.complete_step("articles-auth", "X authentication resolved")
 
     async with locked_archive_job(config=config, paths=paths, console=console) as job:
         store = job.store
@@ -78,6 +96,27 @@ async def refresh_articles(
             emit_status(status, "no article rows pending refresh")
             return result
 
+        step_key = "articles"
+        if pipeline is not None:
+            mode = (
+                "explicit targets"
+                if targets
+                else ("preview-only article rows" if preview_only else "all article rows")
+            )
+            pipeline.add_step(
+                step_key,
+                "Articles",
+                total=len(tweet_ids),
+                unit="tweets",
+                detail=f"{mode} · TweetDetail adaptive pacing",
+                rate_unit="tweets/s",
+            )
+            pipeline.start_step(
+                step_key,
+                activity="Resolving the TweetDetail operation ID",
+                counters=f"{len(tweet_ids)} selected · 0 processed · 0 refreshed · 0 failed",
+            )
+
         emit_status(status, "resolving TweetDetail query ID")
         query_store = QueryIdStore(paths)
         query_ids = await resolve_query_ids(
@@ -86,6 +125,8 @@ async def refresh_articles(
             force_refresh=not query_store.is_fresh(),
             transport=transport,
         )
+        if pipeline is not None:
+            pipeline.status(step_key, f"Refreshing article from tweet {tweet_ids[0]}")
         client = build_async_client(auth_bundle, timeout=config.sync.timeout, transport=transport)
         try:
             attempted = 0
@@ -99,6 +140,16 @@ async def refresh_articles(
                 for index, tweet_id in enumerate(tweet_ids, start=1):
                     try:
                         result.processed += 1
+                        if pipeline is not None:
+                            pipeline.update_step(
+                                step_key,
+                                completed=index - 1,
+                                activity=f"Refreshing article from tweet {tweet_id}",
+                                counters=(
+                                    f"{index - 1} processed · {result.updated} refreshed · "
+                                    f"{result.failed} failed"
+                                ),
+                            )
                         await pacer.wait(attempted=attempted, sleep=sleep)
                         attempted += 1
 
@@ -125,11 +176,32 @@ async def refresh_articles(
                                     )
                                 )
                                 if status is not None
-                                else None
+                                else (
+                                    lambda message, tweet_id=tweet_id: pipeline.status(
+                                        step_key,
+                                        f"Article tweet {tweet_id}: {message}",
+                                        important=True,
+                                    )
+                                    if pipeline is not None
+                                    else None
+                                )
                             ),
                             sleep=sleep,
                         )
-                        pacer.observe(response, status=status)
+                        pacer.observe(
+                            response,
+                            status=(
+                                status
+                                if status is not None
+                                else (
+                                    lambda message: pipeline.status(
+                                        step_key, message, important=True
+                                    )
+                                    if pipeline is not None
+                                    else None
+                                )
+                            ),
+                        )
                         payload = response.json()
                         focal = parse_tweet_detail_response(payload, tweet_id)
                         if not focal.is_available or focal.tweet is None:
@@ -143,11 +215,31 @@ async def refresh_articles(
                         result.updated += 1
                     except Exception as exc:
                         result.failed += 1
-                        if console:
+                        if pipeline is not None:
+                            pipeline.issue(
+                                f"Article tweet {tweet_id}: {exc}",
+                                dedupe_key="articles:refresh-failure",
+                            )
+                        elif console:
                             console.print(f"article {tweet_id}: failed ({exc})", highlight=False)
                     finally:
+                        if pipeline is not None:
+                            pipeline.update_step(
+                                step_key,
+                                completed=index,
+                                counters=(
+                                    f"{index} processed · {result.updated} refreshed · "
+                                    f"{result.failed} failed"
+                                ),
+                            )
                         if progress is not None:
                             progress(index, len(tweet_ids))
         finally:
             await client.aclose()
+        if pipeline is not None:
+            pipeline.complete_step(
+                step_key,
+                f"{result.processed} processed · {result.updated} refreshed · "
+                f"{result.failed} failed",
+            )
         return result

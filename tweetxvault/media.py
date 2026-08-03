@@ -16,6 +16,7 @@ from rich.console import Console
 from tweetxvault.config import DEFAULT_USER_AGENT, AppConfig, XDGPaths
 from tweetxvault.interactive import emit_status, progress_callback, status_printer
 from tweetxvault.jobs import locked_archive_job
+from tweetxvault.pipeline import current_pipeline
 from tweetxvault.utils import utc_now
 
 _CONTENT_TYPE_EXTENSIONS = {
@@ -35,6 +36,7 @@ class MediaDownloadResult:
     downloaded: int = 0
     skipped: int = 0
     failed: int = 0
+    downloaded_bytes: int = 0
 
 
 def _safe_media_stem(value: str) -> str:
@@ -159,7 +161,8 @@ async def download_media(
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> MediaDownloadResult:
     console = console or Console(stderr=True)
-    status = status_printer(console, "media download")
+    pipeline = current_pipeline()
+    status = None if pipeline is not None else status_printer(console, "media download")
     async with locked_archive_job(config=config, paths=paths, console=console) as job:
         config = job.config
         paths = job.paths
@@ -182,6 +185,28 @@ async def download_media(
         filter_suffix = f" ({', '.join(filters)})" if filters else ""
         limit_suffix = "" if limit is None else f" (limit {limit})"
         emit_status(status, f"downloading {len(rows)} media rows{filter_suffix}{limit_suffix}")
+        step_key = "media"
+        if pipeline is not None:
+            scope = "pending media rows"
+            if filters:
+                scope += f" · {', '.join(filters)}"
+            pipeline.add_step(
+                step_key,
+                "Media",
+                total=len(rows),
+                unit="files",
+                detail=scope,
+                rate_unit="files/s",
+            )
+            first = rows[0]
+            pipeline.start_step(
+                step_key,
+                activity=(
+                    f"Downloading {first.get('media_type') or 'media'} for "
+                    f"tweet {first.get('tweet_id') or 'unknown'}"
+                ),
+                counters="0 processed · 0 downloaded · 0 skipped · 0 failed",
+            )
 
         async with httpx.AsyncClient(
             follow_redirects=True,
@@ -208,6 +233,20 @@ async def download_media(
                 for index, row in enumerate(rows, start=1):
                     try:
                         result.processed += 1
+                        if pipeline is not None:
+                            pipeline.update_step(
+                                step_key,
+                                completed=index - 1,
+                                activity=(
+                                    f"Downloading {row.get('media_type') or 'media'} for "
+                                    f"tweet {row.get('tweet_id') or 'unknown'}"
+                                ),
+                                counters=(
+                                    f"{index - 1} processed · {result.downloaded} downloaded · "
+                                    f"{result.skipped} skipped · {result.failed} failed · "
+                                    f"{result.downloaded_bytes / (1024 * 1024):.1f} MiB"
+                                ),
+                            )
                         if _download_complete(row, paths.data_dir):
                             result.skipped += 1
                             continue
@@ -292,6 +331,9 @@ async def download_media(
                                 )
                             )
                             result.downloaded += 1
+                            result.downloaded_bytes += byte_size + int(
+                                state.get("thumbnail_byte_size") or 0
+                            )
                         except Exception as exc:
                             pending_updates.append(
                                 store.build_media_download_update(
@@ -310,7 +352,12 @@ async def download_media(
                                 )
                             )
                             result.failed += 1
-                            if console:
+                            if pipeline is not None:
+                                pipeline.issue(
+                                    f"Media {row['row_key']}: {exc}",
+                                    dedupe_key="media:download-failure",
+                                )
+                            elif console:
                                 console.print(
                                     f"media {row['row_key']}: failed ({exc})",
                                     highlight=False,
@@ -318,8 +365,25 @@ async def download_media(
                         if len(pending_updates) >= _UPDATE_BATCH_SIZE:
                             flush_updates()
                     finally:
+                        if pipeline is not None:
+                            pipeline.update_step(
+                                step_key,
+                                completed=index,
+                                counters=(
+                                    f"{index} processed · {result.downloaded} downloaded · "
+                                    f"{result.skipped} skipped · {result.failed} failed · "
+                                    f"{result.downloaded_bytes / (1024 * 1024):.1f} MiB"
+                                ),
+                            )
                         if progress is not None:
                             progress(index, len(rows))
 
             flush_updates()
+        if pipeline is not None:
+            pipeline.complete_step(
+                step_key,
+                f"{result.processed} processed · {result.downloaded} downloaded · "
+                f"{result.skipped} skipped · {result.failed} failed · "
+                f"{result.downloaded_bytes / (1024 * 1024):.1f} MiB transferred",
+            )
         return result

@@ -11,8 +11,33 @@ from rich.console import Console
 import tweetxvault.resurrection as resurrection
 from tests.conftest import make_tweet_detail_response, make_tweet_result, request_details
 from tweetxvault.client.timelines import TimelineTweet
+from tweetxvault.pipeline import PipelineReporter
 from tweetxvault.query_ids import QueryIdStore
 from tweetxvault.storage import open_archive_store
+
+
+@pytest.mark.asyncio
+async def test_resurrection_does_not_admit_step_when_due_queue_is_empty(
+    paths,
+    config,
+    auth_bundle,
+) -> None:
+    store = open_archive_store(paths, create=True, config=config)
+    assert store is not None
+    store.close()
+    console = Console(file=StringIO(), force_terminal=False, color_system=None)
+    reporter = PipelineReporter(console, "resurrection", interactive=False)
+
+    with reporter:
+        result = await resurrection.resurrect_due_tweets(
+            config=config,
+            paths=paths,
+            auth_bundle=auth_bundle,
+            console=console,
+        )
+
+    assert result.attempted == 0
+    assert not reporter.has_step("resurrection")
 
 
 def _terminal_row(

@@ -13,6 +13,7 @@ from rich.console import Console
 from rich.text import Text
 
 from .config import AppConfig, XDGPaths
+from .pipeline import current_pipeline
 from .rpd import RpdStatus, get_rpd_status, reserve_rpd_request
 from .storage.backend import ArchiveStore
 
@@ -168,6 +169,9 @@ async def tag_media_tweets(
     *,
     dry_run: bool = False,
 ) -> int:
+    pipeline = current_pipeline()
+    if pipeline is not None and pipeline.has_step("tagging") and not dry_run:
+        console = pipeline.capture_console("tagging")  # type: ignore[assignment]
     tag_config = config.tagging
     if not tag_config.enabled or not tag_config.api_key:
         console.print("[yellow]Tagging is disabled or missing API key.[/yellow]")
@@ -662,8 +666,76 @@ async def tag_pending_media_tweets(
     if limit is not None and limit < 1:
         raise ValueError("Tagging limit must be a positive integer")
 
+    pipeline = current_pipeline()
+    if not config.tagging.enabled or not config.tagging.api_key:
+        return TaggingRunResult()
+
+    model_name = model_override or config.tagging.model
     batch_size = config.tagging.limit if config.tagging.batch or batch_override else 1
+    rpd_status: RpdStatus | None = None
+    if pipeline is not None and config.tagging.rpd is not None:
+        try:
+            rpd_status = get_rpd_status(
+                store,
+                model=model_name,
+                limit=config.tagging.rpd,
+            )
+        except Exception as error:
+            if pipeline is not None:
+                pipeline.issue(
+                    f"Could not read Gemini daily request usage: "
+                    f"{_safe_error(error, config.tagging.api_key)}",
+                    level="error",
+                    dedupe_key="tagging:rpd-storage",
+                )
+            else:
+                _print_rpd_storage_error(console, error, config.tagging.api_key)
+            return TaggingRunResult()
+        if not rpd_status.allowed:
+            if pipeline is not None:
+                reset_at = rpd_status.reset_at.strftime("%Y-%m-%d %H:%M %Z")
+                pipeline.issue(
+                    f"Gemini daily request limit reached for {model_name} "
+                    f"({rpd_status.used}/{rpd_status.limit}); resets {reset_at}.",
+                    dedupe_key="tagging:rpd-exhausted",
+                )
+            else:
+                _print_rpd_exhausted(console, rpd_status, model_name)
+            return TaggingRunResult()
+
+    step_key = "tagging"
+    if pipeline is not None:
+        eligible_count = store.count_eligible_tweets_for_tagging()
+        effective_total = min(eligible_count, limit) if limit is not None else eligible_count
+        if rpd_status is not None:
+            effective_total = min(effective_total, rpd_status.remaining * batch_size)
+        if dry_run:
+            effective_total = min(effective_total, 1)
+        if effective_total <= 0:
+            return TaggingRunResult()
+        detail = f"{model_name} · configured batch size {config.tagging.limit}"
+        if rpd_status is not None:
+            detail += f" · {rpd_status.remaining}/{rpd_status.limit} daily requests available"
+        pipeline.add_step(
+            step_key,
+            "Tagging",
+            total=effective_total,
+            unit="tweets",
+            detail=detail,
+            rate_unit="tweets/s",
+        )
+        pipeline.start_step(
+            step_key,
+            activity=f"Preparing the first media batch for {model_name}",
+            counters="0 processed · 0 tagged · 0 batches",
+        )
+
     effective_limit = 1 if dry_run else limit
+    if pipeline is not None and rpd_status is not None:
+        quota_limit = rpd_status.remaining * batch_size
+        effective_limit = (
+            min(effective_limit, quota_limit) if effective_limit is not None else quota_limit
+        )
     processed = 0
     tagged = 0
     batches = 0
@@ -679,6 +751,15 @@ async def tag_pending_media_tweets(
         if not tweet_ids:
             break
 
+        if pipeline is not None:
+            target_label = tweet_ids[0] if len(tweet_ids) == 1 else f"{len(tweet_ids)} tweets"
+            pipeline.update_step(
+                step_key,
+                completed=processed,
+                activity=f"Generating media tags for {target_label} with {model_name}",
+                counters=f"{processed} processed · {tagged} tagged · {batches} batches",
+            )
+
         processed += len(tweet_ids)
         tagged_batch = await tag_media_tweets(
             store=store,
@@ -691,8 +772,25 @@ async def tag_pending_media_tweets(
         )
         batches += 1
         tagged += tagged_batch
+        if pipeline is not None:
+            pipeline.update_step(
+                step_key,
+                completed=min(processed, effective_total),
+                counters=f"{processed} processed · {tagged} tagged · {batches} batches",
+                important=True,
+            )
 
         if dry_run or tagged_batch < len(tweet_ids) or len(tweet_ids) < selection_limit:
             break
 
+    if pipeline is not None:
+        pipeline.update_step(
+            step_key,
+            completed=max(processed, 1),
+            total=max(processed, 1),
+        )
+        pipeline.complete_step(
+            step_key,
+            f"{processed} processed · {tagged} tagged · {batches} batches",
+        )
     return TaggingRunResult(processed=processed, tagged=tagged, batches=batches)

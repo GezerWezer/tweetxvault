@@ -225,6 +225,15 @@ uv run tweetxvault sync --skip-media --skip-unfurl
 By default, `tweetxvault sync` and `tweetxvault sync all` both cover bookmarks + likes, then visibly run thread expansion, bounded unavailable-tweet resurrection checks, preview-only article refresh, media download, unfurl, and configured media tagging. Initial X-archive enrichment is a separate finite import job and never runs during ordinary sync. Authored tweets stay opt-in via `tweetxvault sync tweets`.
 `--head-only` is the escape hatch when an old saved backfill cursor is no longer useful: it clears that cursor for the targeted collection and runs only the normal head pass. It cannot be combined with `--full`, `--backfill`, or `--article-backfill`.
 
+Interactive long-running commands use one pipeline display for the full command lifecycle. A
+step appears only after tweetxvault has selected real work for it, so disabled follow-ups, empty
+queues, absent archive datasets, and skipped enrichment passes are not listed as upcoming work.
+Exact local queues show determinate totals, throughput, and a per-step ETA. X timeline pagination
+does not expose a trustworthy remote total, so sync shows determinate progress for the current
+page and durable page/tweet counts without inventing an overall percentage or ETA. The side panel
+is reserved for warnings and recoverable errors; retry activity and current tweet/file/host details
+remain attached to their step.
+
 Common sync flags:
 
 - `--full`: clear the saved sync state for that collection and start a fresh incremental crawl without deleting stored tweets.
@@ -577,6 +586,13 @@ while that compact is running to skip it and exit; if you do, run
 ```
 
 A process lock prevents overlapping runs.
+
+When stdout/stderr is not a TTY—or when systemd's `INVOCATION_ID` or `JOURNAL_STREAM` is
+present—tweetxvault automatically switches to plain service logs. These contain command and step
+start/completion records, useful counters, retry/cooldown events, and bounded progress milestones,
+but no spinners, progress-bar frames, ANSI control sequences, or continuously redrawn panels. This
+keeps redirected cron logs and `journalctl` detailed enough to diagnose current work without
+recording one line per item.
 
 ## Configuration
 

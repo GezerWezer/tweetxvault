@@ -50,6 +50,7 @@ from tweetxvault.jobs import (
     locked_archive_job,
     resolve_job_context,
 )
+from tweetxvault.pipeline import current_pipeline
 from tweetxvault.query_ids import QueryIdStore, refresh_query_ids
 from tweetxvault.resurrection import resurrection_retry_schedule, transient_retry_at
 from tweetxvault.storage import ArchiveStore, open_archive_store
@@ -180,12 +181,19 @@ def _emit_status(status: Callable[[str], None] | None, message: str) -> None:
 def _status_printer(
     console: Console, prefix: str, *, force: bool = False
 ) -> Callable[[str], None] | None:
+    pipeline = current_pipeline()
+    if pipeline is not None:
+        if force:
+            return lambda message: pipeline.detail(prefix, message)
+        return None
     if not (force or console.is_terminal):
         return None
     return lambda message: _log_archive_phase(console, prefix, message)
 
 
 def _runner_console(console: Console, *, force: bool = False) -> Console:
+    if current_pipeline() is not None:
+        return console
     if force or console.is_terminal:
         return console
     return Console(file=StringIO(), force_terminal=False, color_system=None)
@@ -228,7 +236,7 @@ def _progress_callback(
     unit: str,
     leave: bool,
 ):
-    if not console.is_terminal or total <= 0:
+    if current_pipeline() is not None or not console.is_terminal or total <= 0:
         yield None
         return
     from tqdm import tqdm
@@ -347,14 +355,25 @@ class _ArchiveInput:
             if isinstance(item, dict) and isinstance(item.get("fileName"), str)
         ]
 
-    def load_dataset(self, key: str) -> tuple[list[Any], list[tuple[str, Any]]]:
+    def load_dataset(
+        self,
+        key: str,
+        *,
+        progress: Callable[[int, int], None] | None = None,
+        item_status: Callable[[str], None] | None = None,
+    ) -> tuple[list[Any], list[tuple[str, Any]]]:
         items: list[Any] = []
         parts: list[tuple[str, Any]] = []
-        for filename in self.dataset_files(key):
+        files = self.dataset_files(key)
+        for index, filename in enumerate(files, start=1):
+            if item_status is not None:
+                item_status(filename)
             parsed = parse_ytd_js(self.read_text(filename), label=filename)
             parts.append((filename, parsed))
             if isinstance(parsed, list):
                 items.extend(parsed)
+            if progress is not None:
+                progress(index, len(files))
         return items, parts
 
     def _digest_paths(self) -> list[str]:
@@ -388,6 +407,7 @@ class _ArchiveInput:
         self,
         *,
         progress: Callable[[int, int], None] | None = None,
+        item_status: Callable[[str], None] | None = None,
         total_bytes: int | None = None,
     ) -> str:
         digest = hashlib.sha256()
@@ -398,6 +418,8 @@ class _ArchiveInput:
         )
         processed_bytes = 0
         for relative_path in self._digest_paths():
+            if item_status is not None:
+                item_status(relative_path)
             digest.update(relative_path.encode("utf-8"))
             with self.open_binary(relative_path) as handle:
                 for chunk in iter(lambda: handle.read(1024 * 1024), b""):
@@ -630,6 +652,7 @@ def _import_authored_tweets(
     deleted_headers: dict[str, str],
     counts: dict[str, int],
     progress: Callable[[int, int], None] | None = None,
+    item_status: Callable[[str, int, int], None] | None = None,
     write_tracker: ArchiveWriteTracker | None = None,
 ) -> None:
     buffer = _PageBuffer()
@@ -664,6 +687,8 @@ def _import_authored_tweets(
         store.prefetch_rows(row_keys, cursor=buffer)
         for item in prepared:
             timeline_tweet = item.timeline_tweet
+            if item_status is not None:
+                item_status(timeline_tweet.tweet_id, processed, total)
             store.upsert_tweet(timeline_tweet, cursor=buffer)
             store.upsert_membership(
                 timeline_tweet.tweet_id,
@@ -712,6 +737,7 @@ def _import_likes(
     *,
     counts: dict[str, int],
     progress: Callable[[int, int], None] | None = None,
+    item_status: Callable[[str, int, int], None] | None = None,
     write_tracker: ArchiveWriteTracker | None = None,
 ) -> None:
     buffer = _PageBuffer()
@@ -751,6 +777,8 @@ def _import_likes(
             row_keys.append(store._row_key_for_tweet_object(item.tweet_id))
         store.prefetch_rows(row_keys, cursor=buffer)
         for item in chunk:
+            if item_status is not None:
+                item_status(item.tweet_id, processed, total)
             store.upsert_tweet(item.timeline_tweet, cursor=buffer)
             store.upsert_membership(
                 item.tweet_id,
@@ -837,6 +865,7 @@ def _copy_exported_media(
     counts: dict[str, int],
     warnings: list[str],
     progress: Callable[[int, int], None] | None = None,
+    item_status: Callable[[str, int, int], None] | None = None,
     limit: int | None = None,
     write_tracker: ArchiveWriteTracker | None = None,
 ) -> None:
@@ -863,6 +892,8 @@ def _copy_exported_media(
     unmatched = 0
     total = len(files)
     for index, relative_path in enumerate(files, start=1):
+        if item_status is not None:
+            item_status(relative_path, index - 1, total)
         filename = Path(relative_path).name
         if "-" not in filename:
             unmatched += 1
@@ -965,6 +996,39 @@ def _followup_collections_from_counts(counts: dict[str, int]) -> list[str]:
     return collections
 
 
+def _resolve_archive_followup_auth(
+    config: AppConfig,
+    auth_bundle: ResolvedAuthBundle | None,
+) -> ResolvedAuthBundle:
+    if auth_bundle is not None:
+        return auth_bundle
+    pipeline = current_pipeline()
+    step_key = "archive-auth"
+    if pipeline is not None:
+        pipeline.add_step(
+            step_key,
+            "Authentication",
+            total=1,
+            unit="session",
+            detail="resolve the configured X browser session for live follow-up",
+            show_rate=False,
+            show_eta=False,
+        )
+        pipeline.start_step(
+            step_key,
+            activity="Resolving X authentication for archive follow-up",
+        )
+    try:
+        resolved = resolve_auth_bundle(config)
+    except ConfigError as exc:
+        if pipeline is not None:
+            pipeline.fail_step(step_key, str(exc))
+        raise
+    if pipeline is not None:
+        pipeline.complete_step(step_key, "X authentication resolved")
+    return resolved
+
+
 async def _run_live_reconciliation(
     *,
     collections: list[str],
@@ -977,7 +1041,7 @@ async def _run_live_reconciliation(
 ) -> tuple[list[str], list[str], ResolvedAuthBundle | None]:
     warnings: list[str] = []
     try:
-        resolved_auth = auth_bundle or resolve_auth_bundle(config)
+        resolved_auth = _resolve_archive_followup_auth(config, auth_bundle)
     except ConfigError as exc:
         warnings.append(f"live reconciliation skipped: {exc}")
         return [], warnings, None
@@ -1031,7 +1095,7 @@ async def _run_archive_followup(
     else:
         reconciled_collections = []
         try:
-            resolved_auth = auth_bundle or resolve_auth_bundle(config)
+            resolved_auth = _resolve_archive_followup_auth(config, auth_bundle)
         except ConfigError as exc:
             warnings.append(f"detail enrichment skipped: {exc}")
             resolved_auth = None
@@ -1072,6 +1136,13 @@ async def _run_archive_followup(
             enrichment_result = _archive_enrich_counts(job.store)
     enrichment_result.warnings = warnings
     enrichment_result.reconciled_collections = reconciled_collections
+    pipeline = current_pipeline()
+    if pipeline is not None:
+        for warning in warnings:
+            pipeline.issue(
+                warning,
+                dedupe_key=f"archive-followup:{warning.split(':', 1)[0]}",
+            )
     return enrichment_result
 
 
@@ -1096,6 +1167,7 @@ async def _enrich_pending_rows(
     absence_tracker: _FocalAbsenceTracker | None = None,
     started_at: str | None = None,
 ) -> ArchiveEnrichResult:
+    pipeline = current_pipeline()
     if limit is not None and limit <= 0:
         async with locked_archive_job(config=config, paths=paths, console=console) as job:
             return _archive_enrich_counts(job.store)
@@ -1115,6 +1187,25 @@ async def _enrich_pending_rows(
                     "for later retry",
                 )
             return result
+        queue_counts = _archive_enrich_counts(store, now=selection_started_at)
+        step_key = "archive-enrich"
+        if pipeline is not None:
+            pipeline.add_step(
+                step_key,
+                "Enrich",
+                total=len(rows),
+                unit="tweets",
+                detail=(
+                    f"stable command-start snapshot · {queue_counts.transient_delayed} "
+                    f"delayed outside this run · {_DETAIL_ENRICH_WRITE_BATCH}-attempt checkpoints"
+                ),
+                rate_unit="tweets/s",
+            )
+            pipeline.start_step(
+                step_key,
+                activity=f"Fetching live details for tweet {rows[0]['tweet_id']}",
+                counters="0 selected · 0 refreshed · 0 unavailable · 0 transient",
+            )
         limit_suffix = "" if limit is None else f" (limit {limit})"
         _emit_status(status, f"detail enrichment over {len(rows)} {desc_type}{limit_suffix}")
         query_store = QueryIdStore(paths)
@@ -1151,6 +1242,16 @@ async def _enrich_pending_rows(
             ) as detail_progress:
                 for index, row in enumerate(rows, start=1):
                     tweet_id = row["tweet_id"]
+                    if pipeline is not None:
+                        pipeline.update_step(
+                            step_key,
+                            completed=index - 1,
+                            activity=f"Fetching live details for tweet {tweet_id}",
+                            counters=(
+                                f"{index - 1} selected · {succeeded} refreshed · "
+                                f"{terminal} unavailable · {transient} transient"
+                            ),
+                        )
                     wrote_row = False
                     absence_error: RepeatedFocalAbsenceError | None = None
                     await pacer.wait(attempted=index - 1)
@@ -1180,10 +1281,31 @@ async def _enrich_pending_rows(
                                     )
                                 )
                                 if status is not None
-                                else None
+                                else (
+                                    lambda message, tweet_id=tweet_id: pipeline.status(
+                                        step_key,
+                                        f"Enrichment tweet {tweet_id}: {message}",
+                                        important=True,
+                                    )
+                                    if pipeline is not None
+                                    else None
+                                )
                             ),
                         )
-                        pacer.observe(response, status=status)
+                        pacer.observe(
+                            response,
+                            status=(
+                                status
+                                if status is not None
+                                else (
+                                    lambda message: pipeline.status(
+                                        step_key, message, important=True
+                                    )
+                                    if pipeline is not None
+                                    else None
+                                )
+                            ),
+                        )
                         payload = response.json()
                         focal = parse_tweet_detail_response(payload, tweet_id)
                         if focal.kind == FocalResultKind.AVAILABLE and focal.tweet is not None:
@@ -1232,6 +1354,12 @@ async def _enrich_pending_rows(
                                 cursor=write_buffer,
                             )
                             transient += 1
+                            if pipeline is not None:
+                                pipeline.issue(
+                                    f"Enrichment tweet {tweet_id}: focal tweet absent; "
+                                    "retry scheduled",
+                                    dedupe_key="archive-enrich:focal-absence",
+                                )
                         wrote_row = True
                         if focal.kind == FocalResultKind.ABSENT:
                             try:
@@ -1279,6 +1407,11 @@ async def _enrich_pending_rows(
                             )
                             transient += 1
                             wrote_row = True
+                            if pipeline is not None:
+                                pipeline.issue(
+                                    f"Enrichment tweet {tweet_id}: {exc}",
+                                    dedupe_key="archive-enrich:api-failure",
+                                )
                     except httpx.TransportError as exc:
                         retry_count = int(row.get("enrichment_retry_count") or 0) + 1
                         store.update_tweet_object_enrichment(
@@ -1295,6 +1428,11 @@ async def _enrich_pending_rows(
                         )
                         transient += 1
                         wrote_row = True
+                        if pipeline is not None:
+                            pipeline.issue(
+                                f"Enrichment tweet {tweet_id}: {exc.__class__.__name__}: {exc}",
+                                dedupe_key="archive-enrich:transport-failure",
+                            )
                     except Exception:
                         write_buffer.restore(write_checkpoint)
                         raise
@@ -1302,11 +1440,26 @@ async def _enrich_pending_rows(
                         buffered_writes += 1
                         if buffered_writes >= _DETAIL_ENRICH_WRITE_BATCH:
                             flush_detail_writes()
+                            if pipeline is not None:
+                                pipeline.status(
+                                    step_key,
+                                    f"Committed {index}/{len(rows)} enrichment attempts",
+                                    important=True,
+                                )
                     if absence_error is not None:
                         flush_detail_writes()
                         raise absence_error
                     if detail_progress:
                         detail_progress(index, len(rows))
+                    if pipeline is not None:
+                        pipeline.update_step(
+                            step_key,
+                            completed=index,
+                            counters=(
+                                f"{index} selected · {succeeded} refreshed · "
+                                f"{terminal} unavailable · {transient} transient"
+                            ),
+                        )
         finally:
             try:
                 await client.aclose()
@@ -1320,6 +1473,13 @@ async def _enrich_pending_rows(
         result.detail_lookups = succeeded
         result.detail_terminal_unavailable = terminal
         result.detail_transient_failures = transient
+        if pipeline is not None:
+            pipeline.complete_step(
+                step_key,
+                f"{succeeded} refreshed · {terminal} unavailable · {transient} transient · "
+                f"{result.pending_untouched} pending untouched · "
+                f"{result.transient_due} due · {result.transient_delayed} delayed",
+            )
     return result
 
 
@@ -1567,6 +1727,13 @@ async def enrich_imported_archive(
                     followup_status="enrichment_complete",
                     count_updates=count_updates,
                 )
+        pipeline = current_pipeline()
+        if pipeline is not None:
+            pipeline.final_note(
+                f"Archive enrichment queue: {result.pending_untouched:,} pending untouched · "
+                f"{result.transient_due:,} transient due · "
+                f"{result.transient_delayed:,} transient delayed."
+            )
         return result
 
 
@@ -1586,6 +1753,7 @@ async def import_x_archive(
 ) -> ArchiveImportResult:
     config, paths = resolve_job_context(config=config, paths=paths)
     console = console or Console(stderr=True)
+    pipeline = current_pipeline()
     status = _status_printer(console, "archive import", force=debug)
     runner_console = _runner_console(console, force=debug)
     if sample_limit is not None and sample_limit <= 0:
@@ -1595,7 +1763,26 @@ async def import_x_archive(
     with _ArchiveInput(archive_path) as source:
         _emit_status(status, "hashing archive contents for idempotence check...")
         hash_started = perf_counter()
-        digest_total_bytes = source.digest_total_bytes() if (debug or console.is_terminal) else None
+        digest_total_bytes = (
+            source.digest_total_bytes()
+            if (debug or console.is_terminal or pipeline is not None)
+            else None
+        )
+        inspect_step_key = "archive-inspect"
+        if pipeline is not None:
+            pipeline.add_step(
+                inspect_step_key,
+                "Inspect",
+                total=max(digest_total_bytes or 0, 1),
+                unit="bytes",
+                detail=f"{archive_path.name} · content hash and archive owner validation",
+                rate_unit="bytes/s",
+            )
+            pipeline.start_step(
+                inspect_step_key,
+                activity=f"Hashing {archive_path.name} for idempotence",
+                counters="verifying every imported dataset and media file",
+            )
         with _progress_callback(
             console,
             label="archive import hash",
@@ -1603,7 +1790,29 @@ async def import_x_archive(
             unit="B",
             leave=debug,
         ) as hash_progress:
-            digest = source.digest(progress=hash_progress, total_bytes=digest_total_bytes)
+
+            def update_hash(done: int, total: int) -> None:
+                if hash_progress is not None:
+                    hash_progress(done, total)
+                if pipeline is not None:
+                    pipeline.update_step(
+                        inspect_step_key,
+                        completed=done,
+                        total=max(total, 1),
+                        counters=f"{done:,}/{total:,} bytes hashed",
+                    )
+
+            digest = source.digest(
+                progress=update_hash if pipeline is not None else hash_progress,
+                item_status=(
+                    lambda relative_path: pipeline.status(
+                        inspect_step_key, f"Hashing {relative_path}"
+                    )
+                    if pipeline is not None
+                    else None
+                ),
+                total_bytes=digest_total_bytes,
+            )
         if debug:
             _record_debug_timing(
                 status,
@@ -1640,6 +1849,12 @@ async def import_x_archive(
                 unit="parts",
             )
         identity = _archive_identity(source.manifest, account_items)
+        if pipeline is not None:
+            owner = f"@{identity.username}" if identity.username else "archive owner resolved"
+            pipeline.complete_step(
+                inspect_step_key,
+                f"archive hash verified · {owner}",
+            )
         existing_manifest: dict[str, Any] | None = None
         store: ArchiveStore | None = None
         write_tracker: ArchiveWriteTracker | None = None
@@ -1660,6 +1875,21 @@ async def import_x_archive(
             write_tracker = ArchiveWriteTracker(store)
             store.ensure_archive_owner_id(identity.account_id)
             if regen:
+                regen_step_key = "archive-regen"
+                if pipeline is not None:
+                    pipeline.add_step(
+                        regen_step_key,
+                        "Regenerate",
+                        total=1,
+                        unit="cleanup",
+                        detail="archive-import-owned rows and managed media only",
+                        show_rate=False,
+                        show_eta=False,
+                    )
+                    pipeline.start_step(
+                        regen_step_key,
+                        activity="Clearing the previous import owned by this archive",
+                    )
                 _emit_status(status, "clearing previously imported archive-owned rows...")
                 regen_started = perf_counter()
                 archive_media_paths = store.list_archive_import_media_paths()
@@ -1672,6 +1902,12 @@ async def import_x_archive(
                     f"regen cleared {sum(cleared_rows.values())} rows and {cleared_files} "
                     "managed archive media files",
                 )
+                if pipeline is not None:
+                    pipeline.complete_step(
+                        regen_step_key,
+                        f"{sum(cleared_rows.values()):,} rows removed · "
+                        f"{cleared_files:,} managed media files removed",
+                    )
                 if debug:
                     _record_debug_timing(
                         status,
@@ -1687,6 +1923,10 @@ async def import_x_archive(
                 warnings = _manifest_warnings(existing_manifest)
                 store.close()
                 if not followup_requested:
+                    if pipeline is not None:
+                        pipeline.final_note(
+                            "Archive already imported; no follow-up work requested."
+                        )
                     return ArchiveImportResult(
                         skipped=True,
                         followup_performed=False,
@@ -1697,6 +1937,73 @@ async def import_x_archive(
                 import_performed = True
                 _emit_status(status, "loading archive datasets...")
                 dataset_started = perf_counter()
+                source_step_key = "archive-source"
+                source_dataset_keys = (
+                    "tweetHeaders",
+                    "deletedTweets",
+                    "deletedTweetHeaders",
+                    "tweets",
+                    "like",
+                )
+                source_part_total = sum(
+                    len(source.dataset_files(key)) for key in source_dataset_keys
+                )
+                source_parts_loaded = 0
+                if pipeline is not None and source_part_total:
+                    first_source_file = next(
+                        filename
+                        for key in source_dataset_keys
+                        for filename in source.dataset_files(key)
+                    )
+                    pipeline.add_step(
+                        source_step_key,
+                        "Archive source",
+                        total=source_part_total * 2,
+                        unit="operations",
+                        detail="parse every dataset part · preserve every raw payload",
+                        rate_unit="operations/s",
+                    )
+                    pipeline.start_step(
+                        source_step_key,
+                        activity=f"Parsing {first_source_file}",
+                        counters=f"0/{source_part_total} parts parsed · 0 preserved",
+                    )
+
+                def load_source_dataset(key: str):
+                    nonlocal source_parts_loaded
+                    part_files = source.dataset_files(key)
+                    offset = source_parts_loaded
+
+                    def update_source_part(done: int, _total: int) -> None:
+                        if pipeline is not None:
+                            pipeline.update_step(
+                                source_step_key,
+                                completed=offset + done,
+                                counters=(
+                                    f"{offset + done}/{source_part_total} parts parsed · "
+                                    "0 preserved"
+                                ),
+                            )
+
+                    loaded = source.load_dataset(
+                        key,
+                        progress=(
+                            update_source_part
+                            if pipeline is not None and source_part_total
+                            else None
+                        ),
+                        item_status=(
+                            (
+                                lambda filename: pipeline.status(
+                                    source_step_key, f"Parsing {filename}"
+                                )
+                            )
+                            if pipeline is not None and source_part_total
+                            else None
+                        ),
+                    )
+                    source_parts_loaded += len(part_files)
+                    return loaded
 
                 store.set_import_manifest(
                     digest,
@@ -1734,13 +2041,13 @@ async def import_x_archive(
                         "(expected for current official X archives)"
                     )
 
-                _, tweet_header_parts = source.load_dataset("tweetHeaders")
-                deleted_tweets, deleted_tweet_parts = source.load_dataset("deletedTweets")
-                deleted_headers_items, deleted_header_parts = source.load_dataset(
+                _, tweet_header_parts = load_source_dataset("tweetHeaders")
+                deleted_tweets, deleted_tweet_parts = load_source_dataset("deletedTweets")
+                deleted_headers_items, deleted_header_parts = load_source_dataset(
                     "deletedTweetHeaders"
                 )
-                tweets, tweet_parts = source.load_dataset("tweets")
-                likes, like_parts = source.load_dataset("like")
+                tweets, tweet_parts = load_source_dataset("tweets")
+                likes, like_parts = load_source_dataset("like")
                 if debug:
                     _record_debug_timing(
                         status,
@@ -1781,51 +2088,111 @@ async def import_x_archive(
                     ),
                 )
 
+                media_directory = (
+                    tweets_info.get("mediaDirectory") if isinstance(tweets_info, dict) else None
+                )
+                media_total = 0
+                if isinstance(media_directory, str):
+                    media_total = len(
+                        _slice_for_sample(source.iter_files(media_directory), limit=sample_limit)
+                    )
+                if pipeline is not None:
+                    if tweets:
+                        pipeline.add_step(
+                            "archive-tweets",
+                            "Tweets",
+                            total=len(tweets),
+                            unit="tweets",
+                            detail=(
+                                "authored archive rows · normalized objects, relations, and raw "
+                                "source"
+                            ),
+                            rate_unit="tweets/s",
+                        )
+                    if deleted_tweets:
+                        pipeline.add_step(
+                            "archive-deleted",
+                            "Deleted tweets",
+                            total=len(deleted_tweets),
+                            unit="tweets",
+                            detail=(
+                                "deleted authored rows · archive deletion provenance preserved"
+                            ),
+                            rate_unit="tweets/s",
+                        )
+                    if likes:
+                        pipeline.add_step(
+                            "archive-likes",
+                            "Likes",
+                            total=len(likes),
+                            unit="likes",
+                            detail=(
+                                "archive like memberships · sparse objects queued for live "
+                                "enrichment"
+                            ),
+                            rate_unit="likes/s",
+                        )
+                    if media_total:
+                        pipeline.add_step(
+                            "archive-media",
+                            "Archive media",
+                            total=media_total,
+                            unit="files",
+                            detail="exported media matched to normalized tweet assets",
+                            rate_unit="files/s",
+                        )
+
                 capture_started = perf_counter()
-                for filename, payload in tweet_header_parts:
+                raw_source_parts = [
+                    *(
+                        ("XArchiveTweetHeaders", filename, payload)
+                        for filename, payload in tweet_header_parts
+                    ),
+                    *(
+                        ("XArchiveDeletedTweetHeaders", filename, payload)
+                        for filename, payload in deleted_header_parts
+                    ),
+                    *(("XArchiveTweets", filename, payload) for filename, payload in tweet_parts),
+                    *(
+                        ("XArchiveDeletedTweets", filename, payload)
+                        for filename, payload in deleted_tweet_parts
+                    ),
+                    *(("XArchiveLikes", filename, payload) for filename, payload in like_parts),
+                ]
+                for index, (operation, filename, payload) in enumerate(raw_source_parts, start=1):
+                    if pipeline is not None and source_part_total:
+                        pipeline.update_step(
+                            source_step_key,
+                            completed=source_part_total + index - 1,
+                            activity=f"Preserving {filename}",
+                            counters=(
+                                f"{source_part_total}/{source_part_total} parts parsed · "
+                                f"{index - 1}/{source_part_total} preserved"
+                            ),
+                        )
                     _record_archive_capture(
                         store,
-                        "XArchiveTweetHeaders",
+                        operation,
                         filename,
                         payload,
                         archive_digest=digest,
                         write_tracker=write_tracker,
                     )
-                for filename, payload in deleted_header_parts:
-                    _record_archive_capture(
-                        store,
-                        "XArchiveDeletedTweetHeaders",
-                        filename,
-                        payload,
-                        archive_digest=digest,
-                        write_tracker=write_tracker,
-                    )
-                for filename, payload in tweet_parts:
-                    _record_archive_capture(
-                        store,
-                        "XArchiveTweets",
-                        filename,
-                        payload,
-                        archive_digest=digest,
-                        write_tracker=write_tracker,
-                    )
-                for filename, payload in deleted_tweet_parts:
-                    _record_archive_capture(
-                        store,
-                        "XArchiveDeletedTweets",
-                        filename,
-                        payload,
-                        archive_digest=digest,
-                        write_tracker=write_tracker,
-                    )
-                for filename, payload in like_parts:
-                    _record_archive_capture(
-                        store,
-                        "XArchiveLikes",
-                        filename,
-                        payload,
-                        archive_digest=digest,
-                        write_tracker=write_tracker,
+                    if pipeline is not None and source_part_total:
+                        pipeline.update_step(
+                            source_step_key,
+                            completed=source_part_total + index,
+                            counters=(
+                                f"{source_part_total}/{source_part_total} parts parsed · "
+                                f"{index}/{source_part_total} preserved"
+                            ),
+                        )
+                if pipeline is not None and source_part_total:
+                    record_total = total_tweets + total_deleted_tweets + total_likes
+                    pipeline.complete_step(
+                        source_step_key,
+                        f"{source_part_total:,} parts parsed and preserved · "
+                        f"{record_total:,} tweet/like records loaded",
                     )
                 if debug:
                     _record_debug_timing(
@@ -1847,6 +2214,24 @@ async def import_x_archive(
                 deleted_headers = _deleted_headers_map(deleted_headers_items)
                 _emit_status(status, f"importing {len(tweets)} authored tweets...")
                 authored_started = perf_counter()
+                authored_step_key = "archive-tweets"
+                authored_start_count = counts["authored_tweets"] + counts["deleted_authored_tweets"]
+                if pipeline is not None and tweets:
+                    pipeline.add_step(
+                        authored_step_key,
+                        "Tweets",
+                        total=len(tweets),
+                        unit="tweets",
+                        detail=(
+                            "authored archive rows · normalized objects, relations, and raw source"
+                        ),
+                        rate_unit="tweets/s",
+                    )
+                    pipeline.start_step(
+                        authored_step_key,
+                        activity="Preparing authored tweet import",
+                        counters="0 imported",
+                    )
                 with _progress_callback(
                     console,
                     label="archive import authored",
@@ -1861,7 +2246,27 @@ async def import_x_archive(
                         deleted_headers=deleted_headers,
                         counts=counts,
                         progress=authored_progress,
+                        item_status=(
+                            lambda tweet_id, done, total: pipeline.update_step(
+                                authored_step_key,
+                                completed=done,
+                                total=total,
+                                activity=f"Importing authored tweet {tweet_id}",
+                                counters=f"{done} imported",
+                            )
+                            if pipeline is not None
+                            else None
+                        ),
                         write_tracker=write_tracker,
+                    )
+                if pipeline is not None and tweets:
+                    imported = (
+                        counts["authored_tweets"]
+                        + counts["deleted_authored_tweets"]
+                        - authored_start_count
+                    )
+                    pipeline.complete_step(
+                        authored_step_key, f"{imported:,} authored rows imported"
                     )
                 if debug:
                     _record_debug_timing(
@@ -1874,6 +2279,22 @@ async def import_x_archive(
                     )
                 _emit_status(status, f"importing {len(deleted_tweets)} deleted authored tweets...")
                 deleted_started = perf_counter()
+                deleted_step_key = "archive-deleted"
+                deleted_start_count = counts["deleted_authored_tweets"]
+                if pipeline is not None and deleted_tweets:
+                    pipeline.add_step(
+                        deleted_step_key,
+                        "Deleted tweets",
+                        total=len(deleted_tweets),
+                        unit="tweets",
+                        detail="deleted authored rows · archive deletion provenance preserved",
+                        rate_unit="tweets/s",
+                    )
+                    pipeline.start_step(
+                        deleted_step_key,
+                        activity="Preparing deleted authored tweet import",
+                        counters="0 imported",
+                    )
                 with _progress_callback(
                     console,
                     label="archive import deleted",
@@ -1888,8 +2309,22 @@ async def import_x_archive(
                         deleted_headers=deleted_headers,
                         counts=counts,
                         progress=deleted_progress,
+                        item_status=(
+                            lambda tweet_id, done, total: pipeline.update_step(
+                                deleted_step_key,
+                                completed=done,
+                                total=total,
+                                activity=f"Importing deleted tweet {tweet_id}",
+                                counters=f"{done} imported",
+                            )
+                            if pipeline is not None
+                            else None
+                        ),
                         write_tracker=write_tracker,
                     )
+                if pipeline is not None and deleted_tweets:
+                    imported = counts["deleted_authored_tweets"] - deleted_start_count
+                    pipeline.complete_step(deleted_step_key, f"{imported:,} deleted rows imported")
                 if debug:
                     _record_debug_timing(
                         status,
@@ -1901,6 +2336,24 @@ async def import_x_archive(
                     )
                 _emit_status(status, f"importing {len(likes)} likes...")
                 likes_started = perf_counter()
+                likes_step_key = "archive-likes"
+                likes_start_count = counts["likes"]
+                if pipeline is not None and likes:
+                    pipeline.add_step(
+                        likes_step_key,
+                        "Likes",
+                        total=len(likes),
+                        unit="likes",
+                        detail=(
+                            "archive like memberships · sparse objects queued for live enrichment"
+                        ),
+                        rate_unit="likes/s",
+                    )
+                    pipeline.start_step(
+                        likes_step_key,
+                        activity="Preparing liked tweet import",
+                        counters="0 imported",
+                    )
                 with _progress_callback(
                     console,
                     label="archive import likes",
@@ -1913,8 +2366,22 @@ async def import_x_archive(
                         likes,
                         counts=counts,
                         progress=likes_progress,
+                        item_status=(
+                            lambda tweet_id, done, total: pipeline.update_step(
+                                likes_step_key,
+                                completed=done,
+                                total=total,
+                                activity=f"Importing liked tweet {tweet_id}",
+                                counters=f"{done} imported",
+                            )
+                            if pipeline is not None
+                            else None
+                        ),
                         write_tracker=write_tracker,
                     )
+                if pipeline is not None and likes:
+                    imported = counts["likes"] - likes_start_count
+                    pipeline.complete_step(likes_step_key, f"{imported:,} likes imported")
                 if debug:
                     _record_debug_timing(
                         status,
@@ -1925,15 +2392,24 @@ async def import_x_archive(
                         unit="likes",
                     )
                 _emit_status(status, "copying exported media files...")
-                media_directory = (
-                    tweets_info.get("mediaDirectory") if isinstance(tweets_info, dict) else None
-                )
-                media_total = 0
-                if isinstance(media_directory, str):
-                    media_total = len(
-                        _slice_for_sample(source.iter_files(media_directory), limit=sample_limit)
-                    )
                 media_started = perf_counter()
+                media_step_key = "archive-media"
+                media_start_count = counts["media_files_copied"]
+                if pipeline is not None and media_total:
+                    pipeline.add_step(
+                        media_step_key,
+                        "Archive media",
+                        total=media_total,
+                        unit="files",
+                        detail="exported media matched to normalized tweet assets",
+                        rate_unit="files/s",
+                    )
+                    pipeline.start_step(
+                        media_step_key,
+                        activity="Preparing exported media copy",
+                        counters="0 scanned · 0 copied",
+                    )
+                warning_count_before_media = len(warnings)
                 with _progress_callback(
                     console,
                     label="archive import media",
@@ -1949,9 +2425,31 @@ async def import_x_archive(
                         counts=counts,
                         warnings=warnings,
                         progress=media_progress,
+                        item_status=(
+                            lambda relative_path, done, total: pipeline.update_step(
+                                media_step_key,
+                                completed=done,
+                                total=total,
+                                activity=f"Copying {relative_path}",
+                                counters=(
+                                    f"{done} scanned · "
+                                    f"{counts['media_files_copied'] - media_start_count} copied"
+                                ),
+                            )
+                            if pipeline is not None
+                            else None
+                        ),
                         limit=sample_limit,
                         write_tracker=write_tracker,
                     )
+                if pipeline is not None and media_total:
+                    copied = counts["media_files_copied"] - media_start_count
+                    pipeline.complete_step(
+                        media_step_key,
+                        f"{media_total:,} scanned · {copied:,} copied",
+                    )
+                    for warning in warnings[warning_count_before_media:]:
+                        pipeline.issue(warning, dedupe_key="archive-media:unmatched")
                 if debug:
                     _record_debug_timing(
                         status,
@@ -2007,6 +2505,12 @@ async def import_x_archive(
                 _emit_status(status, "debug summary:")
                 for summary in debug_summaries:
                     _emit_status(status, f"  {summary}")
+            if pipeline is not None:
+                pipeline.final_note(
+                    f"Sample imported: {counts['authored_tweets']:,} authored · "
+                    f"{counts['deleted_authored_tweets']:,} deleted · {counts['likes']:,} likes · "
+                    f"{counts['media_files_copied']:,} media copied."
+                )
             return ArchiveImportResult(
                 skipped=False,
                 followup_performed=False,
@@ -2101,6 +2605,16 @@ async def import_x_archive(
             _emit_status(status, "debug summary:")
             for summary in debug_summaries:
                 _emit_status(status, f"  {summary}")
+
+        if pipeline is not None:
+            pipeline.final_note(
+                f"Imported totals: {final_counts.get('authored_tweets', 0):,} authored · "
+                f"{final_counts.get('deleted_authored_tweets', 0):,} deleted · "
+                f"{final_counts.get('likes', 0):,} likes · "
+                f"{final_counts.get('media_files_copied', 0):,} media copied. "
+                f"Enrichment queue: {followup.pending_untouched:,} pending untouched · "
+                f"{followup.transient_due:,} due · {followup.transient_delayed:,} delayed."
+            )
 
         return ArchiveImportResult(
             skipped=not import_performed,

@@ -14,6 +14,7 @@ from rich.console import Console
 
 from tweetxvault import tagging
 from tweetxvault.config import AppConfig, TaggingConfig
+from tweetxvault.pipeline import PipelineReporter
 from tweetxvault.rpd import get_rpd_status, reserve_rpd_request
 
 
@@ -115,6 +116,9 @@ class PendingTagStore:
         selected = self.remaining[:limit]
         del self.remaining[: len(selected)]
         return selected
+
+    def count_eligible_tweets_for_tagging(self) -> int:
+        return len(self.remaining)
 
 
 class FakeFiles:
@@ -286,6 +290,63 @@ def successful_result(tweet_id: str = "1") -> list[dict[str, object]]:
 
 def rpd_used(store: FakeStore, *, model: str = "gemini-default", limit: int = 100) -> int:
     return get_rpd_status(store, model=model, limit=limit).used
+
+
+@pytest.mark.asyncio
+async def test_pending_tagging_does_not_admit_step_when_queue_is_empty(paths) -> None:
+    console, _ = make_console()
+    reporter = PipelineReporter(console, "tag", interactive=False)
+
+    with reporter:
+        result = await tagging.tag_pending_media_tweets(
+            PendingTagStore([]),
+            make_config(),
+            paths,
+            console,
+        )
+
+    assert result == tagging.TaggingRunResult()
+    assert not reporter.has_step("tagging")
+
+
+@pytest.mark.asyncio
+async def test_pipeline_tagging_total_respects_remaining_daily_request_capacity(
+    monkeypatch: pytest.MonkeyPatch,
+    paths,
+) -> None:
+    store = PendingTagStore(["1", "2", "3", "4", "5"])
+    console, _ = make_console()
+    reporter = PipelineReporter(console, "tag", interactive=False)
+    monkeypatch.setattr(
+        tagging,
+        "get_rpd_status",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            allowed=True,
+            used=2,
+            limit=3,
+            remaining=1,
+        ),
+    )
+
+    async def fake_tag_media_tweets(**kwargs: Any) -> int:
+        return len(kwargs["tweet_ids"])
+
+    monkeypatch.setattr(tagging, "tag_media_tweets", fake_tag_media_tweets)
+
+    with reporter:
+        result = await tagging.tag_pending_media_tweets(
+            store,
+            make_config(batch=True, limit=2, rpd=3),
+            paths,
+            console,
+        )
+
+    assert result == tagging.TaggingRunResult(processed=2, tagged=2, batches=1)
+    assert store.remaining == ["3", "4", "5"]
+    step = reporter._step_by_key["tagging"]
+    assert step.total == 2
+    assert step.show_eta is True
+    assert "1/3 daily requests available" in step.detail
 
 
 @pytest.mark.asyncio

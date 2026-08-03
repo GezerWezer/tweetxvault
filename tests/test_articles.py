@@ -14,6 +14,7 @@ from tests.conftest import make_article_result, make_tweet_detail_response, make
 from tweetxvault.articles import normalize_article_target, refresh_articles
 from tweetxvault.client.timelines import TimelineTweet
 from tweetxvault.config import AppConfig, AuthConfig, SyncConfig
+from tweetxvault.pipeline import PipelineReporter
 from tweetxvault.query_ids import QueryIdStore
 from tweetxvault.storage import open_archive_store
 
@@ -89,6 +90,30 @@ def _article_detail_payload(tweet_id: str, *, plain_text: str = "Body") -> dict[
 def test_normalize_article_target_accepts_ids_and_urls() -> None:
     assert normalize_article_target(TWEET_ID) == TWEET_ID
     assert normalize_article_target(f"https://x.com/dimitrispapail/status/{TWEET_ID}") == TWEET_ID
+
+
+@pytest.mark.asyncio
+async def test_refresh_articles_does_not_admit_step_when_queue_is_empty(
+    paths,
+    config,
+    auth_bundle,
+) -> None:
+    store = open_archive_store(paths, create=True, config=config)
+    assert store is not None
+    store.close()
+    console = Console(file=StringIO(), force_terminal=False, color_system=None)
+    reporter = PipelineReporter(console, "articles", interactive=False)
+
+    with reporter:
+        result = await refresh_articles(
+            config=config,
+            paths=paths,
+            auth_bundle=auth_bundle,
+            console=console,
+        )
+
+    assert result.processed == 0
+    assert not reporter.has_step("articles")
 
 
 @pytest.mark.asyncio

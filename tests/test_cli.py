@@ -95,6 +95,17 @@ def test_version_option_prints_version_text(monkeypatch: pytest.MonkeyPatch) -> 
     assert result.stdout.strip() == f"tweetxvault {cli.__version__} (abc1234, dirty)"
 
 
+def test_configure_logging_forces_plain_output_for_systemd(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("INVOCATION_ID", "service-run-id")
+
+    console = cli._configure_logging()
+
+    assert console.is_terminal is False
+    assert console.color_system is None
+
+
 def test_version_text_falls_back_to_semver_without_git(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cli, "_find_git_repo_root", lambda: None)
 
@@ -138,6 +149,7 @@ def test_sync_help_lists_subcommand_descriptions() -> None:
     assert "Sync authored tweets." in result.stdout
     assert "all" in result.stdout
     assert "media download" in result.stdout
+    assert "configured media tagging" in result.stdout
 
 
 def test_sync_all_help_describes_default_followups() -> None:
@@ -148,6 +160,7 @@ def test_sync_all_help_describes_default_followups() -> None:
     assert "resurrection checks" in result.stdout
     assert "--skip-media" in result.stdout
     assert "--skip-unfurl" in result.stdout
+    assert "configured media tagging" in result.stdout
 
 
 def test_sync_likes_help_describes_flags() -> None:
@@ -170,6 +183,7 @@ def test_import_x_archive_help_describes_sample_limit() -> None:
     assert "--detail-lookups" in result.stdout
     assert "--no-enrich" in result.stdout
     assert "[default: enrich]" in result.stdout
+    assert "unified pipeline" in normalized
 
 
 def test_import_enrich_help_has_no_default_limit() -> None:
@@ -812,7 +826,7 @@ def test_sync_all_forwards_article_backfill(paths, monkeypatch) -> None:
     }
     output = buffer.getvalue()
     assert "bookmarks: 2 pages, 3 tweets" in output
-    assert "likes: failed (boom)" in output
+    assert "Likes sync failed: boom" in output
 
 
 def test_sync_default_runs_sync_all_with_full_followups(paths, monkeypatch) -> None:
@@ -1096,7 +1110,7 @@ def test_expand_archive_threads_debug_auth_passes_status_callback(paths, monkeyp
     cli.expand_archive_threads(debug_auth=True)
 
     output = buffer.getvalue()
-    assert "auth: trying Firefox browser cookies" in output
+    assert "auth | detail | trying Firefox browser cookies" in output
     assert "threads: 0 processed, 0 expanded, 0 skipped, 0 failed" in output
 
 
@@ -1215,12 +1229,7 @@ def test_import_x_archive_interrupt_reports_completed_import_and_continuation(
     assert "tweetxvault import enrich" in output
 
 
-def test_archive_followup_explains_when_only_delayed_transient_rows_remain(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    buffer = StringIO()
-    _capture_console(monkeypatch, buffer)
-    console = cli._configure_logging()
+def test_archive_followup_explains_when_only_delayed_transient_rows_remain() -> None:
     result = SimpleNamespace(
         reconciled_collections=[],
         selected=0,
@@ -1234,11 +1243,10 @@ def test_archive_followup_explains_when_only_delayed_transient_rows_remain(
         warnings=[],
     )
 
-    cli._print_archive_followup(console, result)
+    output = cli._archive_followup_summary(result)
 
-    output = buffer.getvalue()
-    assert "No archive enrichment rows are currently due." in output
-    assert "2,827 transient failures remain scheduled for later retry." in output
+    assert "0 pending untouched" in output
+    assert "2,827 transient delayed" in output
 
 
 def test_import_x_archive_enrich_reuses_existing_import(paths, monkeypatch, tmp_path: Path) -> None:

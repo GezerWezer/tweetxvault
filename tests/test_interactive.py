@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from tweetxvault.interactive import emit_status, progress_callback, status_printer
+from tweetxvault.pipeline import PipelineReporter
 
 
 class FakeConsole:
@@ -114,6 +115,27 @@ def test_progress_callback_is_disabled_for_non_tty(monkeypatch) -> None:
         unit="files",
     ) as callback:
         assert callback is None
+
+
+def test_progress_callback_is_disabled_inside_shared_pipeline(monkeypatch) -> None:
+    console = FakeConsole(is_terminal=True)
+    monkeypatch.setitem(
+        sys.modules,
+        "tqdm",
+        SimpleNamespace(
+            tqdm=lambda **_kwargs: pytest.fail("nested tqdm should not be constructed")
+        ),
+    )
+    reporter = PipelineReporter(console, "sync", interactive=False)
+
+    with reporter:
+        with progress_callback(
+            console,
+            label="downloading",
+            total=10,
+            unit="files",
+        ) as callback:
+            assert callback is None
 
 
 def test_progress_callback_configures_bar_and_updates_only_forward_deltas(

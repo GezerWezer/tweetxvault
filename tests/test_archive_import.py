@@ -25,6 +25,7 @@ from tweetxvault.exceptions import (
     RepeatedFocalAbsenceError,
     StaleQueryIdError,
 )
+from tweetxvault.pipeline import PipelineReporter
 from tweetxvault.storage import open_archive_store
 
 
@@ -512,17 +513,22 @@ def test_repeated_import_short_circuits_across_directory_and_zip_inputs(
             console=_console(),
         )
     )
-    second = asyncio.run(
-        import_x_archive(
-            archive_zip,
-            config=AppConfig(),
-            paths=paths,
-            console=_console(),
+    console = _console()
+    reporter = PipelineReporter(console, "archive import", interactive=False)
+    with reporter:
+        second = asyncio.run(
+            import_x_archive(
+                archive_zip,
+                enrich=False,
+                config=AppConfig(),
+                paths=paths,
+                console=console,
+            )
         )
-    )
 
     assert first.skipped is False
     assert second.skipped is True
+    assert [step.key for step in reporter.steps] == ["archive-inspect"]
     store = open_archive_store(paths, create=False)
     assert store is not None
     assert store.counts()["import_manifests"] == 1
@@ -2161,20 +2167,32 @@ def test_import_x_archive_preserves_attempt_start_time(
 
 def test_import_x_archive_sample_limit_does_not_require_debug(paths, tmp_path: Path) -> None:
     archive_dir = _write_archive_dir(tmp_path)
+    console = _console()
+    reporter = PipelineReporter(console, "archive import", interactive=False)
 
-    result = asyncio.run(
-        import_x_archive(
-            archive_dir,
-            sample_limit=1,
-            config=AppConfig(),
-            paths=paths,
-            console=_console(),
+    with reporter:
+        result = asyncio.run(
+            import_x_archive(
+                archive_dir,
+                sample_limit=1,
+                config=AppConfig(),
+                paths=paths,
+                console=console,
+            )
         )
-    )
 
     assert result.skipped is False
     assert result.followup_performed is False
     assert any("sampled import" in warning for warning in result.warnings)
+    assert {step.key for step in reporter.steps} == {
+        "archive-inspect",
+        "archive-source",
+        "archive-tweets",
+        "archive-deleted",
+        "archive-likes",
+        "archive-media",
+    }
+    assert not reporter.has_step("archive-enrich")
 
 
 def test_sampled_debug_import_stays_non_completed_and_full_import_can_rerun(

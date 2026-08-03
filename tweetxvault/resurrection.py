@@ -31,6 +31,7 @@ from tweetxvault.exceptions import (
     StaleQueryIdError,
 )
 from tweetxvault.jobs import locked_archive_job, resolve_job_context
+from tweetxvault.pipeline import current_pipeline
 from tweetxvault.query_ids import QueryIdStore, refresh_query_ids
 from tweetxvault.storage.backend import ArchiveStore, _PageBuffer
 from tweetxvault.utils import resolve_query_ids, utc_now
@@ -215,18 +216,58 @@ async def resurrect_due_tweets(
 ) -> ResurrectionResult:
     config, paths = resolve_job_context(config=config, paths=paths)
     console = console or Console(stderr=True)
+    pipeline = current_pipeline()
     result = ResurrectionResult()
     if budget <= 0:
         async with locked_archive_job(config=config, paths=paths, console=console) as job:
             result.remaining_due = job.store.count_due_resurrection_tweets()
         return result
-    auth_bundle = auth_bundle or resolve_auth_bundle(config)
+    if auth_bundle is None:
+        if pipeline is not None:
+            pipeline.add_step(
+                "resurrection-auth",
+                "Authentication",
+                total=1,
+                unit="session",
+                detail="resolve the configured X browser session",
+                show_rate=False,
+                show_eta=False,
+            )
+            pipeline.start_step(
+                "resurrection-auth",
+                activity="Resolving X authentication for resurrection checks",
+            )
+        auth_bundle = resolve_auth_bundle(config)
+        if pipeline is not None:
+            pipeline.complete_step("resurrection-auth", "X authentication resolved")
 
     async with locked_archive_job(config=config, paths=paths, console=console) as job:
         store = job.store
         candidates = select_weighted_resurrection_candidates(store, budget=budget)
         if not candidates:
             return result
+
+        step_key = "resurrection"
+        if pipeline is not None:
+            pipeline.add_step(
+                step_key,
+                "Resurrection",
+                total=len(candidates),
+                unit="tweets",
+                detail=(
+                    f"{len(candidates)} due selected · {budget}-request ceiling · "
+                    "reason-weighted retry queue"
+                ),
+                rate_unit="tweets/s",
+            )
+            pipeline.start_step(
+                step_key,
+                activity="Resolving the TweetDetail operation ID",
+                counters=(
+                    f"{len(candidates)} due selected · 0 checked · 0 returned · "
+                    "0 unavailable · 0 transient"
+                ),
+            )
 
         query_store = QueryIdStore(paths)
         query_ids = await resolve_query_ids(
@@ -235,6 +276,11 @@ async def resurrect_due_tweets(
             force_refresh=not query_store.is_fresh(),
             transport=transport,
         )
+        if pipeline is not None:
+            pipeline.status(
+                step_key,
+                f"Rechecking unavailable tweet {candidates[0]['tweet_id']}",
+            )
         client = build_async_client(auth_bundle, timeout=config.sync.timeout, transport=transport)
         queue = deque(candidates)
         queued_ids = {row["tweet_id"] for row in candidates if isinstance(row.get("tweet_id"), str)}
@@ -281,6 +327,19 @@ async def resurrect_due_tweets(
                 processed_ids.add(tweet_id)
                 result.attempted += 1
                 buffered_attempts += 1
+                if pipeline is not None:
+                    planned_total = min(budget, result.attempted + len(queue))
+                    pipeline.update_step(
+                        step_key,
+                        completed=result.attempted - 1,
+                        total=max(planned_total, result.attempted),
+                        activity=f"Rechecking unavailable tweet {tweet_id}",
+                        counters=(
+                            f"{result.attempted - 1} checked · {result.resurrected} returned · "
+                            f"{result.still_unavailable} unavailable · "
+                            f"{result.transient_failures} transient"
+                        ),
+                    )
                 await pacer.wait(attempted=result.attempted - 1, sleep=sleep)
 
                 previous_reason = str(row.get("enrichment_reason") or "unavailable_unknown")
@@ -310,10 +369,31 @@ async def resurrect_due_tweets(
                         max_retries=config.sync.detail_max_retries,
                         backoff_base=config.sync.detail_backoff_base,
                         refresh_once=refresh_once,
-                        status=status,
+                        status=(
+                            (
+                                lambda message, tweet_id=tweet_id: pipeline.status(
+                                    step_key,
+                                    f"Resurrection tweet {tweet_id}: {message}",
+                                    important=True,
+                                )
+                            )
+                            if pipeline is not None
+                            else status
+                        ),
                         sleep=sleep,
                     )
-                    pacer.observe(response, status=status)
+                    pacer.observe(
+                        response,
+                        status=(
+                            status
+                            if status is not None
+                            else (
+                                lambda message: pipeline.status(step_key, message, important=True)
+                                if pipeline is not None
+                                else None
+                            )
+                        ),
+                    )
                     payload = response.json()
                     focal = parse_tweet_detail_response(payload, tweet_id)
                     if focal.kind == FocalResultKind.AVAILABLE and focal.tweet is not None:
@@ -380,6 +460,12 @@ async def resurrect_due_tweets(
                         )
                         result.transient_failures += 1
                         consecutive_focal_absences += 1
+                        if pipeline is not None:
+                            pipeline.issue(
+                                f"Resurrection tweet {tweet_id}: focal tweet absent; "
+                                "retry scheduled",
+                                dedupe_key="resurrection:focal-absence",
+                            )
                         if consecutive_focal_absences >= MAX_CONSECUTIVE_FOCAL_ABSENCES:
                             absence_error = RepeatedFocalAbsenceError(
                                 f"TweetDetail omitted its requested focal tweet for "
@@ -431,7 +517,12 @@ async def resurrect_due_tweets(
                             cursor=buffer,
                         )
                         result.transient_failures += 1
-                except httpx.TransportError:
+                        if pipeline is not None:
+                            pipeline.issue(
+                                f"Resurrection tweet {tweet_id}: {exc}",
+                                dedupe_key="resurrection:api-failure",
+                            )
+                except httpx.TransportError as exc:
                     store.update_tweet_object_enrichment(
                         tweet_id,
                         enrichment_state="terminal_unavailable",
@@ -444,6 +535,11 @@ async def resurrect_due_tweets(
                         cursor=buffer,
                     )
                     result.transient_failures += 1
+                    if pipeline is not None:
+                        pipeline.issue(
+                            f"Resurrection tweet {tweet_id}: {exc.__class__.__name__}: {exc}",
+                            dedupe_key="resurrection:transport-failure",
+                        )
                 except (KeyboardInterrupt, asyncio.CancelledError):
                     raise
                 except Exception:
@@ -481,6 +577,12 @@ async def resurrect_due_tweets(
                         if added or persisted_due:
                             result.account_boosts += 1
                         result.account_rows_prioritized += len(added)
+                        if pipeline is not None and added:
+                            pipeline.status(
+                                step_key,
+                                f"Prioritized {len(added)} same-author recovery candidates",
+                                important=True,
+                            )
 
                 if (
                     available_author_id is not None
@@ -502,6 +604,20 @@ async def resurrect_due_tweets(
                         job.mark_dirty(rows=probes_marked_due, batches=1)
                     result.account_probes += len(added)
 
+                if pipeline is not None:
+                    planned_total = min(budget, result.attempted + len(queue))
+                    pipeline.update_step(
+                        step_key,
+                        completed=result.attempted,
+                        total=max(planned_total, result.attempted),
+                        counters=(
+                            f"{result.attempted} checked · {result.resurrected} returned · "
+                            f"{result.still_unavailable} unavailable · "
+                            f"{result.transient_failures} transient · "
+                            f"{result.account_probes} account probes"
+                        ),
+                    )
+
                 if buffered_attempts >= DETAIL_WRITE_BATCH:
                     flush()
         finally:
@@ -511,4 +627,11 @@ async def resurrect_due_tweets(
                 flush()
 
         result.remaining_due = store.count_due_resurrection_tweets()
+        if pipeline is not None:
+            pipeline.complete_step(
+                step_key,
+                f"{result.attempted} checked · {result.resurrected} returned · "
+                f"{result.still_unavailable} unavailable · "
+                f"{result.transient_failures} transient · {result.remaining_due} still due",
+            )
     return result

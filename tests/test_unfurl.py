@@ -15,6 +15,7 @@ from tests.conftest import (
     make_video_media,
 )
 from tweetxvault.client.timelines import TimelineTweet
+from tweetxvault.pipeline import PipelineReporter
 from tweetxvault.storage import open_archive_store
 from tweetxvault.storage.backend import ArchiveStore
 from tweetxvault.unfurl import unfurl_urls
@@ -200,14 +201,21 @@ async def test_unfurl_urls_retries_failed_rows_and_respects_limit(paths, config)
     assert failed.updated == 0
     assert failed.failed == 2
 
-    skipped = await unfurl_urls(
-        config=config,
-        paths=paths,
-        transport=httpx.MockTransport(failing_handler),
+    reporter = PipelineReporter(
+        Console(file=StringIO(), force_terminal=False, color_system=None),
+        "unfurl",
+        interactive=False,
     )
+    with reporter:
+        skipped = await unfurl_urls(
+            config=config,
+            paths=paths,
+            transport=httpx.MockTransport(failing_handler),
+        )
     assert skipped.processed == 0
     assert skipped.updated == 0
     assert skipped.failed == 0
+    assert not reporter.has_step("urls")
 
     def success_handler(request: httpx.Request) -> httpx.Response:
         html = """

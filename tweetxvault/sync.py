@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import threading
+import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,6 +38,7 @@ from tweetxvault.jobs import (
     best_effort_interrupt_optimize,
     is_interrupt_exception,
 )
+from tweetxvault.pipeline import current_pipeline
 from tweetxvault.query_ids import QueryIdStore, refresh_query_ids
 from tweetxvault.storage import ArchiveStore, SyncState, open_archive_store
 from tweetxvault.utils import resolve_query_ids
@@ -184,7 +186,26 @@ async def run_preflight(
     query_ids: dict[str, str] | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> PreflightResult:
+    pipeline = current_pipeline()
+    step_key = "preflight:" + ",".join(collections)
+    if pipeline is not None:
+        pipeline.add_step(
+            step_key,
+            "Prepare",
+            total=3 + len(collections),
+            unit="checks",
+            detail=f"authentication · archive owner · {len(collections)} remote endpoint probes",
+            rate_unit="checks/s",
+        )
+        pipeline.start_step(step_key, activity="Resolving X authentication")
     auth_bundle = auth_bundle or resolve_auth_bundle(config)
+    if pipeline is not None:
+        pipeline.update_step(
+            step_key,
+            completed=1,
+            activity="Checking local archive ownership",
+            counters="authentication resolved",
+        )
     existing_store = open_archive_store(paths, create=False, config=config)
     if existing_store is not None:
         try:
@@ -196,6 +217,13 @@ async def run_preflight(
                 )
         finally:
             existing_store.close()
+    if pipeline is not None:
+        pipeline.update_step(
+            step_key,
+            completed=2,
+            activity="Resolving GraphQL operation IDs",
+            counters="authentication ready · archive owner accepted",
+        )
     operation_names = [COLLECTION_TO_OPERATION[collection] for collection in collections]
     query_store = QueryIdStore(paths)
     query_ids = query_ids or await resolve_query_ids(
@@ -204,6 +232,13 @@ async def run_preflight(
         force_refresh=not query_store.is_fresh(),
         transport=transport,
     )
+    if pipeline is not None:
+        pipeline.update_step(
+            step_key,
+            completed=3,
+            activity=f"Probing {collections[0].title()} endpoint",
+            counters=f"{len(query_ids)} operation IDs ready",
+        )
     probes: dict[str, ProbeResult] = {}
     client = build_async_client(auth_bundle, timeout=config.sync.timeout, transport=transport)
     try:
@@ -239,6 +274,8 @@ async def run_preflight(
                 )
 
             try:
+                if pipeline is not None:
+                    pipeline.status(step_key, f"Probing {collection.title()} endpoint")
                 response = await fetch_page(
                     client,
                     _build_url(collection, query_ids[operation], auth_bundle, None, 1),
@@ -261,8 +298,27 @@ async def run_preflight(
             probes[collection] = ProbeResult(
                 collection=collection, ready=True, detail="Remote probe succeeded."
             )
+            if pipeline is not None:
+                ready_count = sum(probe.ready for probe in probes.values())
+                pipeline.update_step(
+                    step_key,
+                    completed=3 + len(probes),
+                    counters=f"{ready_count}/{len(collections)} endpoints ready",
+                )
     finally:
         await client.aclose()
+    if pipeline is not None:
+        ready_count = sum(probe.ready for probe in probes.values())
+        if ready_count == len(collections):
+            pipeline.complete_step(
+                step_key,
+                f"authentication ready · {ready_count}/{len(collections)} endpoints available",
+            )
+        else:
+            pipeline.fail_step(
+                step_key,
+                f"{ready_count}/{len(collections)} endpoints available",
+            )
     return PreflightResult(auth=auth_bundle, query_ids=query_ids, probes=probes)
 
 
@@ -276,6 +332,7 @@ async def _fetch_and_parse_page(
     query_store: QueryIdStore,
     query_ids: dict[str, str],
     client: httpx.AsyncClient,
+    status: Callable[[str], None] | None = None,
 ) -> tuple[httpx.Response, dict[str, Any], list[TimelineTweet], str | None]:
     operation = COLLECTION_TO_OPERATION[collection]
 
@@ -285,7 +342,13 @@ async def _fetch_and_parse_page(
         return _build_url(collection, query_ids[operation], auth, cursor, count)
 
     url = _build_url(collection, query_ids[operation], auth, cursor, count)
-    response = await fetch_page(client, url, config.sync, refresh_once=refresh_once)
+    response = await fetch_page(
+        client,
+        url,
+        config.sync,
+        refresh_once=refresh_once,
+        status=status,
+    )
     payload = response.json()
     tweets, next_cursor = parse_timeline_response(payload, operation)
     return response, payload, tweets, next_cursor
@@ -314,6 +377,30 @@ def _pass_label(*, is_head_pass: bool) -> str:
     return "head" if is_head_pass else "backfill"
 
 
+def _rate_limit_context(response: httpx.Response) -> str:
+    remaining = response.headers.get("x-rate-limit-remaining")
+    limit = response.headers.get("x-rate-limit-limit")
+    reset = response.headers.get("x-rate-limit-reset")
+    parts: list[str] = []
+    if remaining and limit:
+        parts.append(f"API {remaining}/{limit}")
+    if reset and reset.isdigit():
+        minutes = max(round((int(reset) - time.time()) / 60), 0)
+        parts.append(f"reset in {minutes}m")
+    return " · ".join(parts)
+
+
+def _stop_summary(reason: str) -> str:
+    return {
+        "duplicate": "reached saved archive history",
+        "empty": "X returned no tweets",
+        "head-complete": "reached the end of the collection",
+        "backfill-complete": "older history is complete",
+        "limit": "reached the page limit",
+        "continue": "more pages available",
+    }.get(reason, reason)
+
+
 async def _run_pass(
     *,
     collection: str,
@@ -335,6 +422,7 @@ async def _run_pass(
     sleep: Callable[[float], Awaitable[None]],
     client: httpx.AsyncClient,
     write_tracker: ArchiveWriteTracker,
+    pipeline_step_key: str | None = None,
 ) -> tuple[int, int, str, str | None, str | None]:
     pages_fetched = 0
     tweets_seen = 0
@@ -342,12 +430,28 @@ async def _run_pass(
     latest_head_id = previous_state.last_head_tweet_id
     stop_reason = "empty"
     seen_ids = initial_seen_ids
+    pipeline = current_pipeline()
 
     while True:
         if count_limit is not None and pages_fetched >= count_limit:
             stop_reason = "limit"
             break
 
+        page_number = pages_fetched + 1
+        pass_name = _pass_label(is_head_pass=is_head_pass)
+        if pipeline is not None and pipeline_step_key is not None:
+            pipeline.update_step(
+                pipeline_step_key,
+                completed=0,
+                total=1,
+                activity=(
+                    f"Fetching newest {collection} · page {page_number}"
+                    if is_head_pass
+                    else f"Continuing saved {collection} history · page {page_number}"
+                ),
+                counters=f"{pages_fetched} pages · {tweets_seen} tweets",
+                detail=f"{pass_name} pass · each page is committed with its resume cursor",
+            )
         response, payload, tweets, next_cursor = await _fetch_and_parse_page(
             collection=collection,
             cursor=cursor,
@@ -357,6 +461,17 @@ async def _run_pass(
             query_store=query_store,
             query_ids=query_ids,
             client=client,
+            status=(
+                (
+                    lambda message, page_number=page_number: pipeline.status(
+                        pipeline_step_key,
+                        f"{collection.title()} page {page_number}: {message}",
+                        important=True,
+                    )
+                )
+                if pipeline is not None and pipeline_step_key is not None
+                else None
+            ),
         )
         duplicate_seen = False
         if is_head_pass and stop_on_duplicate:
@@ -386,6 +501,11 @@ async def _run_pass(
             stop_reason=stop_reason,
             is_head_pass=is_head_pass,
         )
+        if pipeline is not None and pipeline_step_key is not None:
+            pipeline.status(
+                pipeline_step_key,
+                f"Committing {len(tweets):,} tweets and the page {page_number} resume cursor",
+            )
         store.persist_page(
             operation=COLLECTION_TO_OPERATION[collection],
             collection_type=COLLECTION_TO_STORAGE[collection],
@@ -404,14 +524,36 @@ async def _run_pass(
 
         pages_fetched += 1
         tweets_seen += len(tweets)
-        console.print(
-            f"{collection} {_pass_label(is_head_pass=is_head_pass)}: "
-            f"page {pages_fetched}, "
-            f"page_tweets {len(tweets)}, "
-            f"total_tweets {tweets_seen}, "
-            f"stop={stop_reason}",
-            highlight=False,
-        )
+        if pipeline is not None and pipeline_step_key is not None:
+            rate_context = _rate_limit_context(response)
+            detail = f"{pass_name} pass · durable through page {pages_fetched}"
+            if rate_context:
+                detail += f" · {rate_context}"
+            pipeline.update_step(
+                pipeline_step_key,
+                completed=1,
+                total=1,
+                activity=(
+                    f"Committed page {pages_fetched}"
+                    if stop_reason == "continue"
+                    else _stop_summary(stop_reason).capitalize()
+                ),
+                counters=(
+                    f"{pages_fetched} pages · {tweets_seen} tweets · "
+                    f"{len(tweets)} on this page · {_stop_summary(stop_reason)}"
+                ),
+                detail=detail,
+                important=True,
+            )
+        else:
+            console.print(
+                f"{collection} {_pass_label(is_head_pass=is_head_pass)}: "
+                f"page {pages_fetched}, "
+                f"page_tweets {len(tweets)}, "
+                f"total_tweets {tweets_seen}, "
+                f"stop={stop_reason}",
+                highlight=False,
+            )
 
         if stop_reason != "continue":
             return pages_fetched, tweets_seen, stop_reason, latest_head_id, next_cursor
@@ -489,11 +631,19 @@ def _embed_new_tweets(store: Any, console: Console | None) -> None:
 
 
 def _log_embedding_warning(console: Console | None, message: str) -> None:
-    if console is not None:
+    pipeline = current_pipeline()
+    if pipeline is not None:
+        active = pipeline.active_step
+        if active is not None and active.state == "active":
+            pipeline.fail_step(active.key, message)
+        pipeline.issue(message, dedupe_key=f"followup:{message.split(':', 1)[0]}")
+    elif console is not None:
         console.print(f"[yellow]{message}[/yellow]")
 
 
 def _log_sync_followup(console: Console | None, message: str) -> None:
+    if current_pipeline() is not None:
+        return
     if console is not None:
         console.print(f"sync follow-up: {message}", highlight=False)
 
@@ -761,7 +911,17 @@ async def _run_auto_followups(
     store = open_archive_store(paths, create=False, config=config)
     if store is not None:
         try:
-            print_pending_archive_enrichment_reminder(console, store)
+            pipeline = current_pipeline()
+            if pipeline is not None:
+                pending = store.count_pending_initial_enrichment()
+                due = store.count_due_transient_enrichment()
+                delayed = store.count_delayed_transient_enrichment()
+                pipeline.final_note(
+                    f"Archive enrichment queue: {pending:,} pending untouched · "
+                    f"{due:,} transient due · {delayed:,} transient delayed."
+                )
+            else:
+                print_pending_archive_enrichment_reminder(console, store)
         finally:
             store.close()
 
@@ -782,6 +942,7 @@ async def _sync_collection_ready(
     console: Console,
     sleep: Callable[[float], Awaitable[None]],
 ) -> SyncResult:
+    pipeline = current_pipeline()
     probe = preflight.probes[collection]
     if not probe.ready:
         if probe.local_error:
@@ -839,7 +1000,29 @@ async def _sync_collection_ready(
         completed = False
         try:
             try:
-                console.print(f"{collection}: starting head pass", highlight=False)
+                head_step_key = f"sync:{collection}:head"
+                if pipeline is not None:
+                    stop_policy = (
+                        "continue through saved duplicates"
+                        if full or backfill or article_backfill
+                        else "stop at saved archive history"
+                    )
+                    pipeline.add_step(
+                        head_step_key,
+                        collection.title(),
+                        total=1,
+                        unit="current page",
+                        detail=f"head pass · {stop_policy}",
+                        show_rate=False,
+                        show_eta=False,
+                    )
+                    pipeline.start_step(
+                        head_step_key,
+                        activity=f"Fetching newest {collection} · page 1",
+                        counters="0 pages · 0 tweets",
+                    )
+                else:
+                    console.print(f"{collection}: starting head pass", highlight=False)
                 head_pages, head_tweets, head_reason, _latest_head_id, _ = await _run_pass(
                     collection=collection,
                     start_cursor=None,
@@ -860,7 +1043,14 @@ async def _sync_collection_ready(
                     sleep=sleep,
                     client=client,
                     write_tracker=write_tracker,
+                    pipeline_step_key=head_step_key,
                 )
+                if pipeline is not None:
+                    pipeline.complete_step(
+                        head_step_key,
+                        f"{head_pages:,} pages · {head_tweets:,} tweets · "
+                        f"{_stop_summary(head_reason)}",
+                    )
                 pages_total = head_pages
                 tweets_total = head_tweets
                 stop_reason = head_reason
@@ -883,7 +1073,26 @@ async def _sync_collection_ready(
                     and prior_backfill_incomplete
                     and remaining != 0
                 ):
-                    console.print(f"{collection}: resuming saved backfill pass", highlight=False)
+                    backfill_step_key = f"sync:{collection}:backfill"
+                    if pipeline is not None:
+                        pipeline.add_step(
+                            backfill_step_key,
+                            f"{collection.title()} history",
+                            total=1,
+                            unit="current page",
+                            detail="saved backfill cursor · older archive history",
+                            show_rate=False,
+                            show_eta=False,
+                        )
+                        pipeline.start_step(
+                            backfill_step_key,
+                            activity=f"Continuing saved {collection} history · page 1",
+                            counters="0 pages · 0 tweets",
+                        )
+                    else:
+                        console.print(
+                            f"{collection}: resuming saved backfill pass", highlight=False
+                        )
                     refreshed_state = store.get_sync_state(COLLECTION_TO_STORAGE[collection])
                     backfill_pages, backfill_tweets, backfill_reason, _, _ = await _run_pass(
                         collection=collection,
@@ -905,7 +1114,14 @@ async def _sync_collection_ready(
                         sleep=sleep,
                         client=client,
                         write_tracker=write_tracker,
+                        pipeline_step_key=backfill_step_key,
                     )
+                    if pipeline is not None:
+                        pipeline.complete_step(
+                            backfill_step_key,
+                            f"{backfill_pages:,} pages · {backfill_tweets:,} tweets · "
+                            f"{_stop_summary(backfill_reason)}",
+                        )
                     pages_total += backfill_pages
                     tweets_total += backfill_tweets
                     stop_reason = backfill_reason
@@ -971,6 +1187,24 @@ async def sync_all(
             raise LocalPreflightError("sync all preflight failed on local auth/config.")
         raise RemotePreflightError("sync all preflight failed on a remote probe.")
 
+    pipeline = current_pipeline()
+    if pipeline is not None:
+        stop_policy = (
+            "continue through saved duplicates"
+            if full or backfill or article_backfill
+            else "stop at saved archive history"
+        )
+        for collection in ("bookmarks", "likes"):
+            pipeline.add_step(
+                f"sync:{collection}:head",
+                collection.title(),
+                total=1,
+                unit="current page",
+                detail=f"head pass · {stop_policy}",
+                show_rate=False,
+                show_eta=False,
+            )
+
     results: list[SyncResult] = []
     errors: dict[str, str] = {}
     exit_code = 0
@@ -994,7 +1228,15 @@ async def sync_all(
         except TweetXVaultError as exc:
             exit_code = 2
             errors[collection] = str(exc)
-            console.print(f"{collection}: failed ({exc})")
+            pipeline = current_pipeline()
+            if pipeline is not None:
+                pipeline.issue(
+                    f"{collection.title()} sync failed: {exc}",
+                    level="error",
+                    dedupe_key=f"sync:{collection}:failure",
+                )
+            else:
+                console.print(f"{collection}: failed ({exc})")
             break
     if exit_code == 0 and followups is not None:
         await _run_auto_followups(

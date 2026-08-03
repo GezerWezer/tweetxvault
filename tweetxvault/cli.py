@@ -45,6 +45,7 @@ from tweetxvault.export.common import (
 from tweetxvault.extractor import extract_status_id_from_url
 from tweetxvault.grailbird import convert_archive as convert_grailbird_archive
 from tweetxvault.media import download_media
+from tweetxvault.pipeline import PipelineReporter, current_pipeline
 from tweetxvault.query_ids import QueryIdStore, refresh_query_ids
 from tweetxvault.reminders import print_pending_archive_enrichment_reminder
 from tweetxvault.storage import open_archive_store
@@ -69,11 +70,12 @@ repair_app = typer.Typer(no_args_is_help=True, help="Repair recoverable legacy a
 SYNC_GROUP_HELP = (
     "Run the normal sync pass. Without a subcommand, this syncs bookmarks and likes, "
     "then runs thread expansion, resurrection checks, article refresh, media download, "
-    "and URL unfurl unless skipped."
+    "URL unfurl, and configured media tagging unless skipped or inapplicable."
 )
 SYNC_ALL_HELP = (
     "Sync bookmarks and likes, then run thread expansion, resurrection checks, article "
-    "refresh, media download, and URL unfurl unless skipped."
+    "refresh, media download, URL unfurl, and configured media tagging unless skipped "
+    "or inapplicable."
 )
 sync_app = typer.Typer(
     invoke_without_command=True,
@@ -230,8 +232,13 @@ SEARCH_LIMIT_OPTION = Annotated[int, typer.Option("--limit", help=SEARCH_LIMIT_H
 
 def _configure_logging() -> Console:
     logger.remove()
-    logger.add(sys.stderr, level="INFO")
-    return Console(stderr=True)
+    service_mode = bool(os.environ.get("INVOCATION_ID") or os.environ.get("JOURNAL_STREAM"))
+    logger.add(sys.stderr, level="INFO", format="{message}", colorize=not service_mode)
+    return Console(
+        stderr=True,
+        force_terminal=False if service_mode else None,
+        color_system=None if service_mode else "auto",
+    )
 
 
 def _find_git_repo_root() -> Path | None:
@@ -294,6 +301,9 @@ def _browser_cookie_only_env() -> dict[str, str]:
 def _auth_status_callback(console: Console, *, enabled: bool):
     if not enabled:
         return None
+    pipeline = current_pipeline()
+    if pipeline is not None:
+        return lambda message: pipeline.detail("auth", message)
     return lambda message: console.print(f"auth: {message}", highlight=False)
 
 
@@ -354,6 +364,24 @@ def _prepare_auth_override(
     if not browser:
         return config, None
 
+    pipeline = current_pipeline()
+    auth_step_key = "auth-override"
+    if pipeline is not None:
+        profile_label = str(profile_path) if profile_path is not None else profile or "auto profile"
+        pipeline.add_step(
+            auth_step_key,
+            "Authentication",
+            total=1,
+            unit="session",
+            detail=f"{browser} · {profile_label}",
+            show_rate=False,
+            show_eta=False,
+        )
+        pipeline.start_step(
+            auth_step_key,
+            activity=f"Reading the X session from {browser}",
+        )
+
     auth = config.auth.model_copy(
         update={
             "auth_token": None,
@@ -370,6 +398,10 @@ def _prepare_auth_override(
         env=_browser_cookie_only_env(),
         status=_auth_status_callback(console, enabled=debug_auth),
     )
+    if pipeline is not None:
+        user_id = getattr(auth_bundle, "user_id", None)
+        owner = f"X user {user_id}" if user_id else "session cookies"
+        pipeline.complete_step(auth_step_key, f"{owner} resolved from {browser}")
     return forced_config, auth_bundle
 
 
@@ -454,50 +486,39 @@ def _with_auto_optimize(store, paths, console: Console, fn):
     return fn(store)
 
 
-def _print_archive_followup(console: Console, result: Any) -> None:
-    if result.reconciled_collections:
-        console.print(
-            "live reconciliation: " + ", ".join(result.reconciled_collections),
-            highlight=False,
-        )
+def _archive_followup_summary(result: Any) -> str:
+    reconciled = ", ".join(getattr(result, "reconciled_collections", [])) or "none"
     pending_untouched = getattr(result, "pending_untouched", result.pending_enrichment)
     transient_due = getattr(result, "transient_due", 0)
     transient_delayed = getattr(result, "transient_delayed", 0)
-    selected = getattr(
-        result,
-        "selected",
-        result.detail_lookups
-        + result.detail_terminal_unavailable
-        + result.detail_transient_failures,
+    return (
+        f"live reconciliation: {reconciled}. detail enrichment: "
+        f"{result.detail_lookups:,} refreshed, "
+        f"{result.detail_terminal_unavailable:,} terminal, "
+        f"{result.detail_transient_failures:,} transient failures, "
+        f"{pending_untouched:,} pending untouched, "
+        f"{transient_due:,} transient due, "
+        f"{transient_delayed:,} transient delayed"
     )
-    if selected == 0 and pending_untouched == 0 and transient_due == 0:
-        console.print("No archive enrichment rows are currently due.", highlight=False)
-        if transient_delayed:
-            console.print(
-                f"{transient_delayed:,} transient failures remain scheduled for later retry.",
-                highlight=False,
-            )
-    console.print(
-        "detail enrichment: "
-        f"{result.detail_lookups} refreshed, "
-        f"{result.detail_terminal_unavailable} terminal, "
-        f"{result.detail_transient_failures} transient failures, "
-        f"{pending_untouched} pending untouched, "
-        f"{transient_due} transient due, "
-        f"{transient_delayed} transient delayed"
-    )
-    for warning in result.warnings:
-        console.print(f"[yellow]{warning}[/yellow]")
 
 
-def _print_archive_enrichment_reminder(console: Console, paths, config) -> None:
-    store = open_archive_store(paths, create=False, config=config)
-    if store is None:
-        return
-    try:
-        print_pending_archive_enrichment_reminder(console, store)
-    finally:
-        store.close()
+def _archive_import_summary(result: Any) -> str:
+    counts = result.counts
+    prefix = "archive import"
+    if result.skipped and result.followup_performed:
+        prefix = (
+            "archive import: already present; keeping existing imported data and running "
+            "follow-up enrichment. Stored totals"
+        )
+    elif result.skipped:
+        prefix = "archive import skipped: already imported. Stored totals"
+    return (
+        f"{prefix}: {counts.get('authored_tweets', 0)} authored, "
+        f"{counts.get('deleted_authored_tweets', 0)} deleted authored, "
+        f"{counts.get('likes', 0)} likes, "
+        f"{counts.get('media_files_copied', 0)} media files copied. "
+        f"{_archive_followup_summary(result)}"
+    )
 
 
 def _run_sync_command(
@@ -506,18 +527,45 @@ def _run_sync_command(
     profile: str | None,
     profile_path: Path | None,
     runner: Callable[[Any, Any, Console], Awaitable[Any]],
+    after: Callable[[Console], None] | None = None,
+    summarize: Callable[[Any], str] | None = None,
 ) -> tuple[Console, Any]:
     console = _configure_logging()
     try:
-        config, _ = load_config()
-        config, auth_bundle = _prepare_auth_override(
-            config,
-            console,
-            browser=browser,
-            profile=profile,
-            profile_path=profile_path,
-        )
-        return console, asyncio.run(runner(config, auth_bundle, console))
+        with PipelineReporter(console, "tweetxvault sync") as pipeline:
+            config, _ = load_config()
+            config, auth_bundle = _prepare_auth_override(
+                config,
+                console,
+                browser=browser,
+                profile=profile,
+                profile_path=profile_path,
+            )
+            result = asyncio.run(runner(config, auth_bundle, console))
+            if after is not None:
+                after(console)
+            errors = getattr(result, "errors", None)
+            if errors:
+                for name, error in errors.items():
+                    pipeline.issue(
+                        f"{str(name).title()} sync failed: {error}",
+                        level="error",
+                        dedupe_key=f"sync:{name}:failure",
+                    )
+                failed = ", ".join(str(name) for name in errors)
+                completed = summarize(result) if summarize is not None else ""
+                summary = f"{completed}. " if completed else ""
+                pipeline.finish(
+                    summary + f"Sync stopped after failure in {failed}.",
+                    success=False,
+                )
+            elif (
+                summarize is not None
+                and not any(step.key.startswith(("preflight:", "sync:")) for step in pipeline.steps)
+                and not pipeline.has_final_note
+            ):
+                pipeline.final_note(summarize(result))
+        return console, result
     except ConfigError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
@@ -583,14 +631,12 @@ def _run_sync_all_command(
             limit,
             followups,
         ),
+        after=_maybe_restart_web,
+        summarize=lambda outcome: "; ".join(
+            f"{item.collection}: {item.pages_fetched} pages, {item.tweets_seen} tweets"
+            for item in outcome.results
+        ),
     )
-    for result in outcome.results:
-        console.print(
-            f"{result.collection}: {result.pages_fetched} pages, {result.tweets_seen} tweets"
-        )
-    for collection, error in outcome.errors.items():
-        console.print(f"{collection}: failed ({error})")
-    _maybe_restart_web(console)
     raise typer.Exit(outcome.exit_code)
 
 
@@ -710,10 +756,10 @@ def _register_sync_collection_command(collection: str):
                 console=runner_console,
                 followups=followups,
             ),
-        )
-        console.print(
-            f"{collection}: {result.pages_fetched} pages, {result.tweets_seen} tweets, "
-            f"{result.stop_reason}"
+            summarize=lambda result: (
+                f"{collection}: {result.pages_fetched} pages, "
+                f"{result.tweets_seen} tweets, {result.stop_reason}"
+            ),
         )
 
     command.__name__ = f"sync_{collection}"
@@ -1091,39 +1137,42 @@ def refresh_archived_articles(
 ) -> None:
     console = _configure_logging()
     try:
-        if all_articles and targets:
-            raise ConfigError("--all cannot be combined with explicit article targets.")
-        config, paths = load_config()
-        config, auth_bundle = _prepare_auth_override(
-            config,
-            console,
-            browser=browser,
-            profile=profile,
-            profile_path=profile_path,
-        )
-        result = asyncio.run(
-            refresh_articles(
-                targets=targets,
-                preview_only=not all_articles,
-                limit=limit,
-                config=config,
-                paths=paths,
-                auth_bundle=auth_bundle,
-                console=console,
+        with PipelineReporter(console, "tweetxvault articles refresh") as pipeline:
+            if all_articles and targets:
+                raise ConfigError("--all cannot be combined with explicit article targets.")
+            config, paths = load_config()
+            config, auth_bundle = _prepare_auth_override(
+                config,
+                console,
+                browser=browser,
+                profile=profile,
+                profile_path=profile_path,
             )
-        )
+            result = asyncio.run(
+                refresh_articles(
+                    targets=targets,
+                    preview_only=not all_articles,
+                    limit=limit,
+                    config=config,
+                    paths=paths,
+                    auth_bundle=auth_bundle,
+                    console=console,
+                )
+            )
+            if not pipeline.has_step("articles"):
+                prefix = "No article rows required refresh. " if result.processed == 0 else ""
+                pipeline.final_note(
+                    prefix + "articles: "
+                    f"{result.processed} processed, "
+                    f"{result.updated} refreshed, "
+                    f"{result.failed} failed"
+                )
     except ConfigError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
     except TweetXVaultError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(2) from exc
-    console.print(
-        "articles: "
-        f"{result.processed} processed, "
-        f"{result.updated} refreshed, "
-        f"{result.failed} failed"
-    )
 
 
 @thread_app.command("expand", help="Expand archived tweet threads via TweetDetail.")
@@ -1154,42 +1203,45 @@ def expand_archive_threads(
 ) -> None:
     console = _configure_logging()
     try:
-        config, paths = load_config()
-        if max_linked_depth is not None:
-            config.sync.max_linked_depth = max_linked_depth
-        config, auth_bundle = _prepare_auth_override(
-            config,
-            console,
-            browser=browser,
-            profile=profile,
-            profile_path=profile_path,
-            debug_auth=debug_auth,
-        )
-        result = asyncio.run(
-            expand_threads(
-                targets=targets,
-                limit=limit,
-                refresh=refresh,
-                config=config,
-                paths=paths,
-                auth_bundle=auth_bundle,
-                auth_status=_auth_status_callback(console, enabled=debug_auth),
-                console=console,
+        with PipelineReporter(console, "tweetxvault threads expand") as pipeline:
+            config, paths = load_config()
+            if max_linked_depth is not None:
+                config.sync.max_linked_depth = max_linked_depth
+            config, auth_bundle = _prepare_auth_override(
+                config,
+                console,
+                browser=browser,
+                profile=profile,
+                profile_path=profile_path,
+                debug_auth=debug_auth,
             )
-        )
+            result = asyncio.run(
+                expand_threads(
+                    targets=targets,
+                    limit=limit,
+                    refresh=refresh,
+                    config=config,
+                    paths=paths,
+                    auth_bundle=auth_bundle,
+                    auth_status=_auth_status_callback(console, enabled=debug_auth),
+                    console=console,
+                )
+            )
+            if not pipeline.has_step("threads"):
+                prefix = "No thread candidates required fetching. " if result.processed == 0 else ""
+                pipeline.final_note(
+                    prefix + "threads: "
+                    f"{result.processed} processed, "
+                    f"{result.expanded} expanded, "
+                    f"{result.skipped} skipped, "
+                    f"{result.failed} failed"
+                )
     except ConfigError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
     except TweetXVaultError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(2) from exc
-    console.print(
-        "threads: "
-        f"{result.processed} processed, "
-        f"{result.expanded} expanded, "
-        f"{result.skipped} skipped, "
-        f"{result.failed} failed"
-    )
 
 
 @view_app.command("bookmarks", help="View bookmarked tweets.")
@@ -1365,7 +1417,7 @@ def import_x_archive_command(
             "--debug",
             help=(
                 "Print detailed archive-import timing diagnostics. Interactive TTY runs already "
-                "show tqdm-based progress bars by default."
+                "show the unified pipeline by default."
             ),
         ),
     ] = False,
@@ -1378,29 +1430,39 @@ def import_x_archive_command(
     config = None
     paths = None
     try:
-        config, paths = load_config()
-        config, auth_bundle = _prepare_auth_override(
-            config,
-            console,
-            browser=browser,
-            profile=profile,
-            profile_path=profile_path,
-            debug_auth=debug_auth,
-        )
-        result = asyncio.run(
-            import_x_archive(
-                archive,
-                regen=regen,
-                enrich=enrich,
-                detail_lookups=detail_lookups,
-                sample_limit=sample_limit,
-                debug=debug,
-                config=config,
-                paths=paths,
-                auth_bundle=auth_bundle,
-                console=console,
+        with PipelineReporter(console, "tweetxvault import x-archive") as pipeline:
+            config, paths = load_config()
+            config, auth_bundle = _prepare_auth_override(
+                config,
+                console,
+                browser=browser,
+                profile=profile,
+                profile_path=profile_path,
+                debug_auth=debug_auth,
             )
-        )
+            result = asyncio.run(
+                import_x_archive(
+                    archive,
+                    regen=regen,
+                    enrich=enrich,
+                    detail_lookups=detail_lookups,
+                    sample_limit=sample_limit,
+                    debug=debug,
+                    config=config,
+                    paths=paths,
+                    auth_bundle=auth_bundle,
+                    console=console,
+                )
+            )
+            if not (result.skipped and not result.followup_performed):
+                _maybe_restart_web(console)
+            if not pipeline.has_step("archive-inspect") and not pipeline.has_final_note:
+                pipeline.final_note(_archive_import_summary(result))
+                for warning in result.warnings:
+                    pipeline.issue(
+                        warning,
+                        dedupe_key=f"archive-import:{warning.split(':', 1)[0]}",
+                    )
     except ArchiveEnrichmentInterrupted as exc:
         console.print("Archive import is complete.", highlight=False)
         console.print("\nArchive enrichment was interrupted.", highlight=False)
@@ -1423,30 +1485,6 @@ def import_x_archive_command(
     except TweetXVaultError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(2) from exc
-
-    if result.skipped and not result.followup_performed:
-        console.print("archive import skipped: already imported")
-        assert config is not None and paths is not None
-        _print_archive_enrichment_reminder(console, paths, config)
-        return
-    if result.skipped:
-        console.print(
-            "archive import: already present; keeping existing imported data "
-            "and running follow-up enrichment",
-            highlight=False,
-        )
-
-    console.print(
-        "archive import: "
-        f"{result.counts.get('authored_tweets', 0)} authored, "
-        f"{result.counts.get('deleted_authored_tweets', 0)} deleted authored, "
-        f"{result.counts.get('likes', 0)} likes, "
-        f"{result.counts.get('media_files_copied', 0)} media files copied"
-    )
-    _print_archive_followup(console, result)
-    assert config is not None and paths is not None
-    _print_archive_enrichment_reminder(console, paths, config)
-    _maybe_restart_web(console)
 
 
 @import_app.command(
@@ -1472,24 +1510,35 @@ def import_archive_enrich(
 ) -> None:
     console = _configure_logging()
     try:
-        config, paths = load_config()
-        config, auth_bundle = _prepare_auth_override(
-            config,
-            console,
-            browser=browser,
-            profile=profile,
-            profile_path=profile_path,
-            debug_auth=debug_auth,
-        )
-        result = asyncio.run(
-            enrich_imported_archive(
-                limit=limit,
-                config=config,
-                paths=paths,
-                auth_bundle=auth_bundle,
-                console=console,
+        with PipelineReporter(console, "tweetxvault import enrich") as pipeline:
+            config, paths = load_config()
+            config, auth_bundle = _prepare_auth_override(
+                config,
+                console,
+                browser=browser,
+                profile=profile,
+                profile_path=profile_path,
+                debug_auth=debug_auth,
             )
-        )
+            result = asyncio.run(
+                enrich_imported_archive(
+                    limit=limit,
+                    config=config,
+                    paths=paths,
+                    auth_bundle=auth_bundle,
+                    console=console,
+                )
+            )
+            if not pipeline.has_step("archive-enrich") and not pipeline.has_final_note:
+                pipeline.final_note(
+                    "archive enrich: existing imported archive data. "
+                    + _archive_followup_summary(result)
+                )
+                for warning in result.warnings:
+                    pipeline.issue(
+                        warning,
+                        dedupe_key=f"archive-enrich:{warning.split(':', 1)[0]}",
+                    )
     except ArchiveEnrichmentInterrupted as exc:
         console.print("Archive enrichment was interrupted.", highlight=False)
         console.print(f"{exc.remaining:,} tweets remain incomplete.", highlight=False)
@@ -1506,10 +1555,6 @@ def import_archive_enrich(
     except TweetXVaultError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(2) from exc
-
-    console.print("archive enrich: existing imported archive data", highlight=False)
-    _print_archive_followup(console, result)
-    _print_archive_enrichment_reminder(console, paths, config)
 
 
 @repair_app.command(
@@ -1586,30 +1631,33 @@ def media_download(
 ) -> None:
     console = _configure_logging()
     try:
-        config, paths = load_config()
-        result = asyncio.run(
-            download_media(
-                limit=limit,
-                photos_only=photos_only,
-                retry_failed=retry_failed,
-                config=config,
-                paths=paths,
-                console=console,
+        with PipelineReporter(console, "tweetxvault media download") as pipeline:
+            config, paths = load_config()
+            result = asyncio.run(
+                download_media(
+                    limit=limit,
+                    photos_only=photos_only,
+                    retry_failed=retry_failed,
+                    config=config,
+                    paths=paths,
+                    console=console,
+                )
             )
-        )
+            if not pipeline.steps:
+                prefix = "No media files require download. " if result.processed == 0 else ""
+                pipeline.final_note(
+                    prefix + "media: "
+                    f"{result.processed} processed, "
+                    f"{result.downloaded} downloaded, "
+                    f"{result.skipped} skipped, "
+                    f"{result.failed} failed"
+                )
     except ConfigError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
     except TweetXVaultError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(2) from exc
-    console.print(
-        "media: "
-        f"{result.processed} processed, "
-        f"{result.downloaded} downloaded, "
-        f"{result.skipped} skipped, "
-        f"{result.failed} failed"
-    )
 
 
 @app.command("unfurl", help="Fetch canonical URL metadata for saved links.")
@@ -1619,25 +1667,29 @@ def unfurl_archive(
 ) -> None:
     console = _configure_logging()
     try:
-        config, paths = load_config()
-        result = asyncio.run(
-            unfurl_urls(
-                limit=limit,
-                retry_failed=retry_failed,
-                config=config,
-                paths=paths,
-                console=console,
+        with PipelineReporter(console, "tweetxvault unfurl") as pipeline:
+            config, paths = load_config()
+            result = asyncio.run(
+                unfurl_urls(
+                    limit=limit,
+                    retry_failed=retry_failed,
+                    config=config,
+                    paths=paths,
+                    console=console,
+                )
             )
-        )
+            if not pipeline.steps:
+                prefix = "No saved URLs require metadata. " if result.processed == 0 else ""
+                pipeline.final_note(
+                    prefix + f"unfurl: {result.processed} processed, "
+                    f"{result.updated} updated, {result.failed} failed"
+                )
     except ConfigError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
     except TweetXVaultError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(2) from exc
-    console.print(
-        f"unfurl: {result.processed} processed, {result.updated} updated, {result.failed} failed"
-    )
 
 
 @app.command("tag", help="Use Gemini to generate search tags and descriptions for media tweets.")
@@ -1686,6 +1738,21 @@ def tag_archive(
         async def run_tagging() -> TaggingRunResult:
             async with locked_archive_job(config=config, paths=paths, console=console) as job:
                 if tweet_id is not None:
+                    pipeline = current_pipeline()
+                    if pipeline is not None:
+                        pipeline.add_step(
+                            "tagging",
+                            "Tagging",
+                            total=1,
+                            unit="tweet",
+                            detail=f"explicit target · {model or config.tagging.model}",
+                            show_eta=False,
+                        )
+                        pipeline.start_step(
+                            "tagging",
+                            activity=f"Generating media tags for tweet {tweet_id}",
+                            counters="0 processed · 0 tagged",
+                        )
                     tagged = await tag_media_tweets(
                         store=job.store,
                         config=config,
@@ -1695,6 +1762,15 @@ def tag_archive(
                         model_override=model,
                         dry_run=test,
                     )
+                    if pipeline is not None:
+                        summary = f"1 processed · {tagged} tagged" + (
+                            " · test mode, not saved" if test else ""
+                        )
+                        pipeline.complete_step(
+                            "tagging",
+                            summary,
+                            counters=summary,
+                        )
                     return TaggingRunResult(processed=1, tagged=tagged, batches=1)
 
                 return await tag_pending_media_tweets(
@@ -1708,11 +1784,15 @@ def tag_archive(
                     dry_run=test,
                 )
 
-        result = asyncio.run(run_tagging())
-        if result.processed == 0:
-            console.print("No eligible untagged media tweets found.")
-        elif not test:
-            console.print(f"tag: {result.processed} processed, {result.tagged} tagged")
+        with PipelineReporter(console, "tweetxvault tag") as pipeline:
+            result = asyncio.run(run_tagging())
+            if not pipeline.steps:
+                if result.processed == 0:
+                    pipeline.final_note("No eligible untagged media tweets found.")
+                elif not test:
+                    pipeline.final_note(
+                        f"tag: {result.processed} processed, {result.tagged} tagged"
+                    )
     except ConfigError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
@@ -2051,9 +2131,36 @@ def _maybe_restart_web(console: Console) -> None:
         return
     if not config.web.auto_start:
         return
+    pipeline = current_pipeline()
+    step_key = "web-restart"
+    if pipeline is not None:
+        pipeline.add_step(
+            step_key,
+            "Web server",
+            total=1,
+            unit="restart",
+            detail=f"auto-start enabled · http://{config.web.host}:{config.web.port}",
+            show_rate=False,
+            show_eta=False,
+        )
+        pipeline.start_step(
+            step_key,
+            activity="Restarting the local archive web server",
+        )
     try:
         from tweetxvault.cli_web import _get_pid_file, _is_running
-    except ImportError:
+    except ImportError as exc:
+        if pipeline is not None:
+            message = "Web auto-start is enabled, but Web dependencies are unavailable."
+            pipeline.fail_step(step_key, message)
+            pipeline.issue(
+                f"{message} {exc}",
+                dedupe_key="web-restart:missing-dependency",
+            )
+        else:
+            console.print(
+                "[yellow]Web auto-start is enabled, but Web dependencies are unavailable.[/yellow]"
+            )
         return
 
     import os
@@ -2066,7 +2173,10 @@ def _maybe_restart_web(console: Console) -> None:
             pid = int(pid_file.read_text().strip())
             if _is_running(pid):
                 os.kill(pid, signal.SIGTERM)
-                console.print("[dim]Stopping web server for restart...[/dim]")
+                if pipeline is not None:
+                    pipeline.status(step_key, "Stopping the existing web server")
+                else:
+                    console.print("[dim]Stopping web server for restart...[/dim]")
                 import time
 
                 for _ in range(50):
@@ -2097,9 +2207,16 @@ def _maybe_restart_web(console: Console) -> None:
     )
     pid_file.write_text(str(process.pid))
     web = config.web
-    console.print(
-        f"[green]Web server restarted on http://{web.host}:{web.port} (PID: {process.pid})[/green]"
-    )
+    if pipeline is not None:
+        pipeline.complete_step(
+            step_key,
+            f"restarted on http://{web.host}:{web.port} · PID {process.pid}",
+        )
+    else:
+        console.print(
+            f"[green]Web server restarted on http://{web.host}:{web.port} "
+            f"(PID: {process.pid})[/green]"
+        )
 
 
 @app.command()

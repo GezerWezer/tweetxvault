@@ -11,6 +11,18 @@ Hard constraints:
 
 Definition of done: passes `uv run ruff format --check`, `uv run ruff check`, and `uv run pytest`.
 
+## Unified pipeline CLI (2026-08-02)
+
+- [x] Audit sync, archive import/enrichment, follow-up workers, terminal output, and
+  unattended execution paths.
+- [x] Define a shared semantic reporter with a live TTY pipeline and plain bounded service logs.
+- [x] Implement the shared renderer, command-lifecycle spinner, issue sidebar, and log throttling.
+- [x] Add only work-backed dynamic steps with truthful progress totals, rates, and ETAs.
+- [x] Integrate sync, archive import/enrichment, threads, resurrection, articles, media, URLs,
+  and conditional tagging without nested progress output.
+- [x] Update CLI documentation and add interactive, non-TTY, conditional-step, and regression tests.
+- [x] Pass focused and full repository validation.
+
 ## Web archive availability and storage clarity (2026-08-02)
 
 - [x] Add an Archive overview card for missing imported tweets and their archive percentage.
