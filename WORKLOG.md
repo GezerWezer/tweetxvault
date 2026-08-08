@@ -1,3 +1,17 @@
+- 2026-08-08 (JSON-only export surface)
+  - Removed the standalone HTML archive exporter, the `export html` CLI command, package exports,
+    tests, and active documentation; JSON remains the sole file-export format.
+  - Full pytest, repository-wide Ruff, scoped Ruff format, CLI help, and diff validation pass.
+
+- 2026-08-08 (Explicit Web server lifecycle)
+  - Removed `web.auto_start` from configuration, the Web settings schema, sync/import pipeline
+    planning, and all automatic restart hooks.
+  - Added `tweetxvault web restart`, preserving start/stop validation and refusing to stop a
+    running server when dependencies or the archive database are unavailable.
+  - User-facing Web URLs now translate wildcard bind addresses to reachable device addresses
+    without changing the actual server bind host.
+  - Full pytest, repository-wide Ruff, scoped Ruff format, and diff validation pass.
+
 - 2026-08-08 (Unified pipeline CLI follow-up)
   - Restored total command elapsed time in the header and right-aligned elapsed time on completed
     steps while retaining the no-overall-ETA policy.

@@ -60,7 +60,6 @@ class WebConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     password_hash: str | None = None
-    auto_start: bool = False
     host: str = Field(default="127.0.0.1", min_length=1)
     port: int = Field(default=8000, ge=1, le=65535)
     fetch_avatars: bool = True
@@ -277,7 +276,6 @@ def get_config_ui_schema() -> dict[str, Any]:
             "auth.auth_token",
             "auth.ct0",
             "auth.user_id",
-            "web.auto_start",
             "web.fetch_avatars",
             "web.host",
             "web.port",
@@ -334,7 +332,6 @@ def get_config_ui_schema() -> dict[str, Any]:
             "sync.cooldown_duration": "Cooldown Duration (s)",
             "sync.timeout": "Timeout (s)",
             "sync.max_linked_depth": "Max Linked Depth",
-            "web.auto_start": "Auto-Start Server",
             "web.host": "Host",
             "web.port": "Port",
             "web.fetch_avatars": "Fetch Avatars locally",
@@ -387,9 +384,6 @@ def get_config_ui_schema() -> dict[str, Any]:
             "sync.timeout": "How many seconds to wait before giving up on a slow network request.",
             "sync.max_linked_depth": (
                 "How deep to go when fetching nested tweet replies or quoted links."
-            ),
-            "web.auto_start": (
-                "Automatically start the Web UI in the background after running sync commands."
             ),
             "web.fetch_avatars": "Automatically download and cache user profile pictures.",
             "web.host": "The IP address the Web UI runs on (default is 127.0.0.1 for local only).",

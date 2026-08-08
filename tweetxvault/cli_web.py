@@ -13,6 +13,7 @@ import typer
 from rich.console import Console
 
 from tweetxvault.config import load_config, save_app_config
+from tweetxvault.web.address import display_web_url
 
 web_app = typer.Typer(no_args_is_help=True, help="Manage the background web UI server.")
 
@@ -85,18 +86,23 @@ def _running_pid(pid_file: Path, port: int) -> int | None:
     return None
 
 
+def _require_archive_database(console: Console, database_path: Path) -> None:
+    if database_path.is_file():
+        return
+    console.print(
+        "[red]Archive database not found. Sync or import an archive before starting "
+        "the web server.[/red]"
+    )
+    raise typer.Exit(1)
+
+
 @web_app.command("start", help="Start the background web server.")
 def start_web() -> None:
     console = Console()
     _require_web_dependencies(console)
     config, paths = load_config()
 
-    if not paths.database_path.is_file():
-        console.print(
-            "[red]Archive database not found. Sync or import an archive before starting "
-            "the web server.[/red]"
-        )
-        raise typer.Exit(1)
+    _require_archive_database(console, paths.database_path)
 
     pid_file = _get_pid_file(paths.data_dir)
     recorded_pid = _read_pid(pid_file)
@@ -126,7 +132,7 @@ def start_web() -> None:
         console.print(f"[red]WARNING: Using default password '{default_password}'.[/red]")
         console.print("[yellow]Please change it using: tweetxvault web set-password[/yellow]")
 
-    console.print(f"Starting web server on http://{web_config.host}:{web_config.port} ...")
+    console.print(f"Starting web server on {display_web_url(web_config.host, web_config.port)} ...")
 
     command = [sys.executable, "-m", "tweetxvault", "serve-daemon"]
     try:
@@ -185,13 +191,23 @@ def stop_web() -> None:
         pid_file.unlink(missing_ok=True)
 
 
+@web_app.command("restart", help="Restart the background web server.")
+def restart_web() -> None:
+    console = Console()
+    _require_web_dependencies(console)
+    _, paths = load_config()
+    _require_archive_database(console, paths.database_path)
+    stop_web()
+    start_web()
+
+
 @web_app.command("status", help="Check if the background web server is running.")
 def status_web() -> None:
     console = Console()
     config, paths = load_config()
     pid_file = _get_pid_file(paths.data_dir)
     web_config = config.web
-    url = f"http://{web_config.host}:{web_config.port}"
+    url = display_web_url(web_config.host, web_config.port)
     pid = _running_pid(pid_file, web_config.port)
 
     if pid is not None:

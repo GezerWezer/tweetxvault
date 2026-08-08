@@ -173,6 +173,15 @@ def test_sync_likes_help_describes_flags() -> None:
     assert "Maximum number of pages to fetch" in result.stdout
 
 
+def test_export_help_only_lists_json() -> None:
+    result = runner.invoke(cli.app, ["export", "--help"])
+
+    assert result.exit_code == 0
+    assert "json" in result.stdout
+    assert "Export the archive as JSON." in result.stdout
+    assert "html" not in result.stdout.lower()
+
+
 def test_import_x_archive_help_describes_sample_limit() -> None:
     result = runner.invoke(cli.app, ["import", "x-archive", "--help"])
 
@@ -446,23 +455,6 @@ def test_export_json_accepts_tweets_collection_name(paths, monkeypatch, tmp_path
     payload = json.loads(out_path.read_text(encoding="utf-8"))
     assert [row["tweet_id"] for row in payload] == ["3"]
     assert "exported tweets archive" in buffer.getvalue()
-
-
-def test_export_html_creates_viewer(paths, monkeypatch, tmp_path: Path) -> None:
-    _seed_archive(paths)
-    buffer = StringIO()
-    _capture_console(monkeypatch, buffer)
-    monkeypatch.setattr(cli, "load_config", lambda: (AppConfig(), paths))
-    out_path = tmp_path / "bookmarks.html"
-
-    cli.export_html(collection="bookmarks", out=out_path)
-
-    html = out_path.read_text(encoding="utf-8")
-    assert "tweetxvault export: bookmarks" in html
-    assert "bookmark tweet" in html
-    assert "like tweet" not in html
-    assert "open on X" in html
-    assert "exported bookmarks archive" in buffer.getvalue()
 
 
 def test_auth_check_interactive_uses_selected_browser(paths, monkeypatch) -> None:

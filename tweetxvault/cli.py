@@ -36,7 +36,7 @@ from tweetxvault.auth import (
 )
 from tweetxvault.config import ensure_paths, load_config
 from tweetxvault.exceptions import ConfigError, ProcessLockError, TweetXVaultError
-from tweetxvault.export import export_html_archive, export_json_archive
+from tweetxvault.export import export_json_archive
 from tweetxvault.export.common import (
     default_export_path,
     display_collection_name,
@@ -430,7 +430,6 @@ def _plan_auth_override_step(
 def _plan_archive_import_pipeline(
     pipeline: PipelineReporter,
     *,
-    config: Any,
     browser: str | None,
     profile: str | None,
     profile_path: Path | None,
@@ -510,16 +509,6 @@ def _plan_archive_import_pipeline(
                 detail="stable snapshot of eligible sparse archive tweets",
                 rate_unit="tweets/s",
             )
-    if config.web.auto_start:
-        pipeline.add_step(
-            "web-restart",
-            "Web server",
-            total=1,
-            unit="restart",
-            detail=f"auto-start enabled · http://{config.web.host}:{config.web.port}",
-            show_rate=False,
-            show_eta=False,
-        )
 
 
 def _normalize_collection_or_exit(collection: str, console: Console) -> str:
@@ -647,7 +636,6 @@ def _run_sync_command(
     collections: tuple[str, ...],
     followups: SyncFollowupPlan,
     head_only: bool,
-    after: Callable[[Console], None] | None = None,
     summarize: Callable[[Any], str] | None = None,
 ) -> tuple[Console, Any]:
     console = _configure_logging()
@@ -661,7 +649,6 @@ def _run_sync_command(
                 followups=followups,
                 head_only=head_only,
                 browser_override=browser is not None,
-                restart_web=after is not None,
             )
             config, auth_bundle = _prepare_auth_override(
                 config,
@@ -671,8 +658,6 @@ def _run_sync_command(
                 profile_path=profile_path,
             )
             result = asyncio.run(runner(config, auth_bundle, console))
-            if after is not None:
-                after(console)
             errors = getattr(result, "errors", None)
             if errors:
                 for name, error in errors.items():
@@ -759,7 +744,6 @@ def _run_sync_all_command(
             limit,
             followups,
         ),
-        after=_maybe_restart_web,
         summarize=lambda outcome: "; ".join(
             f"{item.collection}: {item.pages_fetched} pages, {item.tweets_seen} tweets"
             for item in outcome.results
@@ -1452,31 +1436,6 @@ def export_json(
     console.print(f"exported {display_collection_name(normalized)} archive to {out_path}")
 
 
-@export_app.command("html", help="Export the archive as HTML.")
-def export_html(
-    collection: EXPORT_COLLECTION_OPTION = "all",
-    out: EXPORT_OUT_OPTION = None,
-) -> None:
-    console = _configure_logging()
-    normalized = _normalize_collection_or_exit(collection, console)
-    store, paths = _open_store_for_read(console)
-    try:
-        out_path = out or default_export_path(
-            paths.data_dir / "exports",
-            normalized,
-            extension="html",
-        )
-        _with_auto_optimize(
-            store,
-            paths,
-            console,
-            lambda s: export_html_archive(s, collection=normalized, out_path=out_path),
-        )
-    finally:
-        store.close()
-    console.print(f"exported {display_collection_name(normalized)} archive to {out_path}")
-
-
 @import_app.command("grailbird")
 def import_grailbird_command(
     input_dir: Annotated[Path, typer.Argument(help="Path to the old Grailbird archive directory.")],
@@ -1593,7 +1552,6 @@ def import_x_archive_command(
             config, paths = load_config()
             _plan_archive_import_pipeline(
                 pipeline,
-                config=config,
                 browser=browser,
                 profile=profile,
                 profile_path=profile_path,
@@ -1624,10 +1582,6 @@ def import_x_archive_command(
                     console=console,
                 )
             )
-            if not (result.skipped and not result.followup_performed):
-                _maybe_restart_web(console)
-            elif pipeline.has_step("web-restart"):
-                pipeline.skip_step("web-restart", "the archive already being current")
             if pipeline.step_state("archive-inspect") == "pending" and not pipeline.has_final_note:
                 pipeline.final_note(_archive_import_summary(result))
                 for warning in result.warnings:
@@ -2345,102 +2299,6 @@ def serve_daemon_internal() -> None:
 
     web = config.web
     run_server(config, paths, web.host, web.port, web.password_hash)
-
-
-def _maybe_restart_web(console: Console) -> None:
-    """Restart the web server after sync if auto_start is enabled."""
-    try:
-        config, paths = load_config()
-    except Exception:
-        return
-    if not config.web.auto_start:
-        return
-    pipeline = current_pipeline()
-    step_key = "web-restart"
-    if pipeline is not None:
-        pipeline.add_step(
-            step_key,
-            "Web server",
-            total=1,
-            unit="restart",
-            detail=f"auto-start enabled · http://{config.web.host}:{config.web.port}",
-            show_rate=False,
-            show_eta=False,
-        )
-        pipeline.start_step(
-            step_key,
-            activity="Restarting the local archive web server",
-        )
-    try:
-        from tweetxvault.cli_web import _get_pid_file, _is_running
-    except ImportError as exc:
-        if pipeline is not None:
-            message = "Web auto-start is enabled, but Web dependencies are unavailable."
-            pipeline.fail_step(step_key, message)
-            pipeline.issue(
-                f"{message} {exc}",
-                dedupe_key="web-restart:missing-dependency",
-            )
-        else:
-            console.print(
-                "[yellow]Web auto-start is enabled, but Web dependencies are unavailable.[/yellow]"
-            )
-        return
-
-    import os
-    import signal
-
-    pid_file = _get_pid_file(paths.data_dir)
-    # Stop existing server if running
-    if pid_file.exists():
-        try:
-            pid = int(pid_file.read_text().strip())
-            if _is_running(pid):
-                os.kill(pid, signal.SIGTERM)
-                if pipeline is not None:
-                    pipeline.status(step_key, "Stopping the existing web server")
-                else:
-                    console.print("[dim]Stopping web server for restart...[/dim]")
-                import time
-
-                for _ in range(50):
-                    if not _is_running(pid):
-                        break
-                    time.sleep(0.1)
-                else:
-                    # Still running after 5 seconds, force kill
-                    try:
-                        os.kill(pid, signal.SIGKILL)
-                        time.sleep(0.5)
-                    except OSError:
-                        pass
-        except (ValueError, ProcessLookupError):
-            pass
-        finally:
-            if pid_file.exists():
-                pid_file.unlink()
-
-    # Start fresh
-    cmd = [sys.executable, "-m", "tweetxvault", "serve-daemon"]
-    process = subprocess.Popen(
-        cmd,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
-    pid_file.write_text(str(process.pid))
-    web = config.web
-    if pipeline is not None:
-        pipeline.complete_step(
-            step_key,
-            f"restarted on http://{web.host}:{web.port} · PID {process.pid}",
-        )
-    else:
-        console.print(
-            f"[green]Web server restarted on http://{web.host}:{web.port} "
-            f"(PID: {process.pid})[/green]"
-        )
 
 
 @app.command()

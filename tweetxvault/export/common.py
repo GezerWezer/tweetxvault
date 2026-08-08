@@ -39,14 +39,3 @@ def default_export_path(base_dir: Path, collection: str, *, extension: str) -> P
     stamp = datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%SZ")
     label = display_collection_name(collection)
     return base_dir / f"export-{label}-{stamp}.{extension}"
-
-
-def tweet_url(row: dict[str, object]) -> str:
-    author = row.get("author")
-    username = None
-    if isinstance(author, dict):
-        username = author.get("username")
-    tweet_id = row.get("tweet_id")
-    if isinstance(username, str) and username and isinstance(tweet_id, str) and tweet_id:
-        return f"https://x.com/{username}/status/{tweet_id}"
-    return f"https://x.com/i/web/status/{tweet_id or ''}"

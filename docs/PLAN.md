@@ -33,7 +33,7 @@ This is part of the broader [attention-export](~/github/lhl/attention-export) sy
 
 - Playwright-based scraping CLI (we will keep the architecture ready for it, but not implement it now)
 - Media downloads
-- HTML export UI
+- Additional file-export formats beyond JSON
 - Extended collections (tweets/reposts/replies/feed) beyond likes/bookmarks
 - Multi-account support
 - Additional archive-import follow-up work beyond the shipped importer (perf/cleanup items are tracked below)
@@ -594,7 +594,6 @@ tweetxvault view likes                # show recent likes in the terminal
 tweetxvault view tweets               # show your authored tweets in the terminal
 
 tweetxvault export json               # (phase 2+) export all collections
-tweetxvault export html               # export a local HTML viewer
 tweetxvault media download            # fetch archived media files
 tweetxvault unfurl                    # fetch final/canonical URL metadata
 tweetxvault articles refresh          # refresh article-bearing tweets via TweetDetail
@@ -647,7 +646,6 @@ Reserved for future (not implemented in MVP):
 
 - [x] Export: JSON
 - [x] Terminal view command
-- [x] HTML export viewer
 - [ ] Export: CSV / Markdown
 - [x] Add canonical `tweet_object` rows alongside collection-scoped membership rows
 - [x] Extract media metadata to DB (types, dimensions, variants, note-tweet text)
@@ -672,7 +670,6 @@ Reserved for future (not implemented in MVP):
 - [x] Articles capture / export (`UserArticlesTweets` + article-bearing tweet payloads)
 - [ ] URL snapshot queue / ArchiveBox integration
 - [ ] Following/followers lists
-- [x] HTML export viewer
 - [x] X archive import (`tweetxvault import x-archive ...`)
   - Remaining follow-up work is tracked in the archive-import section above.
 - [ ] attention-export integration

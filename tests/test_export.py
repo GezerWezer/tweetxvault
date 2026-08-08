@@ -11,7 +11,7 @@ from tests.conftest import (
     make_video_media,
 )
 from tweetxvault.client.timelines import TimelineTweet
-from tweetxvault.export import export_html_archive, export_json_archive
+from tweetxvault.export import export_json_archive
 from tweetxvault.storage import open_archive_store
 
 
@@ -104,20 +104,3 @@ def test_export_json_includes_article_media_and_urls(paths, tmp_path: Path) -> N
     assert row["article"]["content_text"] == "Article body"
     assert row["article"]["media"][0]["source"] == "article_cover"
     assert row["urls"][0]["resolved"]["canonical_url"] == "https://example.com/story?keep=1"
-
-
-def test_export_html_renders_article_body_and_media(paths, tmp_path: Path) -> None:
-    _seed_archive(paths)
-    store = open_archive_store(paths, create=False)
-    assert store is not None
-    try:
-        out_path = tmp_path / "archive.html"
-        export_html_archive(store, collection="bookmark", out_path=out_path)
-    finally:
-        store.close()
-
-    html = out_path.read_text(encoding="utf-8")
-    assert "Article title" in html
-    assert "Article body" in html
-    assert "example.com/story" in html
-    assert "media-grid" in html

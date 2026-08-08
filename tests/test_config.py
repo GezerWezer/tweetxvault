@@ -196,6 +196,14 @@ def test_save_app_config_round_trips_defaults_and_escaped_strings(paths: XDGPath
     assert "[database]" in paths.config_file.read_text(encoding="utf-8")
 
 
+def test_legacy_web_auto_start_setting_is_ignored_and_not_exposed() -> None:
+    config = AppConfig.model_validate({"web": {"auto_start": True}})
+
+    assert "auto_start" not in WebConfig.model_fields
+    assert "auto_start" not in config.web.model_dump()
+    assert "web.auto_start" not in get_config_ui_schema()["whitelist"]
+
+
 def test_config_ui_schema_only_references_real_fields_and_masks_secrets() -> None:
     schema = get_config_ui_schema()
     config_dump = AppConfig().model_dump()

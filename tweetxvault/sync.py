@@ -123,7 +123,6 @@ def plan_sync_pipeline(
     followups: SyncFollowupPlan | None,
     head_only: bool,
     browser_override: bool = False,
-    restart_web: bool = False,
 ) -> None:
     """Declare the complete flag-relevant sync lifecycle before any work begins."""
 
@@ -194,16 +193,6 @@ def plan_sync_pipeline(
                 show_rate=False,
                 show_eta=False,
             )
-    if restart_web and config.web.auto_start:
-        pipeline.add_step(
-            "web-restart",
-            "Web server",
-            total=1,
-            unit="restart",
-            detail=f"auto-start enabled · http://{config.web.host}:{config.web.port}",
-            show_rate=False,
-            show_eta=False,
-        )
 
 
 class ProcessLock:

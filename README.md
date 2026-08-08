@@ -371,6 +371,9 @@ uv run tweetxvault web start
 # Check if the server is running and see its URL
 uv run tweetxvault web status
 
+# Restart the background server
+uv run tweetxvault web restart
+
 # Stop the background server
 uv run tweetxvault web stop
 
@@ -382,13 +385,10 @@ By default, the server runs on `http://127.0.0.1:8000` with the default password
 
 When browsing the web UI, tweetxvault will automatically fetch user avatars directly from Twitter as needed, saving them to `media/avatars`. If you prefer to browse fully offline or want to save space, you can disable this behavior. 
 
-If you want the web server to automatically restart and load new data whenever you finish a sync, you can enable `auto_start`.
-
-To configure auto-start, custom ports, or avatar fetching, add a `[web]` section to your `config.toml`:
+To configure custom ports or avatar fetching, add a `[web]` section to your `config.toml`:
 
 ```toml
 [web]
-auto_start = true
 host = "127.0.0.1"
 port = 8000
 fetch_avatars = true
@@ -442,14 +442,9 @@ uv run tweetxvault export json --collection tweets
 
 # Export to a specific path
 uv run tweetxvault export json --out ~/exports/my-bookmarks.json
-
-# Export as a self-contained HTML viewer
-uv run tweetxvault export html
-uv run tweetxvault export html --collection likes --out ~/exports/likes.html
 ```
 
 JSON exports now include normalized `media`, `urls`, and `article` sections alongside each exported tweet row.
-HTML exports now render tweet media, URL metadata, and full article bodies when those rows exist in the archive.
 
 ### Media + URL Enrichment
 

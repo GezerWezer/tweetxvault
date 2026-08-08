@@ -12,6 +12,7 @@ from typer.testing import CliRunner
 
 import tweetxvault.cli as cli
 import tweetxvault.cli_web as cli_web
+import tweetxvault.web.address as web_address
 from tweetxvault.config import AppConfig, XDGPaths
 
 runner = CliRunner()
@@ -37,6 +38,28 @@ def _stub_start_prerequisites(monkeypatch, config: AppConfig, paths: XDGPaths) -
 
 def test_pid_file_uses_hidden_file_in_data_directory(tmp_path: Path) -> None:
     assert cli_web._get_pid_file(tmp_path) == tmp_path / ".web.pid"
+
+
+def test_display_web_url_uses_device_ip_for_ipv4_wildcard(monkeypatch) -> None:
+    monkeypatch.setattr(
+        web_address,
+        "_discover_device_address",
+        lambda family: "192.168.1.42" if family == web_address.socket.AF_INET else None,
+    )
+
+    assert web_address.display_web_url("0.0.0.0", 9123) == "http://192.168.1.42:9123"
+
+
+def test_display_web_url_preserves_concrete_hosts_and_formats_ipv6() -> None:
+    assert web_address.display_web_url("127.0.0.1", 8000) == "http://127.0.0.1:8000"
+    assert web_address.display_web_url("archive.local", 8000) == "http://archive.local:8000"
+    assert web_address.display_web_url("::1", 8000) == "http://[::1]:8000"
+
+
+def test_display_web_url_uses_loopback_when_device_ip_is_unavailable(monkeypatch) -> None:
+    monkeypatch.setattr(web_address, "_discover_device_address", lambda _family: None)
+
+    assert web_address.display_web_url("0.0.0.0", 8000) == "http://127.0.0.1:8000"
 
 
 @pytest.mark.parametrize(
@@ -330,6 +353,29 @@ def test_start_with_secure_password_does_not_warn_or_save(monkeypatch, tmp_path:
     assert "WARNING" not in result.stdout
 
 
+def test_start_displays_device_ip_for_ipv4_wildcard(monkeypatch, tmp_path: Path) -> None:
+    config, paths = _configured(tmp_path, archive=True)
+    config.web.host = "0.0.0.0"
+    config.web.password_hash = hashlib.sha256(b"secure").hexdigest()
+    _stub_start_prerequisites(monkeypatch, config, paths)
+    monkeypatch.setattr(
+        cli_web,
+        "display_web_url",
+        lambda host, port: f"http://192.168.1.42:{port}" if host == "0.0.0.0" else "",
+    )
+    monkeypatch.setattr(
+        cli_web.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: SimpleNamespace(pid=4),
+    )
+
+    result = runner.invoke(cli_web.web_app, ["start"])
+
+    assert result.exit_code == 0
+    assert "Starting web server on http://192.168.1.42:8000" in result.stdout
+    assert "0.0.0.0" not in result.stdout
+
+
 def test_start_reports_subprocess_failure(monkeypatch, tmp_path: Path) -> None:
     config, paths = _configured(tmp_path, archive=True)
     config.web.password_hash = hashlib.sha256(b"secure").hexdigest()
@@ -422,12 +468,18 @@ def test_status_reports_recorded_running_server(monkeypatch, tmp_path: Path) -> 
         "_find_pid_by_port",
         lambda _port: pytest.fail("recorded PID is running"),
     )
+    monkeypatch.setattr(
+        cli_web,
+        "display_web_url",
+        lambda host, port: f"http://192.168.1.42:{port}" if host == "0.0.0.0" else "",
+    )
 
     result = runner.invoke(cli_web.web_app, ["status"])
 
     assert result.exit_code == 0
     assert "running (PID: 123)" in result.stdout
-    assert "URL: http://0.0.0.0:9123" in result.stdout
+    assert "URL: http://192.168.1.42:9123" in result.stdout
+    assert "0.0.0.0" not in result.stdout
 
 
 @pytest.mark.parametrize("pid_content", [None, "invalid", "-1", "123"])
@@ -571,6 +623,45 @@ def test_stop_reports_signal_error_with_nonzero_exit(monkeypatch, tmp_path: Path
     assert not pid_file.exists()
 
 
+def test_restart_preflights_then_stops_and_starts(monkeypatch, tmp_path: Path) -> None:
+    config, paths = _configured(tmp_path, archive=True)
+    calls: list[str] = []
+    monkeypatch.setattr(
+        cli_web,
+        "_require_web_dependencies",
+        lambda _console: calls.append("dependencies"),
+    )
+    monkeypatch.setattr(cli_web, "load_config", lambda: (config, paths))
+    monkeypatch.setattr(cli_web, "stop_web", lambda: calls.append("stop"))
+    monkeypatch.setattr(cli_web, "start_web", lambda: calls.append("start"))
+
+    result = runner.invoke(cli_web.web_app, ["restart"])
+
+    assert result.exit_code == 0
+    assert calls == ["dependencies", "stop", "start"]
+
+
+def test_restart_does_not_stop_when_archive_is_missing(monkeypatch, tmp_path: Path) -> None:
+    config, paths = _configured(tmp_path)
+    monkeypatch.setattr(cli_web, "_require_web_dependencies", lambda _console: None)
+    monkeypatch.setattr(cli_web, "load_config", lambda: (config, paths))
+    monkeypatch.setattr(
+        cli_web,
+        "stop_web",
+        lambda: pytest.fail("restart must validate before stopping the server"),
+    )
+    monkeypatch.setattr(
+        cli_web,
+        "start_web",
+        lambda: pytest.fail("restart must not start without an archive"),
+    )
+
+    result = runner.invoke(cli_web.web_app, ["restart"])
+
+    assert result.exit_code == 1
+    assert "Archive database not found" in result.stdout
+
+
 def test_set_password_hashes_and_persists_value(monkeypatch, tmp_path: Path) -> None:
     config, paths = _configured(tmp_path)
     saved: list[tuple[XDGPaths, AppConfig]] = []
@@ -655,13 +746,15 @@ def test_web_cli_help_lists_daemon_commands_and_descriptions() -> None:
     assert "Start the background web server." in result.stdout
     assert "stop" in result.stdout
     assert "Stop the background web server." in result.stdout
+    assert "restart" in result.stdout
+    assert "Restart the background web server." in result.stdout
     assert "status" in result.stdout
     assert "Check if the background web server is running." in result.stdout
     assert "set-password" in result.stdout
     assert "Set the password for the web server." in result.stdout
 
 
-@pytest.mark.parametrize("command", ["start", "stop", "status", "set-password"])
+@pytest.mark.parametrize("command", ["start", "stop", "restart", "status", "set-password"])
 def test_web_subcommand_help_exits_successfully(command: str) -> None:
     result = runner.invoke(cli_web.web_app, [command, "--help"])
 

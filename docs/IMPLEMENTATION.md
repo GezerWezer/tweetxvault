@@ -34,6 +34,18 @@ Definition of done: passes `uv run ruff format --check`, `uv run ruff check`, an
 - [x] Compact unattended logs while preserving bounded counters, issues, retries, and timings.
 - [x] Pass focused and full repository validation for the follow-up.
 
+### Explicit Web server lifecycle (2026-08-08)
+
+- [x] Replace wildcard bind hosts with reachable device addresses in displayed Web URLs.
+- [x] Remove Web auto-start configuration and all sync/import restart hooks.
+- [x] Add an explicit `tweetxvault web restart` daemon command with preflight validation.
+- [x] Pass focused and full repository validation for the Web lifecycle changes.
+
+### JSON-only export surface (2026-08-08)
+
+- [x] Remove the HTML exporter, CLI command, package export, tests, and active documentation.
+- [x] Pass focused and full repository validation after removing HTML export.
+
 ## Web archive availability and storage clarity (2026-08-02)
 
 - [x] Add an Archive overview card for missing imported tweets and their archive percentage.
@@ -331,7 +343,6 @@ Optional but useful early.
   - Export by collection type (likes/bookmarks/all) to a JSON file.
   - Include: tweet_id, text, author info, created_at, collection membership, raw_json (or path).
 - [x] Add `tweetxvault export json [--collection likes|bookmarks|all] [--out path]`.
-- [x] Add `tweetxvault export html [--collection likes|bookmarks|all] [--out path]`.
 - [x] Add `tweetxvault view bookmarks|likes|all [--limit N]`.
 
 ## Task 9: Integration Test + Polish
@@ -455,7 +466,7 @@ This is the next real implementation milestone after the LanceDB migration. The 
 - [x] Verify whether full bodies are returned now that article field toggles are enabled on timeline requests.
   - Result on 2026-03-16: authenticated `TweetDetail` returned full `plain_text`, `content_state`, `cover_media`, and `media_entities`
 - [x] Persist article rows keyed by source tweet id until a stable article-specific id is confirmed.
-- [x] Export article metadata/body in JSON and HTML once extraction is stable.
+- [x] Export article metadata/body in JSON once extraction is stable.
 - [x] Decide whether article-only fallback fetching is needed if GraphQL returns preview-only payloads.
   - Current decision: no extra fallback is needed right now; `tweetxvault articles refresh` uses authenticated `TweetDetail`, which returned full bodies for the Dimitris validation tweet on 2026-03-16
 
@@ -469,7 +480,6 @@ This is materially smaller than archive import because it reuses the live GraphQ
   - `tweetxvault sync tweets`
   - `tweetxvault view tweets`
   - `tweetxvault export json --collection tweets`
-  - `tweetxvault export html --collection tweets`
 - [x] Add a collection/storage label for authored tweets that reuses the current `tweet` membership rows plus secondary-object extraction.
 - [x] Reuse the existing duplicate-detection, sync-state, rehydrate, media-download, URL-unfurl, and article-refresh paths for own-tweet rows.
 - [x] Decide whether `tweetxvault sync all` should include own tweets, or whether authored tweets stay an explicit opt-in collection.
