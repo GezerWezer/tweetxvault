@@ -26,7 +26,14 @@ from tweetxvault.pipeline import PipelineReporter
 from tweetxvault.query_ids import QueryIdStore
 from tweetxvault.storage import open_archive_store
 from tweetxvault.storage.backend import ArchiveStore
-from tweetxvault.sync import ProcessLock, RemotePreflightError, sync_all, sync_collection
+from tweetxvault.sync import (
+    ProcessLock,
+    RemotePreflightError,
+    SyncFollowupPlan,
+    plan_sync_pipeline,
+    sync_all,
+    sync_collection,
+)
 
 
 def _op_and_variables(request: httpx.Request) -> tuple[str, dict[str, object]]:
@@ -48,6 +55,38 @@ def _save_query_ids(paths) -> None:
 
 def _console() -> Console:
     return Console(file=StringIO(), force_terminal=False, color_system=None)
+
+
+def test_sync_pipeline_is_fully_planned_before_work_and_filters_disabled_followups() -> None:
+    reporter = PipelineReporter(_console(), "sync", interactive=False)
+    config = AppConfig()
+    config.tagging.enabled = False
+    followups = SyncFollowupPlan(
+        threads=True,
+        resurrection=False,
+        articles=False,
+        media=True,
+        unfurl=False,
+    )
+
+    plan_sync_pipeline(
+        reporter,
+        config=config,
+        collections=("bookmarks", "likes"),
+        followups=followups,
+        head_only=False,
+    )
+
+    assert [step.key for step in reporter.steps] == [
+        "preflight:bookmarks,likes",
+        "sync:bookmarks:head",
+        "sync:bookmarks:backfill",
+        "sync:likes:head",
+        "sync:likes:backfill",
+        "threads",
+        "media",
+    ]
+    assert all(step.state == "pending" for step in reporter.steps)
 
 
 def _bookmarks_response_from_results(

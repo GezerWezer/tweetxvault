@@ -1040,10 +1040,26 @@ async def _run_live_reconciliation(
     status: Callable[[str], None] | None = None,
 ) -> tuple[list[str], list[str], ResolvedAuthBundle | None]:
     warnings: list[str] = []
+    pipeline = current_pipeline()
+    if pipeline is not None:
+        for collection in ("tweets", "likes"):
+            if collection in collections:
+                continue
+            for step_key in (f"preflight:{collection}", f"sync:{collection}:head"):
+                if pipeline.has_step(step_key):
+                    pipeline.skip_step(
+                        step_key,
+                        f"the archive containing no {collection} dataset rows",
+                    )
     try:
         resolved_auth = _resolve_archive_followup_auth(config, auth_bundle)
     except ConfigError as exc:
         warnings.append(f"live reconciliation skipped: {exc}")
+        if pipeline is not None:
+            for collection in collections:
+                for step_key in (f"preflight:{collection}", f"sync:{collection}:head"):
+                    if pipeline.has_step(step_key):
+                        pipeline.skip_step(step_key, "X authentication being unavailable")
         return [], warnings, None
 
     completed: list[str] = []
@@ -1134,6 +1150,9 @@ async def _run_archive_followup(
     else:
         async with locked_archive_job(config=config, paths=paths) as job:
             enrichment_result = _archive_enrich_counts(job.store)
+        pipeline = current_pipeline()
+        if pipeline is not None and pipeline.has_step("archive-enrich"):
+            pipeline.skip_step("archive-enrich", "X authentication being unavailable")
     enrichment_result.warnings = warnings
     enrichment_result.reconciled_collections = reconciled_collections
     pipeline = current_pipeline()
@@ -1170,7 +1189,10 @@ async def _enrich_pending_rows(
     pipeline = current_pipeline()
     if limit is not None and limit <= 0:
         async with locked_archive_job(config=config, paths=paths, console=console) as job:
-            return _archive_enrich_counts(job.store)
+            result = _archive_enrich_counts(job.store)
+        if pipeline is not None and pipeline.has_step("archive-enrich"):
+            pipeline.skip_step("archive-enrich", "detail enrichment being disabled for this run")
+        return result
 
     async with locked_archive_job(config=config, paths=paths, console=console) as job:
         store = job.store
@@ -1185,6 +1207,11 @@ async def _enrich_pending_rows(
                     status,
                     f"{result.transient_delayed:,} transient failures remain scheduled "
                     "for later retry",
+                )
+            if pipeline is not None and pipeline.has_step("archive-enrich"):
+                pipeline.skip_step(
+                    "archive-enrich",
+                    "no sparse archive tweets being eligible for enrichment",
                 )
             return result
         queue_counts = _archive_enrich_counts(store, now=selection_started_at)
@@ -1921,9 +1948,31 @@ async def import_x_archive(
             if existing_manifest and existing_manifest.get("status") == "completed":
                 counts = _manifest_counts(existing_manifest)
                 warnings = _manifest_warnings(existing_manifest)
+                if pipeline is not None:
+                    for step_key in (
+                        "archive-source",
+                        "archive-tweets",
+                        "archive-deleted",
+                        "archive-likes",
+                        "archive-media",
+                    ):
+                        if pipeline.has_step(step_key):
+                            pipeline.skip_step(step_key, "this archive already being imported")
                 store.close()
                 if not followup_requested:
                     if pipeline is not None:
+                        for step_key in (
+                            "archive-auth",
+                            "preflight:tweets",
+                            "sync:tweets:head",
+                            "preflight:likes",
+                            "sync:likes:head",
+                        ):
+                            if pipeline.has_step(step_key):
+                                pipeline.skip_step(
+                                    step_key,
+                                    "the duplicate archive having no requested follow-up",
+                                )
                         pipeline.final_note(
                             "Archive already imported; no follow-up work requested."
                         )
@@ -2097,6 +2146,10 @@ async def import_x_archive(
                         _slice_for_sample(source.iter_files(media_directory), limit=sample_limit)
                     )
                 if pipeline is not None:
+                    if not source_part_total:
+                        pipeline.skip_step(
+                            "archive-source", "the archive containing no tweet or like datasets"
+                        )
                     if tweets:
                         pipeline.add_step(
                             "archive-tweets",
@@ -2141,6 +2194,18 @@ async def import_x_archive(
                             detail="exported media matched to normalized tweet assets",
                             rate_unit="files/s",
                         )
+                    for present, step_key, reason in (
+                        (tweets, "archive-tweets", "the authored-tweet dataset being empty"),
+                        (
+                            deleted_tweets,
+                            "archive-deleted",
+                            "the deleted-tweet dataset being empty",
+                        ),
+                        (likes, "archive-likes", "the likes dataset being empty"),
+                        (media_total, "archive-media", "the archive containing no exported media"),
+                    ):
+                        if not present:
+                            pipeline.skip_step(step_key, reason)
 
                 capture_started = perf_counter()
                 raw_source_parts = [

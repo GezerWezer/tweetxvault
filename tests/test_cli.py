@@ -1110,7 +1110,7 @@ def test_expand_archive_threads_debug_auth_passes_status_callback(paths, monkeyp
     cli.expand_archive_threads(debug_auth=True)
 
     output = buffer.getvalue()
-    assert "auth | detail | trying Firefox browser cookies" in output
+    assert "auth: detail · trying Firefox browser cookies" in output
     assert "threads: 0 processed, 0 expanded, 0 skipped, 0 failed" in output
 
 

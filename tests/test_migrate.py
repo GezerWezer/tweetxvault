@@ -2,13 +2,18 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from rich.console import Console
+from typer.testing import CliRunner
 
+from tweetxvault import cli
 from tweetxvault.config import AppConfig
+from tweetxvault.pipeline import PipelineReporter, current_pipeline
 from tweetxvault.storage import migrate, open_archive_store
 from tweetxvault.storage.backend import SCHEMA_VERSION, ArchiveStore
 
@@ -19,6 +24,23 @@ class FakeLegacyTable:
 
     def count_rows(self) -> int:
         return self.total_rows
+
+
+def test_migrate_cli_activates_the_shared_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
+    observed: list[str] = []
+
+    def fake_run_migration(*, console: Console) -> migrate.MigrationResult:
+        pipeline = current_pipeline()
+        assert pipeline is not None
+        observed.append(pipeline.title)
+        return migrate.MigrationResult(status="source_missing")
+
+    monkeypatch.setattr(migrate, "run_migration", fake_run_migration)
+
+    result = CliRunner().invoke(cli.app, ["migrate"])
+
+    assert result.exit_code == 0, result.output
+    assert observed == ["tweetxvault migrate"]
 
 
 class FakeLegacyDatabase:
@@ -337,6 +359,31 @@ def test_missing_legacy_archive_returns_without_loading_lancedb(
 
     assert result.status == "source_missing"
     assert "No old LanceDB archive found" in capsys.readouterr().out
+
+
+def test_migration_uses_pipeline_and_resolves_all_steps_when_source_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    paths,
+) -> None:
+    monkeypatch.setattr(migrate, "load_config", lambda: (AppConfig(), paths))
+    output = StringIO()
+    reporter = PipelineReporter(
+        Console(file=output, force_terminal=False, color_system=None),
+        "tweetxvault migrate",
+        interactive=False,
+    )
+
+    with reporter:
+        result = migrate.run_migration()
+
+    assert result.status == "source_missing"
+    assert [step.key for step in reporter.steps] == [
+        "migration-inspect",
+        "migration-copy",
+        "migration-index",
+    ]
+    assert all(step.state == "skipped" for step in reporter.steps)
+    assert "No legacy LanceDB archive found" in reporter._final_summary
 
 
 def test_missing_optional_dependency_returns_result_instead_of_exiting(

@@ -74,6 +74,16 @@ async def unfurl_urls(
     console = console or Console(stderr=True)
     pipeline = current_pipeline()
     status = None if pipeline is not None else status_printer(console, "unfurl")
+    step_key = "urls"
+    if pipeline is not None:
+        pipeline.add_step(
+            step_key,
+            "URLs",
+            total=1,
+            unit="URLs",
+            detail="saved URLs selected for redirect and canonical metadata refresh",
+            rate_unit="URLs/s",
+        )
     async with locked_archive_job(config=config, paths=paths, console=console) as job:
         config = job.config
         store = job.store
@@ -85,6 +95,8 @@ async def unfurl_urls(
         result = UrlUnfurlResult()
         if not rows:
             emit_status(status, "no URL rows pending unfurl")
+            if pipeline is not None:
+                pipeline.skip_step(step_key, "no saved URLs requiring metadata")
             return result
         mode_suffix = " (including failed)" if retry_failed else ""
         limit_suffix = "" if limit is None else f" (limit {limit})"
@@ -92,7 +104,6 @@ async def unfurl_urls(
             status,
             f"fetching metadata for {len(rows)} saved URLs{mode_suffix}{limit_suffix}",
         )
-        step_key = "urls"
         if pipeline is not None:
             scope = "saved URLs · redirects followed · canonical metadata persisted"
             if retry_failed:

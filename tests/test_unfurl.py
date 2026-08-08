@@ -215,7 +215,8 @@ async def test_unfurl_urls_retries_failed_rows_and_respects_limit(paths, config)
     assert skipped.processed == 0
     assert skipped.updated == 0
     assert skipped.failed == 0
-    assert not reporter.has_step("urls")
+    assert reporter._step_by_key["urls"].state == "skipped"
+    assert "no saved URLs" in reporter._step_by_key["urls"].summary
 
     def success_handler(request: httpx.Request) -> httpx.Response:
         html = """

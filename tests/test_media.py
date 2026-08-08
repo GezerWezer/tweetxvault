@@ -142,7 +142,8 @@ async def test_download_media_updates_rows_and_files(paths, config) -> None:
     assert repeat.processed == 0
     assert repeat.downloaded == 0
     assert repeat.skipped == 0
-    assert not reporter.has_step("media")
+    assert reporter._step_by_key["media"].state == "skipped"
+    assert "no media files" in reporter._step_by_key["media"].summary
 
 
 @pytest.mark.asyncio

@@ -17,11 +17,22 @@ Definition of done: passes `uv run ruff format --check`, `uv run ruff check`, an
   unattended execution paths.
 - [x] Define a shared semantic reporter with a live TTY pipeline and plain bounded service logs.
 - [x] Implement the shared renderer, command-lifecycle spinner, issue sidebar, and log throttling.
-- [x] Add only work-backed dynamic steps with truthful progress totals, rates, and ETAs.
+- [x] Declare flag-relevant steps up front, retain zero-work steps with specific skip reasons, and
+  keep truthful progress totals, rates, and ETAs.
 - [x] Integrate sync, archive import/enrichment, threads, resurrection, articles, media, URLs,
   and conditional tagging without nested progress output.
 - [x] Update CLI documentation and add interactive, non-TTY, conditional-step, and regression tests.
 - [x] Pass focused and full repository validation.
+
+### Pipeline lifecycle follow-up (2026-08-08)
+
+- [x] Restore command and completed-step elapsed times without restoring an overall ETA.
+- [x] Bulk-skip previously expanded thread targets before remote metadata setup or live redraws.
+- [x] Keep tagging active while its queue is selected, and remove tagging rate/ETA output.
+- [x] Predeclare flag-relevant sync/import/standalone steps and line-mark empty queues with reasons.
+- [x] Reduce spinner-column spacing and migrate legacy LanceDB progress to the shared reporter.
+- [x] Compact unattended logs while preserving bounded counters, issues, retries, and timings.
+- [x] Pass focused and full repository validation for the follow-up.
 
 ## Web archive availability and storage clarity (2026-08-02)
 

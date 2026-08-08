@@ -297,37 +297,155 @@ async def expand_threads(
     _log_threads(console, "preparing archive expansion job")
     if refresh and not targets:
         raise ConfigError("--refresh requires one or more explicit thread targets.")
-    prepare_step_key = "threads-prepare"
+    step_key = "threads"
     if pipeline is not None:
         pipeline.add_step(
-            prepare_step_key,
-            "Prepare threads",
-            total=2 if auth_bundle is None else 1,
-            unit="checks",
-            detail="X authentication and TweetDetail operation metadata",
-            rate_unit="checks/s",
+            step_key,
+            "Threads",
+            total=1,
+            unit="candidates",
+            detail="membership and reachable linked-status candidates",
+            rate_unit="candidates/s",
         )
         pipeline.start_step(
-            prepare_step_key,
-            activity=(
-                "Resolving X authentication"
-                if auth_bundle is None
-                else "Resolving the TweetDetail operation ID"
-            ),
+            step_key,
+            activity="Selecting thread candidates from local archive state",
+            counters="loading memberships, prior expansions, and saved status links",
         )
-    if auth_bundle is None:
-        _log_threads(console, "resolving auth bundle")
-        auth_bundle = resolve_auth_bundle(config, status=auth_status)
-        if pipeline is not None:
-            pipeline.update_step(
-                prepare_step_key,
-                completed=1,
-                activity="Resolving the TweetDetail operation ID",
-                counters="X authentication resolved",
-            )
 
     async with locked_archive_job(config=config, paths=paths, console=console) as job:
         store = job.store
+        result = ThreadExpandResult()
+        if limit is not None and limit <= 0:
+            if pipeline is not None:
+                pipeline.skip_step(step_key, "the requested limit allowing no candidates")
+            return result
+        _log_threads(console, "loading archived thread expansion state...")
+        expanded_targets = set(store.list_raw_capture_target_ids("ThreadExpandDetail"))
+        _log_threads(
+            console,
+            f"loaded {len(expanded_targets)} previously expanded thread targets",
+        )
+        known_tweet_ids: set[str] = set()
+        pending_membership_ids: list[str] = []
+        pending_linked_ids: list[str] = []
+
+        if targets:
+            requested, duplicate_count = _dedupe_targets(
+                [normalize_thread_target(target) for target in targets]
+            )
+            result.skipped += duplicate_count
+            target_ids = requested[:limit] if limit is not None else requested
+            pending_membership_ids = [
+                tweet_id for tweet_id in target_ids if refresh or tweet_id not in expanded_targets
+            ]
+            result.skipped += len(target_ids) - len(pending_membership_ids)
+            refresh_suffix = " (refresh)" if refresh else ""
+            _log_threads(
+                console,
+                f"explicit target pass over {len(target_ids)} targets{refresh_suffix}",
+            )
+        else:
+            _log_threads(console, "loading archived membership tweets...")
+            membership_ids = store.list_membership_tweet_ids()
+            pending_membership_ids = [
+                tweet_id for tweet_id in membership_ids if tweet_id not in expanded_targets
+            ]
+            result.skipped += len(membership_ids) - len(pending_membership_ids)
+            _log_threads(
+                console,
+                "membership pass over "
+                f"{len(membership_ids)} archived tweets "
+                f"({len(membership_ids) - len(pending_membership_ids)} already expanded)",
+            )
+            _log_threads(console, "loading known tweet ids for linked-status pass...")
+            known_tweet_ids = store.list_known_tweet_ids()
+            _log_threads(
+                console,
+                f"loaded {len(known_tweet_ids)} known tweet ids for linked-status dedupe",
+            )
+            _log_threads(console, "loading archived url refs...")
+            url_ref_rows = store.list_url_ref_rows()
+            max_linked_depth = config.sync.max_linked_depth
+            edges: dict[str, list[str]] = {}
+            for row in url_ref_rows:
+                target_id = next(
+                    (
+                        found
+                        for field_name in ("canonical_url", "expanded_url", "url")
+                        if isinstance((candidate := row.get(field_name)), str)
+                        and (found := extract_status_id_from_url(candidate))
+                    ),
+                    None,
+                )
+                source_id = row.get("tweet_id")
+                if isinstance(source_id, str) and target_id:
+                    edges.setdefault(source_id, []).append(target_id)
+
+            depths = {tweet_id: 0 for tweet_id in membership_ids if tweet_id}
+            for depth in range(1, max_linked_depth + 1):
+                for source_id in [
+                    tweet_id for tweet_id, known_depth in depths.items() if known_depth == depth - 1
+                ]:
+                    for target_id in edges.get(source_id, []):
+                        depths.setdefault(target_id, depth)
+
+            seen_linked: set[str] = set()
+            reachable_count = 0
+            if max_linked_depth > 0:
+                for source_id, target_ids in edges.items():
+                    if source_id not in depths or depths[source_id] >= max_linked_depth:
+                        continue
+                    for target_id in target_ids:
+                        reachable_count += 1
+                        if (
+                            target_id == source_id
+                            or target_id in seen_linked
+                            or target_id in expanded_targets
+                            or target_id in known_tweet_ids
+                        ):
+                            result.skipped += 1
+                            continue
+                        seen_linked.add(target_id)
+                        pending_linked_ids.append(target_id)
+            _log_threads(
+                console,
+                "linked-status pass over "
+                f"{reachable_count} reachable url refs "
+                f"(from {len(url_ref_rows)} total, max depth {max_linked_depth})",
+            )
+
+        pending_total = len(pending_membership_ids) + len(pending_linked_ids)
+        if pending_total == 0:
+            if pipeline is not None:
+                pipeline.skip_step(
+                    step_key, "all thread candidates already being expanded or known"
+                )
+            return result
+
+        if pipeline is not None:
+            pipeline.update_step(
+                step_key,
+                completed=0,
+                total=(min(pending_total, limit) if limit is not None else pending_total),
+                activity=(
+                    "Resolving X authentication"
+                    if auth_bundle is None
+                    else "Resolving the TweetDetail operation ID"
+                ),
+                counters=(
+                    f"{len(pending_membership_ids)} membership · "
+                    f"{len(pending_linked_ids)} linked · {result.skipped} already known"
+                ),
+                detail=(
+                    f"{len(pending_membership_ids)} membership candidates · "
+                    f"{len(pending_linked_ids)} reachable linked-status candidates"
+                ),
+            )
+
+        if auth_bundle is None:
+            _log_threads(console, "resolving auth bundle")
+            auth_bundle = resolve_auth_bundle(config, status=auth_status)
         _log_threads(console, "resolving TweetDetail query ID")
         query_store = QueryIdStore(paths)
         query_ids = await resolve_query_ids(
@@ -336,182 +454,34 @@ async def expand_threads(
             force_refresh=not query_store.is_fresh(),
             transport=transport,
         )
-        if pipeline is not None:
-            pipeline.complete_step(
-                prepare_step_key,
-                "X authentication and TweetDetail operation ID ready",
-            )
-        result = ThreadExpandResult()
-        client = build_async_client(
-            auth_bundle,
-            timeout=config.sync.timeout,
-            transport=transport,
-        )
+        attempted_targets: set[str] = set()
+        pacer = AdaptiveRequestPacer(config.sync.detail_delay)
+        absence_tracker = _FocalAbsenceTracker()
+        client = build_async_client(auth_bundle, timeout=config.sync.timeout, transport=transport)
+        selected_total = min(pending_total, limit) if limit is not None else pending_total
+        scanned = 0
         try:
-            _log_threads(console, "loading archived thread expansion state...")
-            expanded_targets = set(store.list_raw_capture_target_ids("ThreadExpandDetail"))
-            _log_threads(
-                console,
-                f"loaded {len(expanded_targets)} previously expanded thread targets",
-            )
-            attempted_targets: set[str] = set()
-            known_tweet_ids: set[str] = set()
-            pacer = AdaptiveRequestPacer(config.sync.detail_delay)
-            absence_tracker = _FocalAbsenceTracker()
-            step_key = "threads"
-            pipeline_started = False
-            pipeline_scanned = 0
-
-            def start_pipeline(total: int, *, activity: str, detail: str) -> None:
-                nonlocal pipeline_started
-                if pipeline is None or pipeline_started:
-                    return
-                pipeline.add_step(
-                    step_key,
-                    "Threads",
-                    total=max(total, 1),
-                    unit="candidates",
-                    detail=detail,
-                    rate_unit="candidates/s",
-                )
-                pipeline.start_step(
-                    step_key,
-                    activity=activity,
-                    counters=(
-                        f"0 scanned · {result.processed} fetched · {result.expanded} expanded · "
-                        f"{result.skipped} already known · {result.failed} failed"
-                    ),
-                )
-                pipeline_started = True
-
-            def update_pipeline(*, scanned: int, total: int, activity: str | None = None) -> None:
-                nonlocal pipeline_scanned
-                if pipeline is None or not pipeline_started:
-                    return
-                pipeline_scanned = scanned
-                pipeline.update_step(
-                    step_key,
-                    completed=scanned,
-                    total=max(total, 1),
-                    activity=activity,
-                    counters=(
-                        f"{scanned} scanned · {result.processed} fetched · "
-                        f"{result.expanded} expanded · {result.skipped} already known · "
-                        f"{result.failed} failed"
-                    ),
-                )
-
-            if targets:
-                requested, duplicate_count = _dedupe_targets(
-                    [normalize_thread_target(target) for target in targets]
-                )
-                result.skipped += duplicate_count
-                target_ids = requested[:limit] if limit is not None else requested
-                pending_target_ids = [
-                    tweet_id
-                    for tweet_id in target_ids
-                    if refresh or tweet_id not in expanded_targets
-                ]
-                if pending_target_ids:
-                    start_pipeline(
-                        len(target_ids),
-                        activity=f"Preparing explicit thread target {pending_target_ids[0]}",
-                        detail=(
-                            f"{len(target_ids)} explicit targets"
-                            + (" · refresh requested" if refresh else " · prior expansions reused")
-                        ),
-                    )
-                refresh_suffix = " (refresh)" if refresh else ""
-                _log_threads(
-                    console,
-                    f"explicit target pass over {len(target_ids)} targets{refresh_suffix}",
-                )
-                for scanned, tweet_id in enumerate(target_ids, start=1):
-                    if not refresh and tweet_id in expanded_targets:
-                        result.skipped += 1
-                        update_pipeline(scanned=scanned, total=len(target_ids))
-                        _log_scan_progress(
-                            console,
-                            phase="explicit",
-                            scanned=scanned,
-                            total=len(target_ids),
-                            result=result,
-                        )
-                        continue
-                    if pipeline_started and pipeline is not None:
-                        pipeline.update_step(
-                            step_key,
-                            completed=scanned - 1,
-                            activity=f"Fetching thread context for tweet {tweet_id}",
-                        )
-                    await pacer.wait(attempted=result.processed, sleep=sleep)
-                    await _try_expand_target(
-                        tweet_id=tweet_id,
-                        store=store,
-                        query_ids=query_ids,
-                        query_store=query_store,
-                        client=client,
-                        config=config,
-                        attempted_targets=attempted_targets,
-                        expanded_targets=expanded_targets,
-                        known_tweet_ids=known_tweet_ids,
-                        result=result,
-                        console=console,
-                        absence_tracker=absence_tracker,
-                        pacer=pacer,
-                        mark_dirty=job.mark_dirty,
-                    )
-                    _log_scan_progress(
-                        console,
-                        phase="explicit",
-                        scanned=scanned,
-                        total=len(target_ids),
-                        result=result,
-                    )
-                    update_pipeline(scanned=scanned, total=len(target_ids))
-                    job.maybe_optimize_mid_job(console=console)
-            else:
-                _log_threads(console, "loading archived membership tweets...")
-                membership_ids = store.list_membership_tweet_ids()
-                pending_membership_ids = [
-                    tweet_id for tweet_id in membership_ids if tweet_id not in expanded_targets
-                ]
-                if pending_membership_ids:
-                    start_pipeline(
-                        len(membership_ids),
-                        activity=(
-                            f"Preparing membership thread target {pending_membership_ids[0]}"
-                        ),
-                        detail=(
-                            f"membership pass · {len(membership_ids)} archived tweets · "
-                            f"{len(expanded_targets)} prior expansions"
-                        ),
-                    )
-                _log_threads(
-                    console,
-                    "membership pass over "
-                    f"{len(membership_ids)} archived tweets "
-                    f"({len(expanded_targets)} already expanded)",
-                )
-                for scanned, tweet_id in enumerate(membership_ids, start=1):
+            for phase, target_ids in (
+                ("thread", pending_membership_ids),
+                ("linked tweet", pending_linked_ids),
+            ):
+                for tweet_id in target_ids:
                     if limit is not None and result.processed >= limit:
                         break
-                    if tweet_id in expanded_targets:
+                    if tweet_id in attempted_targets or (
+                        phase == "linked tweet" and tweet_id in known_tweet_ids
+                    ):
                         result.skipped += 1
-                        update_pipeline(scanned=scanned, total=len(membership_ids))
-                        _log_scan_progress(
-                            console,
-                            phase="membership",
-                            scanned=scanned,
-                            total=len(membership_ids),
-                            result=result,
-                        )
                         continue
-                    if pipeline_started and pipeline is not None:
+                    if pipeline is not None:
                         pipeline.update_step(
                             step_key,
-                            completed=scanned - 1,
-                            activity=f"Fetching thread context for tweet {tweet_id}",
+                            completed=min(scanned, selected_total),
+                            activity=f"Fetching {phase} context for {tweet_id}",
+                            counters=(
+                                f"{result.processed} fetched · {result.expanded} expanded · "
+                                f"{result.skipped} already known · {result.failed} failed"
+                            ),
                         )
                     await pacer.wait(attempted=result.processed, sleep=sleep)
                     await _try_expand_target(
@@ -530,178 +500,32 @@ async def expand_threads(
                         pacer=pacer,
                         mark_dirty=job.mark_dirty,
                     )
-                    _log_scan_progress(
-                        console,
-                        phase="membership",
-                        scanned=scanned,
-                        total=len(membership_ids),
-                        result=result,
-                    )
-                    update_pipeline(scanned=scanned, total=len(membership_ids))
-                    job.maybe_optimize_mid_job(console=console)
-
-                if limit is None or result.processed < limit:
-                    _log_threads(console, "loading known tweet ids for linked-status pass...")
-                    known_tweet_ids = store.list_known_tweet_ids()
-                    _log_threads(
-                        console,
-                        f"loaded {len(known_tweet_ids)} known tweet ids for linked-status dedupe",
-                    )
-                    _log_threads(console, "loading archived url refs...")
-                    url_ref_rows = store.list_url_ref_rows()
-
-                    max_linked_depth = config.sync.max_linked_depth
-
-                    edges = {}
-                    for row in url_ref_rows:
-                        target_id = None
-                        for field_name in ("canonical_url", "expanded_url", "url"):
-                            candidate = row.get(field_name)
-                            if isinstance(candidate, str):
-                                target_id = extract_status_id_from_url(candidate)
-                                if target_id:
-                                    break
-                        src = row.get("tweet_id")
-                        if src and target_id:
-                            if src not in edges:
-                                edges[src] = []
-                            edges[src].append((target_id, row))
-
-                    depths = {tid: 0 for tid in membership_ids if tid}
-                    for d in range(1, max_linked_depth + 1):
-                        current_layer = [tid for tid, depth in depths.items() if depth == d - 1]
-                        for src in current_layer:
-                            if src in edges:
-                                for tgt_id, _ in edges[src]:
-                                    if tgt_id not in depths:
-                                        depths[tgt_id] = d
-
-                    filtered_url_rows = []
-                    for src, target_list in edges.items():
-                        if max_linked_depth == 0:
-                            break
-                        if src not in depths or depths[src] >= max_linked_depth:
-                            continue
-                        for _, row in target_list:
-                            filtered_url_rows.append(row)
-
-                    _log_threads(
-                        console,
-                        "linked-status pass over "
-                        f"{len(filtered_url_rows)} reachable url refs "
-                        f"(from {len(url_ref_rows)} total, "
-                        f"max depth {max_linked_depth})",
-                    )
-                    linked_offset = pipeline_scanned if pipeline_started else 0
-                    if filtered_url_rows and not pipeline_started:
-                        start_pipeline(
-                            len(filtered_url_rows),
-                            activity="Preparing reachable linked-status targets",
-                            detail=(
-                                f"linked-status pass · max depth {max_linked_depth} · "
-                                f"{len(url_ref_rows)} saved URL refs"
-                            ),
-                        )
-                        linked_offset = 0
-                    elif filtered_url_rows and pipeline is not None and pipeline_started:
+                    scanned += 1
+                    if pipeline is not None:
                         pipeline.update_step(
                             step_key,
-                            completed=pipeline_scanned,
-                            total=pipeline_scanned + len(filtered_url_rows),
-                            activity="Preparing reachable linked-status targets",
-                            detail=(
-                                f"membership + linked-status · max depth {max_linked_depth} · "
-                                f"{len(filtered_url_rows)} reachable URL refs"
+                            completed=min(scanned, selected_total),
+                            counters=(
+                                f"{result.processed} fetched · {result.expanded} expanded · "
+                                f"{result.skipped} already known · {result.failed} failed"
                             ),
                         )
-                    for scanned, row in enumerate(filtered_url_rows, start=1):
-                        if limit is not None and result.processed >= limit:
-                            break
-                        target_id = None
-                        for field_name in ("canonical_url", "expanded_url", "url"):
-                            candidate = row.get(field_name)
-                            if isinstance(candidate, str):
-                                target_id = extract_status_id_from_url(candidate)
-                                if target_id:
-                                    break
-                        if not target_id:
-                            update_pipeline(
-                                scanned=linked_offset + scanned,
-                                total=linked_offset + len(filtered_url_rows),
-                            )
-                            _log_scan_progress(
-                                console,
-                                phase="linked-status",
-                                scanned=scanned,
-                                total=len(filtered_url_rows),
-                                result=result,
-                            )
-                            continue
-                        source_tweet_id = row.get("tweet_id")
-                        if (
-                            target_id == source_tweet_id
-                            or target_id in attempted_targets
-                            or target_id in expanded_targets
-                            or target_id in known_tweet_ids
-                        ):
-                            result.skipped += 1
-                            update_pipeline(
-                                scanned=linked_offset + scanned,
-                                total=linked_offset + len(filtered_url_rows),
-                            )
-                            _log_scan_progress(
-                                console,
-                                phase="linked-status",
-                                scanned=scanned,
-                                total=len(filtered_url_rows),
-                                result=result,
-                            )
-                            continue
-                        if pipeline_started and pipeline is not None:
-                            pipeline.update_step(
-                                step_key,
-                                completed=linked_offset + scanned - 1,
-                                activity=f"Fetching linked tweet context for {target_id}",
-                            )
-                        await pacer.wait(attempted=result.processed, sleep=sleep)
-                        await _try_expand_target(
-                            tweet_id=target_id,
-                            store=store,
-                            query_ids=query_ids,
-                            query_store=query_store,
-                            client=client,
-                            config=config,
-                            attempted_targets=attempted_targets,
-                            expanded_targets=expanded_targets,
-                            known_tweet_ids=known_tweet_ids,
-                            result=result,
-                            console=console,
-                            absence_tracker=absence_tracker,
-                            pacer=pacer,
-                            mark_dirty=job.mark_dirty,
-                        )
-                        _log_scan_progress(
-                            console,
-                            phase="linked-status",
-                            scanned=scanned,
-                            total=len(filtered_url_rows),
-                            result=result,
-                        )
-                        update_pipeline(
-                            scanned=linked_offset + scanned,
-                            total=linked_offset + len(filtered_url_rows),
-                        )
-                        job.maybe_optimize_mid_job(console=console)
+                    _log_scan_progress(
+                        console,
+                        phase=phase,
+                        scanned=scanned,
+                        total=selected_total,
+                        result=result,
+                    )
+                    job.maybe_optimize_mid_job(console=console)
         finally:
             await client.aclose()
 
-        if pipeline is not None and pipeline_started:
-            if pipeline_scanned <= 0:
-                pipeline_scanned = result.processed + result.skipped
+        if pipeline is not None:
             pipeline.update_step(
                 step_key,
-                completed=max(pipeline_scanned, 1),
-                total=max(pipeline_scanned, 1),
+                completed=max(scanned, 1),
+                total=max(scanned, 1),
             )
             pipeline.complete_step(
                 step_key,

@@ -1,3 +1,19 @@
+- 2026-08-08 (Unified pipeline CLI follow-up)
+  - Restored total command elapsed time in the header and right-aligned elapsed time on completed
+    steps while retaining the no-overall-ETA policy.
+  - Replaced dynamic sync admission with a complete flag-filtered lifecycle; empty queues now
+    remain visible as line-marked `skipped due to …` steps, including saved-history and follow-up
+    queues. Archive and standalone jobs predeclare their applicable lifecycle as well.
+  - Moved thread queue selection ahead of authentication/query-ID setup, bulk-counted previously
+    expanded memberships instead of redrawing once per skip, and bypassed all remote setup for an
+    empty queue.
+  - Made tagging visibly active during queue/quota selection and removed its throughput/ETA fields;
+    reduced spinner-to-label spacing using the selected sequence's actual maximum frame width.
+  - Integrated legacy LanceDB migration into the shared pipeline and simplified systemd/non-TTY
+    logs to compact step-scoped milestones without repeated command/activity/summary fields.
+  - Focused pipeline, sync, thread, follow-up, migration, archive-import, and CLI tests pass, as
+    does the full pytest suite; repository-wide Ruff, compile, diff, and help checks also pass.
+
 - 2026-08-02 (Unified pipeline CLI research and design)
   - Audited every long-running sync/import follow-up, its queue-selection conditions, available
     metrics, current Rich/tqdm/direct-print paths, tests, and cron/non-TTY behavior before editing.

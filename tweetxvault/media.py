@@ -163,6 +163,16 @@ async def download_media(
     console = console or Console(stderr=True)
     pipeline = current_pipeline()
     status = None if pipeline is not None else status_printer(console, "media download")
+    step_key = "media"
+    if pipeline is not None:
+        pipeline.add_step(
+            step_key,
+            "Media",
+            total=1,
+            unit="files",
+            detail="pending archived media selected for local download",
+            rate_unit="files/s",
+        )
     async with locked_archive_job(config=config, paths=paths, console=console) as job:
         config = job.config
         paths = job.paths
@@ -176,6 +186,8 @@ async def download_media(
         result = MediaDownloadResult()
         if not rows:
             emit_status(status, "no media rows pending download")
+            if pipeline is not None:
+                pipeline.skip_step(step_key, "no media files requiring download")
             return result
         filters: list[str] = []
         if photos_only:
@@ -185,7 +197,6 @@ async def download_media(
         filter_suffix = f" ({', '.join(filters)})" if filters else ""
         limit_suffix = "" if limit is None else f" (limit {limit})"
         emit_status(status, f"downloading {len(rows)} media rows{filter_suffix}{limit_suffix}")
-        step_key = "media"
         if pipeline is not None:
             scope = "pending media rows"
             if filters:

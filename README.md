@@ -226,13 +226,16 @@ By default, `tweetxvault sync` and `tweetxvault sync all` both cover bookmarks +
 `--head-only` is the escape hatch when an old saved backfill cursor is no longer useful: it clears that cursor for the targeted collection and runs only the normal head pass. It cannot be combined with `--full`, `--backfill`, or `--article-backfill`.
 
 Interactive long-running commands use one pipeline display for the full command lifecycle. A
-step appears only after tweetxvault has selected real work for it, so disabled follow-ups, empty
-queues, absent archive datasets, and skipped enrichment passes are not listed as upcoming work.
-Exact local queues show determinate totals, throughput, and a per-step ETA. X timeline pagination
-does not expose a trustworthy remote total, so sync shows determinate progress for the current
-page and durable page/tweet counts without inventing an overall percentage or ETA. The side panel
-is reserved for warnings and recoverable errors; retry activity and current tweet/file/host details
-remain attached to their step.
+sync declares its full flag-relevant lifecycle before work starts, while steps explicitly removed
+with `--skip-*` flags are omitted. A planned step whose queue is empty remains visible with a line
+symbol and a specific `skipped due to …` reason. The header shows total command elapsed time and
+each completed step keeps its own elapsed time. Exact local queues show determinate totals,
+throughput, and a per-step ETA, except tagging intentionally shows only its exact counts. X
+timeline pagination does not expose a trustworthy remote total, so sync shows determinate progress
+for the current page and durable page/tweet counts without inventing an overall percentage or ETA.
+The side panel is reserved for warnings and recoverable errors; retry activity and current
+tweet/file/host details remain attached to their step. The legacy `tweetxvault migrate` command
+uses the same lifecycle display for source inspection, row copying, and FTS rebuilding.
 
 Common sync flags:
 
@@ -592,7 +595,9 @@ present—tweetxvault automatically switches to plain service logs. These contai
 start/completion records, useful counters, retry/cooldown events, and bounded progress milestones,
 but no spinners, progress-bar frames, ANSI control sequences, or continuously redrawn panels. This
 keeps redirected cron logs and `journalctl` detailed enough to diagnose current work without
-recording one line per item.
+recording one line per item. Records use compact `Step: event · details` lines and avoid repeating
+the command name, current-item activity, and completion counters when the step summary already
+contains the same information.
 
 ## Configuration
 

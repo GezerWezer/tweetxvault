@@ -293,7 +293,7 @@ def rpd_used(store: FakeStore, *, model: str = "gemini-default", limit: int = 10
 
 
 @pytest.mark.asyncio
-async def test_pending_tagging_does_not_admit_step_when_queue_is_empty(paths) -> None:
+async def test_pending_tagging_marks_planned_step_skipped_when_queue_is_empty(paths) -> None:
     console, _ = make_console()
     reporter = PipelineReporter(console, "tag", interactive=False)
 
@@ -306,7 +306,31 @@ async def test_pending_tagging_does_not_admit_step_when_queue_is_empty(paths) ->
         )
 
     assert result == tagging.TaggingRunResult()
-    assert not reporter.has_step("tagging")
+    assert reporter._step_by_key["tagging"].state == "skipped"
+    assert "no eligible untagged" in reporter._step_by_key["tagging"].summary
+
+
+@pytest.mark.asyncio
+async def test_tagging_step_is_active_while_the_eligible_queue_is_counted(paths) -> None:
+    console, _ = make_console()
+    reporter = PipelineReporter(console, "tag", interactive=False)
+
+    class ObservedStore(PendingTagStore):
+        def count_eligible_tweets_for_tagging(self) -> int:
+            assert reporter.active_step is not None
+            assert reporter.active_step.key == "tagging"
+            assert "Counting eligible" in reporter.active_step.activity
+            return super().count_eligible_tweets_for_tagging()
+
+    with reporter:
+        result = await tagging.tag_pending_media_tweets(
+            ObservedStore([]),
+            make_config(),
+            paths,
+            console,
+        )
+
+    assert result == tagging.TaggingRunResult()
 
 
 @pytest.mark.asyncio
@@ -345,7 +369,8 @@ async def test_pipeline_tagging_total_respects_remaining_daily_request_capacity(
     assert store.remaining == ["3", "4", "5"]
     step = reporter._step_by_key["tagging"]
     assert step.total == 2
-    assert step.show_eta is True
+    assert step.show_eta is False
+    assert step.show_rate is False
     assert "1/3 daily requests available" in step.detail
 
 

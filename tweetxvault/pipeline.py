@@ -11,6 +11,7 @@ from io import StringIO
 from typing import Literal
 
 from rich import box
+from rich.cells import cell_len
 from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
 from rich.live import Live
 from rich.panel import Panel
@@ -106,7 +107,7 @@ SPINNER_FRAMES: dict[str, tuple[str, ...]] = {
     ),
 }
 
-StepState = Literal["pending", "active", "complete", "failed"]
+StepState = Literal["pending", "active", "complete", "skipped", "failed"]
 IssueLevel = Literal["warning", "error"]
 _SERVICE_ENV_VARS = ("INVOCATION_ID", "JOURNAL_STREAM")
 _CURRENT_PIPELINE: ContextVar[PipelineReporter | None] = ContextVar(
@@ -268,6 +269,8 @@ class PipelineReporter:
     _finished: bool = field(default=False, init=False)
     _success: bool = field(default=True, init=False)
     _final_summary: str = field(default="", init=False)
+    _started_at: float | None = field(default=None, init=False)
+    _finished_at: float | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         if self.spinner_name is None:
@@ -279,6 +282,7 @@ class PipelineReporter:
             self.interactive = self.console.is_terminal and not service_environment
 
     def __enter__(self) -> PipelineReporter:
+        self._started_at = time.monotonic()
         self._token = _CURRENT_PIPELINE.set(self)
         if self.interactive:
             self._live = Live(
@@ -317,6 +321,12 @@ class PipelineReporter:
     def has_final_note(self) -> bool:
         return bool(self._final_summary)
 
+    @property
+    def elapsed(self) -> float:
+        if self._started_at is None:
+            return 0.0
+        return max((self._finished_at or time.monotonic()) - self._started_at, 0.0)
+
     def add_step(
         self,
         key: str,
@@ -353,6 +363,10 @@ class PipelineReporter:
     def has_step(self, key: str) -> bool:
         return key in self._step_by_key
 
+    def step_state(self, key: str) -> StepState | None:
+        step = self._step_by_key.get(key)
+        return step.state if step is not None else None
+
     def capture_console(self, step_key: str) -> _CapturedPipelineConsole:
         return _CapturedPipelineConsole(self, step_key)
 
@@ -381,7 +395,7 @@ class PipelineReporter:
                 fields.append(f"total={step.total:,} {step.unit}")
             if step.detail:
                 fields.append(step.detail)
-            self._log(step.title, "start", " | ".join(fields))
+            self._log(step.title, "start", " · ".join(fields))
         self._refresh()
 
     def update_step(
@@ -418,9 +432,9 @@ class PipelineReporter:
             fields = [progress]
             if step.counters:
                 fields.append(step.counters)
-            if step.activity:
+            elif step.activity:
                 fields.append(step.activity)
-            self._log(step.title, "progress", " | ".join(fields))
+            self._log(step.title, "progress", " · ".join(fields))
         self._refresh()
 
     def status(self, key: str, message: str, *, important: bool = False) -> None:
@@ -463,7 +477,7 @@ class PipelineReporter:
         if not self.interactive and (
             issue.count <= 3 or issue.count == 10 or issue.count % 25 == 0
         ):
-            suffix = "" if issue.count == 1 else f" | occurrences={issue.count}"
+            suffix = "" if issue.count == 1 else f" · occurrences={issue.count}"
             self._log("issue", level, message + suffix)
         self._refresh()
 
@@ -482,10 +496,24 @@ class PipelineReporter:
             step.counters = counters
         step.finished_at = time.monotonic()
         if not self.interactive:
-            fields = [summary]
-            if step.counters and step.counters != summary:
-                fields.append(step.counters)
-            self._log(step.title, "complete", " | ".join(fields))
+            fields = [summary, f"elapsed {_format_duration(step.elapsed)}"]
+            self._log(step.title, "complete", " · ".join(fields))
+        self._refresh()
+
+    def skip_step(self, key: str, reason: str) -> None:
+        """Resolve a planned step that has no work without treating it as success work."""
+
+        step = self._step_by_key[key]
+        if step.state in {"complete", "skipped", "failed"}:
+            return
+        step.state = "skipped"
+        step.completed = 0
+        clean_reason = _clean_line(reason).rstrip(".")
+        step.summary = f"skipped due to {clean_reason}"
+        if step.started_at is not None:
+            step.finished_at = time.monotonic()
+        if not self.interactive:
+            self._log(step.title, "skipped", step.summary)
         self._refresh()
 
     def fail_step(self, key: str, message: str) -> None:
@@ -511,13 +539,18 @@ class PipelineReporter:
         if self._finished:
             return
         self._finished = True
+        self._finished_at = time.monotonic()
         self._success = success
         if summary:
             self._final_summary = summary
-        for step in list(self.steps):
+        pending_reason = (
+            "an earlier failure stopped the command"
+            if not success
+            else "no work being found for this run"
+        )
+        for step in self.steps:
             if step.state == "pending":
-                self.steps.remove(step)
-                self._step_by_key.pop(step.key, None)
+                self.skip_step(step.key, pending_reason)
         if not self.interactive:
             self._log(
                 "command",
@@ -550,10 +583,33 @@ class PipelineReporter:
         return should_log
 
     def _log(self, scope: str, event: str, message: str = "") -> None:
-        parts = [self.title, scope, event]
-        if message:
-            parts.append(_clean_line(message))
-        self.console.print(" | ".join(parts), markup=False, highlight=False, soft_wrap=True)
+        clean_message = _clean_line(message)
+        if scope == "command":
+            if event == "start":
+                line = f"{self.title}: started"
+            else:
+                line = f"{self.title}: {event} · elapsed {_format_duration(self.elapsed)}"
+                if clean_message:
+                    line += f" · {clean_message}"
+        elif scope == "issue":
+            line = f"{event.upper()}: {clean_message}"
+        else:
+            event_label = {
+                "start": "starting",
+                "complete": "complete",
+                "failed": "failed",
+                "skipped": "skipped",
+                "progress": "progress",
+                "status": "status",
+                "detail": "detail",
+            }.get(event, event)
+            if event == "skipped" and clean_message.startswith("skipped "):
+                line = f"{scope}: {clean_message}"
+            else:
+                line = f"{scope}: {event_label}"
+            if clean_message and not (event == "skipped" and clean_message.startswith("skipped ")):
+                line += f" · {clean_message}"
+        self.console.print(line, markup=False, highlight=False, soft_wrap=True)
 
     def _refresh(self) -> None:
         if self._live is not None:
@@ -636,28 +692,52 @@ class PipelineReporter:
         else:
             status = "preparing"
             status_style = "dim"
+        status = f"{status} · elapsed {_format_duration(self.elapsed)}"
         header.add_row(Text(self.title, style="bold"), Text(status, style=status_style))
 
         steps = Table.grid(expand=True, padding=(0, 1))
-        steps.add_column(width=8, no_wrap=True)
+        spinner_width = max(
+            cell_len(frame) for frame in SPINNER_FRAMES[self.spinner_name or "wave"]
+        )
+        steps.add_column(width=spinner_width, no_wrap=True)
         steps.add_column(width=15, no_wrap=True)
         steps.add_column(ratio=1, overflow="ellipsis")
+        steps.add_column(justify="right", no_wrap=True)
         for step in self.steps:
             if step.state == "complete":
-                steps.add_row(Text("✓", style="green"), step.title, Text(step.summary, style="dim"))
+                steps.add_row(
+                    Text("✓", style="green"),
+                    step.title,
+                    Text(step.summary, style="dim"),
+                    Text(_format_duration(step.elapsed), style="dim"),
+                )
+            elif step.state == "skipped":
+                steps.add_row(
+                    Text("─", style="grey50"),
+                    Text(step.title, style="grey50"),
+                    Text(step.summary, style="grey50"),
+                    "",
+                )
             elif step.state == "failed":
-                steps.add_row(Text("!", style="red"), step.title, Text(step.summary, style="red"))
+                elapsed = _format_duration(step.elapsed) if step.started_at is not None else ""
+                steps.add_row(
+                    Text("!", style="red"),
+                    step.title,
+                    Text(step.summary, style="red"),
+                    Text(elapsed, style="red"),
+                )
             elif step.state == "active":
                 steps.add_row(
                     _FrameSpinner(self.spinner_name or "wave"),
                     Text(step.title, style=f"bold {TWITTER_BLUE}"),
                     Text(step.activity),
+                    "",
                 )
                 if step.counters:
-                    steps.add_row("", "", Text(step.counters, style="dim"))
-                steps.add_row("", "", self._progress_renderable(step))
+                    steps.add_row("", "", Text(step.counters, style="dim"), "")
+                steps.add_row("", "", self._progress_renderable(step), "")
             else:
-                steps.add_row(Text("·", style="grey50"), Text(step.title, style="grey50"), "")
+                steps.add_row(Text("·", style="grey50"), Text(step.title, style="grey50"), "", "")
 
         parts: list[RenderableType] = [header, Text(), steps]
         if self._finished and self._final_summary:

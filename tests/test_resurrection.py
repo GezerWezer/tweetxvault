@@ -17,7 +17,7 @@ from tweetxvault.storage import open_archive_store
 
 
 @pytest.mark.asyncio
-async def test_resurrection_does_not_admit_step_when_due_queue_is_empty(
+async def test_resurrection_marks_planned_step_skipped_when_due_queue_is_empty(
     paths,
     config,
     auth_bundle,
@@ -37,7 +37,8 @@ async def test_resurrection_does_not_admit_step_when_due_queue_is_empty(
         )
 
     assert result.attempted == 0
-    assert not reporter.has_step("resurrection")
+    assert reporter._step_by_key["resurrection"].state == "skipped"
+    assert "no due retryable" in reporter._step_by_key["resurrection"].summary
 
 
 def _terminal_row(

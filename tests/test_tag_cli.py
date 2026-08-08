@@ -264,7 +264,7 @@ def test_tag_command_normalizes_explicit_target_and_bypasses_pending_runner(
             "dry_run": False,
         }
     ]
-    assert "Tagging | complete | 1 processed · 1 tagged" in output.getvalue()
+    assert "Tagging: complete · 1 processed · 1 tagged" in output.getvalue()
 
 
 def test_tag_command_forwards_test_mode_for_explicit_target_without_summary(

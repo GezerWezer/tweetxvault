@@ -38,7 +38,7 @@ from tweetxvault.jobs import (
     best_effort_interrupt_optimize,
     is_interrupt_exception,
 )
-from tweetxvault.pipeline import current_pipeline
+from tweetxvault.pipeline import PipelineReporter, current_pipeline
 from tweetxvault.query_ids import QueryIdStore, refresh_query_ids
 from tweetxvault.storage import ArchiveStore, SyncState, open_archive_store
 from tweetxvault.utils import resolve_query_ids
@@ -113,6 +113,97 @@ class SyncFollowupPlan:
     unfurl: bool = True
     threads: bool = True
     tagging: bool = True
+
+
+def plan_sync_pipeline(
+    pipeline: PipelineReporter,
+    *,
+    config: AppConfig,
+    collections: Sequence[str],
+    followups: SyncFollowupPlan | None,
+    head_only: bool,
+    browser_override: bool = False,
+    restart_web: bool = False,
+) -> None:
+    """Declare the complete flag-relevant sync lifecycle before any work begins."""
+
+    if browser_override:
+        pipeline.add_step(
+            "auth-override",
+            "Authentication",
+            total=1,
+            unit="session",
+            detail="explicit browser profile selected for this command",
+            show_rate=False,
+            show_eta=False,
+        )
+    pipeline.add_step(
+        "preflight:" + ",".join(collections),
+        "Prepare",
+        total=3 + len(collections),
+        unit="checks",
+        detail=f"authentication · archive owner · {len(collections)} remote endpoint probes",
+        rate_unit="checks/s",
+    )
+    stop_policy = "head timeline pass · each page committed with its resume cursor"
+    for collection in collections:
+        pipeline.add_step(
+            f"sync:{collection}:head",
+            collection.title(),
+            total=1,
+            unit="current page",
+            detail=stop_policy,
+            show_rate=False,
+            show_eta=False,
+        )
+        if not head_only:
+            pipeline.add_step(
+                f"sync:{collection}:backfill",
+                f"{collection.title()} history",
+                total=1,
+                unit="current page",
+                detail="saved older-history cursor, when one exists",
+                show_rate=False,
+                show_eta=False,
+            )
+
+    if followups is not None and followups.enabled:
+        followup_steps = (
+            (followups.threads, "threads", "Threads", "candidates"),
+            (followups.resurrection, "resurrection", "Resurrection", "tweets"),
+            (followups.articles, "articles", "Articles", "tweets"),
+            (followups.media, "media", "Media", "files"),
+            (followups.unfurl, "urls", "URLs", "URLs"),
+        )
+        for enabled, key, title, unit in followup_steps:
+            if enabled:
+                pipeline.add_step(
+                    key,
+                    title,
+                    total=1,
+                    unit=unit,
+                    detail="pending archive work is selected at this step",
+                )
+        if followups.tagging and config.tagging.enabled:
+            pipeline.add_step(
+                "tagging",
+                "Tagging",
+                total=1,
+                unit="tweets",
+                detail=f"{config.tagging.model} · eligible media tweets",
+                show_rate=False,
+                show_eta=False,
+            )
+    if restart_web and config.web.auto_start:
+        pipeline.add_step(
+            "web-restart",
+            "Web server",
+            total=1,
+            unit="restart",
+            detail=f"auto-start enabled · http://{config.web.host}:{config.web.port}",
+            show_rate=False,
+            show_eta=False,
+        )
 
 
 class ProcessLock:
@@ -630,12 +721,17 @@ def _embed_new_tweets(store: Any, console: Console | None) -> None:
     return
 
 
-def _log_embedding_warning(console: Console | None, message: str) -> None:
+def _log_embedding_warning(
+    console: Console | None, message: str, *, step_key: str | None = None
+) -> None:
     pipeline = current_pipeline()
     if pipeline is not None:
-        active = pipeline.active_step
-        if active is not None and active.state == "active":
-            pipeline.fail_step(active.key, message)
+        if step_key is not None and pipeline.has_step(step_key):
+            pipeline.fail_step(step_key, message)
+        else:
+            active = pipeline.active_step
+            if active is not None and active.state == "active":
+                pipeline.fail_step(active.key, message)
         pipeline.issue(message, dedupe_key=f"followup:{message.split(':', 1)[0]}")
     elif console is not None:
         console.print(f"[yellow]{message}[/yellow]")
@@ -774,6 +870,7 @@ async def _run_auto_followups(
                 console,
                 "sync follow-up threads expand failed; "
                 f"run 'tweetxvault threads expand' later ({exc})",
+                step_key="threads",
             )
         else:
             _log_sync_followup(
@@ -803,7 +900,11 @@ async def _run_auto_followups(
                 sleep=sleep,
             )
         except Exception as exc:
-            _log_embedding_warning(console, f"sync follow-up resurrection failed ({exc})")
+            _log_embedding_warning(
+                console,
+                f"sync follow-up resurrection failed ({exc})",
+                step_key="resurrection",
+            )
         else:
             _log_sync_followup(
                 console,
@@ -831,6 +932,7 @@ async def _run_auto_followups(
                 console,
                 "sync follow-up articles refresh failed; "
                 f"run 'tweetxvault articles refresh' later ({exc})",
+                step_key="articles",
             )
         else:
             _log_sync_followup(
@@ -854,6 +956,7 @@ async def _run_auto_followups(
                 console,
                 "sync follow-up media download failed; "
                 f"run 'tweetxvault media download' later ({exc})",
+                step_key="media",
             )
         else:
             _log_sync_followup(
@@ -877,6 +980,7 @@ async def _run_auto_followups(
             _log_embedding_warning(
                 console,
                 f"sync follow-up unfurl failed; run 'tweetxvault unfurl' later ({exc})",
+                step_key="urls",
             )
         else:
             _log_sync_followup(
@@ -899,6 +1003,7 @@ async def _run_auto_followups(
             _log_embedding_warning(
                 console,
                 f"sync follow-up tagging failed; run 'tweetxvault tag' later ({exc})",
+                step_key="tagging",
             )
         else:
             _log_sync_followup(
@@ -1125,6 +1230,16 @@ async def _sync_collection_ready(
                     pages_total += backfill_pages
                     tweets_total += backfill_tweets
                     stop_reason = backfill_reason
+                elif pipeline is not None and pipeline.has_step(f"sync:{collection}:backfill"):
+                    if not prior_backfill_incomplete:
+                        reason = "no saved older-history cursor"
+                    elif remaining == 0:
+                        reason = "the page limit being consumed by the head pass"
+                    elif not resume_backfill:
+                        reason = "older-history resume being disabled for this run"
+                    else:
+                        reason = "head-only mode"
+                    pipeline.skip_step(f"sync:{collection}:backfill", reason)
             except BaseException as exc:
                 if is_interrupt_exception(exc):
                     best_effort_interrupt_optimize(store, write_tracker, console=console)

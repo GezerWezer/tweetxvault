@@ -668,10 +668,33 @@ async def tag_pending_media_tweets(
 
     pipeline = current_pipeline()
     if not config.tagging.enabled or not config.tagging.api_key:
+        if pipeline is not None and pipeline.has_step("tagging"):
+            reason = (
+                "tagging being disabled in configuration"
+                if not config.tagging.enabled
+                else "no Gemini API key being configured"
+            )
+            pipeline.skip_step("tagging", reason)
         return TaggingRunResult()
 
     model_name = model_override or config.tagging.model
     batch_size = config.tagging.limit if config.tagging.batch or batch_override else 1
+    step_key = "tagging"
+    if pipeline is not None:
+        pipeline.add_step(
+            step_key,
+            "Tagging",
+            total=1,
+            unit="tweets",
+            detail=f"{model_name} · eligible archived media tweets",
+            show_rate=False,
+            show_eta=False,
+        )
+        pipeline.start_step(
+            step_key,
+            activity="Counting eligible media tweets and checking daily quota",
+            counters="selection not yet complete",
+        )
     rpd_status: RpdStatus | None = None
     if pipeline is not None and config.tagging.rpd is not None:
         try:
@@ -682,6 +705,7 @@ async def tag_pending_media_tweets(
             )
         except Exception as error:
             if pipeline is not None:
+                pipeline.fail_step(step_key, "could not read Gemini daily request usage")
                 pipeline.issue(
                     f"Could not read Gemini daily request usage: "
                     f"{_safe_error(error, config.tagging.api_key)}",
@@ -694,6 +718,10 @@ async def tag_pending_media_tweets(
         if not rpd_status.allowed:
             if pipeline is not None:
                 reset_at = rpd_status.reset_at.strftime("%Y-%m-%d %H:%M %Z")
+                pipeline.skip_step(
+                    step_key,
+                    f"the Gemini daily request limit being reached until {reset_at}",
+                )
                 pipeline.issue(
                     f"Gemini daily request limit reached for {model_name} "
                     f"({rpd_status.used}/{rpd_status.limit}); resets {reset_at}.",
@@ -703,7 +731,6 @@ async def tag_pending_media_tweets(
                 _print_rpd_exhausted(console, rpd_status, model_name)
             return TaggingRunResult()
 
-    step_key = "tagging"
     if pipeline is not None:
         eligible_count = store.count_eligible_tweets_for_tagging()
         effective_total = min(eligible_count, limit) if limit is not None else eligible_count
@@ -712,6 +739,7 @@ async def tag_pending_media_tweets(
         if dry_run:
             effective_total = min(effective_total, 1)
         if effective_total <= 0:
+            pipeline.skip_step(step_key, "no eligible untagged media tweets")
             return TaggingRunResult()
         detail = f"{model_name} · configured batch size {config.tagging.limit}"
         if rpd_status is not None:
@@ -722,7 +750,8 @@ async def tag_pending_media_tweets(
             total=effective_total,
             unit="tweets",
             detail=detail,
-            rate_unit="tweets/s",
+            show_rate=False,
+            show_eta=False,
         )
         pipeline.start_step(
             step_key,

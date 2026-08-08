@@ -93,7 +93,7 @@ def test_normalize_article_target_accepts_ids_and_urls() -> None:
 
 
 @pytest.mark.asyncio
-async def test_refresh_articles_does_not_admit_step_when_queue_is_empty(
+async def test_refresh_articles_marks_planned_step_skipped_when_queue_is_empty(
     paths,
     config,
     auth_bundle,
@@ -113,7 +113,8 @@ async def test_refresh_articles_does_not_admit_step_when_queue_is_empty(
         )
 
     assert result.processed == 0
-    assert not reporter.has_step("articles")
+    assert reporter._step_by_key["articles"].state == "skipped"
+    assert "no article rows" in reporter._step_by_key["articles"].summary
 
 
 @pytest.mark.asyncio

@@ -391,6 +391,7 @@ async def test_expand_threads_explicit_targets_skip_already_expanded_by_default(
     paths,
     config,
     auth_bundle,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root_raw = _seed_thread_archive(paths)
     parent_raw = make_tweet_result("200", "parent tweet", user_id="2000")
@@ -420,6 +421,13 @@ async def test_expand_threads_explicit_targets_skip_already_expanded_by_default(
     def unexpected_request(request: httpx.Request) -> httpx.Response:
         raise AssertionError(f"should not refetch explicit target without --refresh: {request.url}")
 
+    monkeypatch.setattr(
+        "tweetxvault.threads.resolve_query_ids",
+        lambda *_args, **_kwargs: pytest.fail(
+            "TweetDetail metadata should not resolve for an empty thread queue"
+        ),
+    )
+
     reporter = PipelineReporter(
         Console(file=StringIO(), force_terminal=False, color_system=None),
         "threads",
@@ -438,7 +446,8 @@ async def test_expand_threads_explicit_targets_skip_already_expanded_by_default(
     assert second.expanded == 0
     assert second.failed == 0
     assert second.skipped == 1
-    assert not reporter.has_step("threads")
+    assert reporter._step_by_key["threads"].state == "skipped"
+    assert "already being expanded or known" in reporter._step_by_key["threads"].summary
 
 
 @pytest.mark.asyncio

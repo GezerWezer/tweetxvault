@@ -218,36 +218,32 @@ async def resurrect_due_tweets(
     console = console or Console(stderr=True)
     pipeline = current_pipeline()
     result = ResurrectionResult()
+    step_key = "resurrection"
+    if pipeline is not None:
+        pipeline.add_step(
+            step_key,
+            "Resurrection",
+            total=1,
+            unit="tweets",
+            detail=f"due unavailable tweets · {budget}-request ceiling",
+            rate_unit="tweets/s",
+        )
     if budget <= 0:
         async with locked_archive_job(config=config, paths=paths, console=console) as job:
             result.remaining_due = job.store.count_due_resurrection_tweets()
+        if pipeline is not None:
+            pipeline.skip_step(step_key, "the request budget being zero")
         return result
-    if auth_bundle is None:
-        if pipeline is not None:
-            pipeline.add_step(
-                "resurrection-auth",
-                "Authentication",
-                total=1,
-                unit="session",
-                detail="resolve the configured X browser session",
-                show_rate=False,
-                show_eta=False,
-            )
-            pipeline.start_step(
-                "resurrection-auth",
-                activity="Resolving X authentication for resurrection checks",
-            )
-        auth_bundle = resolve_auth_bundle(config)
-        if pipeline is not None:
-            pipeline.complete_step("resurrection-auth", "X authentication resolved")
 
     async with locked_archive_job(config=config, paths=paths, console=console) as job:
         store = job.store
         candidates = select_weighted_resurrection_candidates(store, budget=budget)
         if not candidates:
+            result.remaining_due = store.count_due_resurrection_tweets()
+            if pipeline is not None:
+                pipeline.skip_step(step_key, "no due retryable unavailable tweets")
             return result
 
-        step_key = "resurrection"
         if pipeline is not None:
             pipeline.add_step(
                 step_key,
@@ -262,12 +258,21 @@ async def resurrect_due_tweets(
             )
             pipeline.start_step(
                 step_key,
-                activity="Resolving the TweetDetail operation ID",
+                activity=(
+                    "Resolving X authentication"
+                    if auth_bundle is None
+                    else "Resolving the TweetDetail operation ID"
+                ),
                 counters=(
                     f"{len(candidates)} due selected · 0 checked · 0 returned · "
                     "0 unavailable · 0 transient"
                 ),
             )
+
+        if auth_bundle is None:
+            auth_bundle = resolve_auth_bundle(config)
+            if pipeline is not None:
+                pipeline.status(step_key, "Resolving the TweetDetail operation ID")
 
         query_store = QueryIdStore(paths)
         query_ids = await resolve_query_ids(

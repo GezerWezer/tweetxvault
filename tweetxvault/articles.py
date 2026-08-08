@@ -61,25 +61,16 @@ async def refresh_articles(
     console = console or Console(stderr=True)
     pipeline = current_pipeline()
     status = None if pipeline is not None else status_printer(console, "articles refresh")
-    if auth_bundle is None:
-        if pipeline is not None:
-            pipeline.add_step(
-                "articles-auth",
-                "Authentication",
-                total=1,
-                unit="session",
-                detail="resolve the configured X browser session",
-                show_rate=False,
-                show_eta=False,
-            )
-            pipeline.start_step(
-                "articles-auth",
-                activity="Resolving X authentication for article refresh",
-            )
-        emit_status(status, "resolving auth bundle")
-        auth_bundle = resolve_auth_bundle(config)
-        if pipeline is not None:
-            pipeline.complete_step("articles-auth", "X authentication resolved")
+    step_key = "articles"
+    if pipeline is not None:
+        pipeline.add_step(
+            step_key,
+            "Articles",
+            total=1,
+            unit="tweets",
+            detail="archived article rows selected for TweetDetail refresh",
+            rate_unit="tweets/s",
+        )
 
     async with locked_archive_job(config=config, paths=paths, console=console) as job:
         store = job.store
@@ -94,9 +85,10 @@ async def refresh_articles(
         result = ArticleRefreshResult()
         if not tweet_ids:
             emit_status(status, "no article rows pending refresh")
+            if pipeline is not None:
+                pipeline.skip_step(step_key, "no article rows requiring refresh")
             return result
 
-        step_key = "articles"
         if pipeline is not None:
             mode = (
                 "explicit targets"
@@ -113,9 +105,19 @@ async def refresh_articles(
             )
             pipeline.start_step(
                 step_key,
-                activity="Resolving the TweetDetail operation ID",
+                activity=(
+                    "Resolving X authentication"
+                    if auth_bundle is None
+                    else "Resolving the TweetDetail operation ID"
+                ),
                 counters=f"{len(tweet_ids)} selected · 0 processed · 0 refreshed · 0 failed",
             )
+
+        if auth_bundle is None:
+            emit_status(status, "resolving auth bundle")
+            auth_bundle = resolve_auth_bundle(config)
+            if pipeline is not None:
+                pipeline.status(step_key, "Resolving the TweetDetail operation ID")
 
         emit_status(status, "resolving TweetDetail query ID")
         query_store = QueryIdStore(paths)

@@ -49,7 +49,7 @@ def test_reporter_chooses_one_spinner_for_the_command_lifecycle(
     assert reporter.spinner_name == "cascade"
 
 
-def test_finished_pipeline_drops_steps_that_never_became_relevant() -> None:
+def test_finished_pipeline_keeps_and_skips_planned_steps_with_no_work() -> None:
     reporter = PipelineReporter(_console(StringIO()), "sync", interactive=False)
 
     with reporter:
@@ -57,9 +57,12 @@ def test_finished_pipeline_drops_steps_that_never_became_relevant() -> None:
         reporter.start_step("bookmarks", activity="Fetching bookmark timeline page 1")
         reporter.complete_step("bookmarks", "1 page fetched")
         reporter.add_step("media", "Media", total=1, unit="files")
-        reporter.remove_step("media")
 
-    assert [step.key for step in reporter.steps] == ["bookmarks"]
+    assert [step.key for step in reporter.steps] == ["bookmarks", "media"]
+    assert reporter._step_by_key["media"].state == "skipped"
+    assert reporter._step_by_key["media"].summary == (
+        "skipped due to no work being found for this run"
+    )
 
 
 def test_render_uses_determinate_twitter_blue_progress_with_useful_metadata() -> None:
@@ -95,7 +98,7 @@ def test_render_uses_determinate_twitter_blue_progress_with_useful_metadata() ->
     assert "tweets/s" in rendered
     assert "ETA ~" in rendered
     assert "Could not fetch thread context for tweet 189222" in rendered
-    assert "elapsed" not in rendered.lower()
+    assert "elapsed 00:00" in rendered.lower()
     assert "overall eta" not in rendered.lower()
     assert TWITTER_BLUE == "#1DA1F2"
 
@@ -177,13 +180,14 @@ def test_system_output_is_plain_detailed_and_bounded() -> None:
 
     rendered = output.getvalue()
     lines = rendered.splitlines()
-    progress_lines = [line for line in lines if " | Threads | progress | " in line]
-    issue_lines = [line for line in lines if " | issue | warning | " in line]
+    progress_lines = [line for line in lines if line.startswith("Threads: progress · ")]
+    issue_lines = [line for line in lines if line.startswith("WARNING: ")]
 
-    assert "tweetxvault sync | command | start" in rendered
+    assert "tweetxvault sync: started" in rendered
     assert "conversation membership and linked context" in rendered
-    assert "tweetxvault sync | Threads | complete | 999 expanded · 1 unavailable" in rendered
-    assert "tweetxvault sync | command | complete | Sync completed" in rendered
+    assert "Threads: complete · 999 expanded · 1 unavailable · elapsed" in rendered
+    assert "tweetxvault sync: complete · elapsed" in rendered
+    assert "Sync completed with one recoverable issue" in rendered
     assert 10 <= len(progress_lines) <= 12
     assert len(issue_lines) < 50
     assert "occurrences=1000" in rendered
@@ -211,9 +215,7 @@ def test_explicit_diagnostics_are_structured_but_not_added_as_issues() -> None:
     with reporter:
         reporter.detail("debug", "archive hash: 1.24s for 8,192 bytes")
 
-    assert (
-        "archive import | debug | detail | archive hash: 1.24s for 8,192 bytes" in output.getvalue()
-    )
+    assert "debug: detail · archive hash: 1.24s for 8,192 bytes" in output.getvalue()
     assert reporter.issues == []
 
 
@@ -233,4 +235,21 @@ def test_reporter_cleans_up_context_and_records_failure() -> None:
     assert [(issue.level, issue.message) for issue in reporter.issues] == [
         ("error", "network failed")
     ]
-    assert "sync | command | failed | network failed" in output.getvalue()
+    assert "sync: failed · elapsed 00:00 · network failed" in output.getvalue()
+
+
+def test_completed_steps_render_their_elapsed_time_at_the_right() -> None:
+    output = StringIO()
+    reporter = PipelineReporter(_console(output), "sync", interactive=False)
+    reporter._started_at = time.monotonic() - 12
+    reporter.add_step("threads", "Threads", total=1, unit="tweet")
+    reporter.start_step("threads", activity="Fetching thread context")
+    reporter._step_by_key["threads"].started_at = time.monotonic() - 7
+    reporter.complete_step("threads", "1 expanded")
+
+    reporter.console.print(reporter)
+
+    rendered = output.getvalue()
+    assert "elapsed 00:12" in rendered
+    assert "1 expanded" in rendered
+    assert "00:07" in rendered

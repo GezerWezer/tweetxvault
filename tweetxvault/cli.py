@@ -52,6 +52,7 @@ from tweetxvault.storage import open_archive_store
 from tweetxvault.sync import (
     ProcessLock,
     SyncFollowupPlan,
+    plan_sync_pipeline,
     run_preflight,
     sync_all,
     sync_collection,
@@ -405,6 +406,122 @@ def _prepare_auth_override(
     return forced_config, auth_bundle
 
 
+def _plan_auth_override_step(
+    pipeline: PipelineReporter,
+    *,
+    browser: str | None,
+    profile: str | None,
+    profile_path: Path | None,
+) -> None:
+    if browser is None:
+        return
+    profile_label = str(profile_path) if profile_path is not None else profile or "auto profile"
+    pipeline.add_step(
+        "auth-override",
+        "Authentication",
+        total=1,
+        unit="session",
+        detail=f"{browser} · {profile_label}",
+        show_rate=False,
+        show_eta=False,
+    )
+
+
+def _plan_archive_import_pipeline(
+    pipeline: PipelineReporter,
+    *,
+    config: Any,
+    browser: str | None,
+    profile: str | None,
+    profile_path: Path | None,
+    regen: bool,
+    enrich: bool,
+    detail_lookups: int,
+    sample_limit: int | None,
+) -> None:
+    _plan_auth_override_step(
+        pipeline,
+        browser=browser,
+        profile=profile,
+        profile_path=profile_path,
+    )
+    pipeline.add_step(
+        "archive-inspect",
+        "Inspect",
+        total=1,
+        unit="bytes",
+        detail="archive content hash and owner validation",
+        rate_unit="bytes/s",
+    )
+    if regen:
+        pipeline.add_step(
+            "archive-regen",
+            "Regenerate",
+            total=1,
+            unit="cleanup",
+            detail="archive-import-owned rows and managed media only",
+            show_rate=False,
+            show_eta=False,
+        )
+    for key, title, unit, detail in (
+        ("archive-source", "Archive source", "operations", "dataset parsing and raw capture"),
+        ("archive-tweets", "Tweets", "tweets", "authored archive rows"),
+        ("archive-deleted", "Deleted tweets", "tweets", "deleted authored archive rows"),
+        ("archive-likes", "Likes", "likes", "archive like memberships"),
+        ("archive-media", "Archive media", "files", "exported media files"),
+    ):
+        pipeline.add_step(key, title, total=1, unit=unit, detail=detail)
+
+    if sample_limit is None:
+        if browser is None:
+            pipeline.add_step(
+                "archive-auth",
+                "Authentication",
+                total=1,
+                unit="session",
+                detail="configured X session for live archive follow-up",
+                show_rate=False,
+                show_eta=False,
+            )
+        for collection in ("tweets", "likes"):
+            pipeline.add_step(
+                f"preflight:{collection}",
+                f"Prepare {collection}",
+                total=4,
+                unit="checks",
+                detail="authentication · archive owner · remote endpoint probe",
+                rate_unit="checks/s",
+            )
+            pipeline.add_step(
+                f"sync:{collection}:head",
+                f"Reconcile {collection}",
+                total=1,
+                unit="current page",
+                detail="live X timeline reconciled into imported archive rows",
+                show_rate=False,
+                show_eta=False,
+            )
+        if enrich or detail_lookups > 0:
+            pipeline.add_step(
+                "archive-enrich",
+                "Enrich",
+                total=1,
+                unit="tweets",
+                detail="stable snapshot of eligible sparse archive tweets",
+                rate_unit="tweets/s",
+            )
+    if config.web.auto_start:
+        pipeline.add_step(
+            "web-restart",
+            "Web server",
+            total=1,
+            unit="restart",
+            detail=f"auto-start enabled · http://{config.web.host}:{config.web.port}",
+            show_rate=False,
+            show_eta=False,
+        )
+
+
 def _normalize_collection_or_exit(collection: str, console: Console) -> str:
     try:
         return normalize_collection_name(collection)
@@ -527,6 +644,9 @@ def _run_sync_command(
     profile: str | None,
     profile_path: Path | None,
     runner: Callable[[Any, Any, Console], Awaitable[Any]],
+    collections: tuple[str, ...],
+    followups: SyncFollowupPlan,
+    head_only: bool,
     after: Callable[[Console], None] | None = None,
     summarize: Callable[[Any], str] | None = None,
 ) -> tuple[Console, Any]:
@@ -534,6 +654,15 @@ def _run_sync_command(
     try:
         with PipelineReporter(console, "tweetxvault sync") as pipeline:
             config, _ = load_config()
+            plan_sync_pipeline(
+                pipeline,
+                config=config,
+                collections=collections,
+                followups=followups,
+                head_only=head_only,
+                browser_override=browser is not None,
+                restart_web=after is not None,
+            )
             config, auth_bundle = _prepare_auth_override(
                 config,
                 console,
@@ -559,11 +688,7 @@ def _run_sync_command(
                     summary + f"Sync stopped after failure in {failed}.",
                     success=False,
                 )
-            elif (
-                summarize is not None
-                and not any(step.key.startswith(("preflight:", "sync:")) for step in pipeline.steps)
-                and not pipeline.has_final_note
-            ):
+            elif summarize is not None and not pipeline.has_final_note:
                 pipeline.final_note(summarize(result))
         return console, result
     except ConfigError as exc:
@@ -619,6 +744,9 @@ def _run_sync_all_command(
         browser=browser,
         profile=profile,
         profile_path=profile_path,
+        collections=("bookmarks", "likes"),
+        followups=followups,
+        head_only=head_only,
         runner=lambda config, auth_bundle, runner_console: _run_with_depth(
             config,
             auth_bundle,
@@ -744,6 +872,9 @@ def _register_sync_collection_command(collection: str):
             browser=browser,
             profile=profile,
             profile_path=profile_path,
+            collections=(collection,),
+            followups=followups,
+            head_only=head_only,
             runner=lambda config, auth_bundle, runner_console: sync_collection(
                 collection,
                 full=full,
@@ -1138,6 +1269,20 @@ def refresh_archived_articles(
     console = _configure_logging()
     try:
         with PipelineReporter(console, "tweetxvault articles refresh") as pipeline:
+            _plan_auth_override_step(
+                pipeline,
+                browser=browser,
+                profile=profile,
+                profile_path=profile_path,
+            )
+            pipeline.add_step(
+                "articles",
+                "Articles",
+                total=1,
+                unit="tweets",
+                detail="archived article rows selected for TweetDetail refresh",
+                rate_unit="tweets/s",
+            )
             if all_articles and targets:
                 raise ConfigError("--all cannot be combined with explicit article targets.")
             config, paths = load_config()
@@ -1159,7 +1304,7 @@ def refresh_archived_articles(
                     console=console,
                 )
             )
-            if not pipeline.has_step("articles"):
+            if pipeline.step_state("articles") == "pending":
                 prefix = "No article rows required refresh. " if result.processed == 0 else ""
                 pipeline.final_note(
                     prefix + "articles: "
@@ -1204,6 +1349,20 @@ def expand_archive_threads(
     console = _configure_logging()
     try:
         with PipelineReporter(console, "tweetxvault threads expand") as pipeline:
+            _plan_auth_override_step(
+                pipeline,
+                browser=browser,
+                profile=profile,
+                profile_path=profile_path,
+            )
+            pipeline.add_step(
+                "threads",
+                "Threads",
+                total=1,
+                unit="candidates",
+                detail="membership and reachable linked-status candidates",
+                rate_unit="candidates/s",
+            )
             config, paths = load_config()
             if max_linked_depth is not None:
                 config.sync.max_linked_depth = max_linked_depth
@@ -1227,7 +1386,7 @@ def expand_archive_threads(
                     console=console,
                 )
             )
-            if not pipeline.has_step("threads"):
+            if pipeline.step_state("threads") == "pending":
                 prefix = "No thread candidates required fetching. " if result.processed == 0 else ""
                 pipeline.final_note(
                     prefix + "threads: "
@@ -1432,6 +1591,17 @@ def import_x_archive_command(
     try:
         with PipelineReporter(console, "tweetxvault import x-archive") as pipeline:
             config, paths = load_config()
+            _plan_archive_import_pipeline(
+                pipeline,
+                config=config,
+                browser=browser,
+                profile=profile,
+                profile_path=profile_path,
+                regen=regen,
+                enrich=enrich,
+                detail_lookups=detail_lookups,
+                sample_limit=sample_limit,
+            )
             config, auth_bundle = _prepare_auth_override(
                 config,
                 console,
@@ -1456,7 +1626,9 @@ def import_x_archive_command(
             )
             if not (result.skipped and not result.followup_performed):
                 _maybe_restart_web(console)
-            if not pipeline.has_step("archive-inspect") and not pipeline.has_final_note:
+            elif pipeline.has_step("web-restart"):
+                pipeline.skip_step("web-restart", "the archive already being current")
+            if pipeline.step_state("archive-inspect") == "pending" and not pipeline.has_final_note:
                 pipeline.final_note(_archive_import_summary(result))
                 for warning in result.warnings:
                     pipeline.issue(
@@ -1511,6 +1683,30 @@ def import_archive_enrich(
     console = _configure_logging()
     try:
         with PipelineReporter(console, "tweetxvault import enrich") as pipeline:
+            _plan_auth_override_step(
+                pipeline,
+                browser=browser,
+                profile=profile,
+                profile_path=profile_path,
+            )
+            if browser is None:
+                pipeline.add_step(
+                    "archive-auth",
+                    "Authentication",
+                    total=1,
+                    unit="session",
+                    detail="configured X session for archive enrichment",
+                    show_rate=False,
+                    show_eta=False,
+                )
+            pipeline.add_step(
+                "archive-enrich",
+                "Enrich",
+                total=1,
+                unit="tweets",
+                detail="stable command-start snapshot of eligible sparse archive tweets",
+                rate_unit="tweets/s",
+            )
             config, paths = load_config()
             config, auth_bundle = _prepare_auth_override(
                 config,
@@ -1529,7 +1725,7 @@ def import_archive_enrich(
                     console=console,
                 )
             )
-            if not pipeline.has_step("archive-enrich") and not pipeline.has_final_note:
+            if pipeline.step_state("archive-enrich") == "pending" and not pipeline.has_final_note:
                 pipeline.final_note(
                     "archive enrich: existing imported archive data. "
                     + _archive_followup_summary(result)
@@ -1632,6 +1828,14 @@ def media_download(
     console = _configure_logging()
     try:
         with PipelineReporter(console, "tweetxvault media download") as pipeline:
+            pipeline.add_step(
+                "media",
+                "Media",
+                total=1,
+                unit="files",
+                detail="pending archived media selected for local download",
+                rate_unit="files/s",
+            )
             config, paths = load_config()
             result = asyncio.run(
                 download_media(
@@ -1643,7 +1847,7 @@ def media_download(
                     console=console,
                 )
             )
-            if not pipeline.steps:
+            if pipeline.step_state("media") == "pending":
                 prefix = "No media files require download. " if result.processed == 0 else ""
                 pipeline.final_note(
                     prefix + "media: "
@@ -1668,6 +1872,14 @@ def unfurl_archive(
     console = _configure_logging()
     try:
         with PipelineReporter(console, "tweetxvault unfurl") as pipeline:
+            pipeline.add_step(
+                "urls",
+                "URLs",
+                total=1,
+                unit="URLs",
+                detail="saved URLs selected for redirect and canonical metadata refresh",
+                rate_unit="URLs/s",
+            )
             config, paths = load_config()
             result = asyncio.run(
                 unfurl_urls(
@@ -1678,7 +1890,7 @@ def unfurl_archive(
                     console=console,
                 )
             )
-            if not pipeline.steps:
+            if pipeline.step_state("urls") == "pending":
                 prefix = "No saved URLs require metadata. " if result.processed == 0 else ""
                 pipeline.final_note(
                     prefix + f"unfurl: {result.processed} processed, "
@@ -1746,6 +1958,7 @@ def tag_archive(
                             total=1,
                             unit="tweet",
                             detail=f"explicit target · {model or config.tagging.model}",
+                            show_rate=False,
                             show_eta=False,
                         )
                         pipeline.start_step(
@@ -1785,14 +1998,25 @@ def tag_archive(
                 )
 
         with PipelineReporter(console, "tweetxvault tag") as pipeline:
+            pipeline.add_step(
+                "tagging",
+                "Tagging",
+                total=1,
+                unit="tweet" if tweet_id is not None else "tweets",
+                detail=(
+                    f"explicit target · {model or config.tagging.model}"
+                    if tweet_id is not None
+                    else f"{model or config.tagging.model} · eligible archived media tweets"
+                ),
+                show_rate=False,
+                show_eta=False,
+            )
             result = asyncio.run(run_tagging())
-            if not pipeline.steps:
-                if result.processed == 0:
-                    pipeline.final_note("No eligible untagged media tweets found.")
-                elif not test:
-                    pipeline.final_note(
-                        f"tag: {result.processed} processed, {result.tagged} tagged"
-                    )
+            if result.processed == 0:
+                pipeline.skip_step("tagging", "no eligible untagged media tweets")
+                pipeline.final_note("No eligible untagged media tweets found.")
+            elif not test:
+                pipeline.final_note(f"tag: {result.processed} processed, {result.tagged} tagged")
     except ConfigError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
@@ -2224,7 +2448,9 @@ def migrate() -> None:
     """Migrate data from older LanceDB storage to native SQLite storage."""
     from tweetxvault.storage.migrate import run_migration
 
-    run_migration()
+    console = _configure_logging()
+    with PipelineReporter(console, "tweetxvault migrate"):
+        run_migration(console=console)
 
 
 @app.callback()
