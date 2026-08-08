@@ -80,9 +80,7 @@ def test_sync_pipeline_is_fully_planned_before_work_and_filters_disabled_followu
     assert [step.key for step in reporter.steps] == [
         "preflight:bookmarks,likes",
         "sync:bookmarks:head",
-        "sync:bookmarks:backfill",
         "sync:likes:head",
-        "sync:likes:backfill",
         "threads",
         "media",
     ]
@@ -425,6 +423,29 @@ async def test_run_auto_followups_only_reminds_about_incomplete_initial_enrichme
 
 
 @pytest.mark.asyncio
+async def test_run_auto_followups_does_not_add_archive_queue_note_to_pipeline(
+    paths, config: AppConfig, auth_bundle
+) -> None:
+    buffer = StringIO()
+    console = Console(file=buffer, force_terminal=False, color_system=None)
+    reporter = PipelineReporter(console, "sync", interactive=False)
+
+    with reporter:
+        await sync_module._run_auto_followups(
+            plan=sync_module.SyncFollowupPlan(enabled=False),
+            config=config,
+            paths=paths,
+            auth_bundle=auth_bundle,
+            transport=None,
+            console=console,
+            sleep=lambda _: asyncio.sleep(0),
+        )
+
+    assert not reporter.has_final_note
+    assert "Archive enrichment queue" not in buffer.getvalue()
+
+
+@pytest.mark.asyncio
 async def test_sync_collection_logs_head_and_backfill_progress(
     paths, config: AppConfig, auth_bundle
 ) -> None:
@@ -658,8 +679,8 @@ async def test_sync_collection_clears_saved_backfill_after_empty_backfill_page(
 
     assert second.pages_fetched == 2
     assert reporter.has_step("sync:bookmarks:head")
-    assert reporter.has_step("sync:bookmarks:backfill")
-    assert reporter._step_by_key["sync:bookmarks:backfill"].summary.endswith("X returned no tweets")
+    assert not reporter.has_step("sync:bookmarks:backfill")
+    assert reporter._step_by_key["sync:bookmarks:head"].summary.endswith("X returned no tweets")
 
     store = open_archive_store(paths, create=False)
     assert store is not None

@@ -156,7 +156,7 @@ def plan_sync_pipeline(
             show_rate=False,
             show_eta=False,
         )
-        if not head_only:
+        if not head_only and collection not in {"bookmarks", "likes"}:
             pipeline.add_step(
                 f"sync:{collection}:backfill",
                 f"{collection.title()} history",
@@ -1011,24 +1011,15 @@ async def _run_auto_followups(
                 f"tagging: {tagged_count} tagged",
             )
 
-    from tweetxvault.reminders import print_pending_archive_enrichment_reminder
+    if current_pipeline() is None:
+        from tweetxvault.reminders import print_pending_archive_enrichment_reminder
 
-    store = open_archive_store(paths, create=False, config=config)
-    if store is not None:
-        try:
-            pipeline = current_pipeline()
-            if pipeline is not None:
-                pending = store.count_pending_initial_enrichment()
-                due = store.count_due_transient_enrichment()
-                delayed = store.count_delayed_transient_enrichment()
-                pipeline.final_note(
-                    f"Archive enrichment queue: {pending:,} pending untouched · "
-                    f"{due:,} transient due · {delayed:,} transient delayed."
-                )
-            else:
+        store = open_archive_store(paths, create=False, config=config)
+        if store is not None:
+            try:
                 print_pending_archive_enrichment_reminder(console, store)
-        finally:
-            store.close()
+            finally:
+                store.close()
 
 
 async def _sync_collection_ready(
@@ -1106,6 +1097,10 @@ async def _sync_collection_ready(
         try:
             try:
                 head_step_key = f"sync:{collection}:head"
+                combine_pipeline_passes = pipeline is not None and collection in {
+                    "bookmarks",
+                    "likes",
+                }
                 if pipeline is not None:
                     stop_policy = (
                         "continue through saved duplicates"
@@ -1150,7 +1145,7 @@ async def _sync_collection_ready(
                     write_tracker=write_tracker,
                     pipeline_step_key=head_step_key,
                 )
-                if pipeline is not None:
+                if pipeline is not None and not combine_pipeline_passes:
                     pipeline.complete_step(
                         head_step_key,
                         f"{head_pages:,} pages · {head_tweets:,} tweets · "
@@ -1172,29 +1167,46 @@ async def _sync_collection_ready(
                     )
                     write_tracker.mark_dirty()
 
-                if (
+                resume_saved_backfill = (
                     resume_backfill
                     and not head_only
                     and prior_backfill_incomplete
                     and remaining != 0
-                ):
-                    backfill_step_key = f"sync:{collection}:backfill"
+                )
+                if resume_saved_backfill:
                     if pipeline is not None:
-                        pipeline.add_step(
-                            backfill_step_key,
-                            f"{collection.title()} history",
-                            total=1,
-                            unit="current page",
-                            detail="saved backfill cursor · older archive history",
-                            show_rate=False,
-                            show_eta=False,
-                        )
-                        pipeline.start_step(
-                            backfill_step_key,
-                            activity=f"Continuing saved {collection} history · page 1",
-                            counters="0 pages · 0 tweets",
-                        )
+                        if combine_pipeline_passes:
+                            pipeline.update_step(
+                                head_step_key,
+                                completed=0,
+                                total=1,
+                                activity=f"Continuing saved {collection} history · page 1",
+                                counters="0 pages · 0 tweets",
+                                detail=(
+                                    "older-history pass · each page is committed with its "
+                                    "resume cursor"
+                                ),
+                                important=True,
+                            )
+                            backfill_step_key = head_step_key
+                        else:
+                            backfill_step_key = f"sync:{collection}:backfill"
+                            pipeline.add_step(
+                                backfill_step_key,
+                                f"{collection.title()} history",
+                                total=1,
+                                unit="current page",
+                                detail="saved backfill cursor · older archive history",
+                                show_rate=False,
+                                show_eta=False,
+                            )
+                            pipeline.start_step(
+                                backfill_step_key,
+                                activity=f"Continuing saved {collection} history · page 1",
+                                counters="0 pages · 0 tweets",
+                            )
                     else:
+                        backfill_step_key = None
                         console.print(
                             f"{collection}: resuming saved backfill pass", highlight=False
                         )
@@ -1219,18 +1231,36 @@ async def _sync_collection_ready(
                         sleep=sleep,
                         client=client,
                         write_tracker=write_tracker,
-                        pipeline_step_key=backfill_step_key,
+                        pipeline_step_key=backfill_step_key if pipeline is not None else None,
                     )
-                    if pipeline is not None:
+                    pages_total += backfill_pages
+                    tweets_total += backfill_tweets
+                    stop_reason = backfill_reason
+                    if pipeline is not None and not combine_pipeline_passes:
                         pipeline.complete_step(
                             backfill_step_key,
                             f"{backfill_pages:,} pages · {backfill_tweets:,} tweets · "
                             f"{_stop_summary(backfill_reason)}",
                         )
-                    pages_total += backfill_pages
-                    tweets_total += backfill_tweets
-                    stop_reason = backfill_reason
-                elif pipeline is not None and pipeline.has_step(f"sync:{collection}:backfill"):
+                if pipeline is not None and combine_pipeline_passes:
+                    if resume_saved_backfill:
+                        pipeline.complete_step(
+                            head_step_key,
+                            f"{head_pages:,} head pages · {head_tweets:,} tweets · "
+                            f"{backfill_pages:,} older pages · {backfill_tweets:,} tweets · "
+                            f"{_stop_summary(backfill_reason)}",
+                        )
+                    else:
+                        pipeline.complete_step(
+                            head_step_key,
+                            f"{head_pages:,} pages · {head_tweets:,} tweets · "
+                            f"{_stop_summary(head_reason)}",
+                        )
+                elif (
+                    pipeline is not None
+                    and pipeline.has_step(f"sync:{collection}:backfill")
+                    and not resume_saved_backfill
+                ):
                     if not prior_backfill_incomplete:
                         reason = "no saved older-history cursor"
                     elif remaining == 0:
