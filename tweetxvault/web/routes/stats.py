@@ -9,9 +9,11 @@ from tweetxvault.stats import (
     build_stats_report,
     build_stats_section,
     get_enrichment_incomplete_count,
+    get_latest_sync_at,
 )
 from tweetxvault.storage import ArchiveStore
 from tweetxvault.web.deps import get_store, verify_credentials
+from tweetxvault.web.stats_cache import CachedStatsReport, web_stats_cache
 
 router = APIRouter(
     prefix="/api/stats",
@@ -56,42 +58,17 @@ def _format_stats_timestamp(raw: str | None) -> str:
         return raw
 
 
-@router.get("/report")
-def get_stats_report(
-    store: ArchiveStore = Depends(get_store),  # noqa: B008 - FastAPI dependency
-) -> dict[str, Any]:
-    """Return the complete ordered report consumed by both interfaces."""
-    return build_stats_report(store).as_dict()
-
-
-@router.get("/enrichment-incomplete")
-def get_enrichment_incomplete(
-    store: ArchiveStore = Depends(get_store),  # noqa: B008 - FastAPI dependency
-) -> dict[str, int]:
-    """Return the inexpensive status-banner count."""
-    return {"incomplete": get_enrichment_incomplete_count(store)}
-
-
-@router.get("/summary")
-def get_stats_summary(
-    store: ArchiveStore = Depends(get_store),  # noqa: B008 - FastAPI dependency
-) -> dict[str, Any]:
-    """Return the legacy overview payload."""
-    data = dict(build_stats_section(store, "overview").data)
+def _legacy_summary(data: dict[str, Any]) -> dict[str, Any]:
+    result = dict(data)
     for key in ("oldest_post", "newest_post", "latest_sync"):
-        data[key] = _format_ts(data[key])
-    data.pop("collection_memberships", None)
-    data.pop("raw_captures", None)
-    data.pop("latest_capture", None)
-    return data
+        result[key] = _format_ts(result[key])
+    result.pop("collection_memberships", None)
+    result.pop("raw_captures", None)
+    result.pop("latest_capture", None)
+    return result
 
 
-@router.get("/collections")
-def get_stats_collections(
-    store: ArchiveStore = Depends(get_store),  # noqa: B008 - FastAPI dependency
-) -> list[dict[str, Any]]:
-    """Return the legacy collections payload."""
-    rows = build_stats_section(store, "collections").rows
+def _legacy_collections(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         {
             **row,
@@ -103,19 +80,96 @@ def get_stats_collections(
     ]
 
 
+def _legacy_health(data: dict[str, Any]) -> dict[str, Any]:
+    result = dict(data)
+    result.pop("missing_tweet_objects", None)
+    result.pop("pending_thread_memberships", None)
+    result.pop("pending_linked_statuses", None)
+    result["enrichment"] = dict(result["enrichment"])
+    result["enrichment"].pop("transient_due", None)
+    result["enrichment"].pop("transient_delayed", None)
+    return result
+
+
+def _cached_snapshot_payload(cached: CachedStatsReport) -> dict[str, Any]:
+    report = cached.report
+    return {
+        "generated_at": report.generated_at,
+        "age_seconds": round(cached.age_seconds, 1),
+        "stale": cached.stale,
+        "refreshing": cached.refreshing,
+        "refresh_failed": cached.refresh_failed,
+        "summary": _legacy_summary(report.section("overview").data),
+        "collections": _legacy_collections(report.section("collections").rows),
+        "health": _legacy_health(report.section("archive_status").data),
+        "storage": report.section("storage").data,
+        "tags": report.section("tagging").data,
+    }
+
+
+@router.get("/report")
+def get_stats_report(
+    store: ArchiveStore = Depends(get_store),  # noqa: B008 - FastAPI dependency
+) -> dict[str, Any]:
+    """Return the complete ordered report consumed by both interfaces."""
+    return build_stats_report(store).as_dict()
+
+
+@router.get("/snapshot")
+def get_cached_stats_snapshot(
+    revalidate: bool = True,
+    store: ArchiveStore = Depends(get_store),  # noqa: B008 - FastAPI dependency
+) -> dict[str, Any]:
+    """Return the Web modal snapshot, revalidating stale data in the background."""
+    return _cached_snapshot_payload(web_stats_cache.get(store, revalidate=revalidate))
+
+
+@router.post("/refresh")
+def refresh_cached_stats(
+    store: ArchiveStore = Depends(get_store),  # noqa: B008 - FastAPI dependency
+) -> dict[str, Any]:
+    """Start a manual refresh while retaining the currently displayed snapshot."""
+    return _cached_snapshot_payload(web_stats_cache.refresh(store))
+
+
+@router.get("/enrichment-incomplete")
+def get_enrichment_incomplete(
+    store: ArchiveStore = Depends(get_store),  # noqa: B008 - FastAPI dependency
+) -> dict[str, int]:
+    """Return the inexpensive status-banner count."""
+    return {"incomplete": get_enrichment_incomplete_count(store)}
+
+
+@router.get("/latest-sync")
+def get_latest_sync(
+    store: ArchiveStore = Depends(get_store),  # noqa: B008 - FastAPI dependency
+) -> dict[str, str | None]:
+    """Return only the inexpensive page-header sync timestamp."""
+    return {"latest_sync": _format_ts(get_latest_sync_at(store))}
+
+
+@router.get("/summary")
+def get_stats_summary(
+    store: ArchiveStore = Depends(get_store),  # noqa: B008 - FastAPI dependency
+) -> dict[str, Any]:
+    """Return the legacy overview payload."""
+    return _legacy_summary(build_stats_section(store, "overview").data)
+
+
+@router.get("/collections")
+def get_stats_collections(
+    store: ArchiveStore = Depends(get_store),  # noqa: B008 - FastAPI dependency
+) -> list[dict[str, Any]]:
+    """Return the legacy collections payload."""
+    return _legacy_collections(build_stats_section(store, "collections").rows)
+
+
 @router.get("/health")
 def get_stats_health(
     store: ArchiveStore = Depends(get_store),  # noqa: B008 - FastAPI dependency
 ) -> dict[str, Any]:
     """Return the legacy archive-status payload."""
-    data = dict(build_stats_section(store, "archive_status").data)
-    data.pop("missing_tweet_objects", None)
-    data.pop("pending_thread_memberships", None)
-    data.pop("pending_linked_statuses", None)
-    data["enrichment"] = dict(data["enrichment"])
-    data["enrichment"].pop("transient_due", None)
-    data["enrichment"].pop("transient_delayed", None)
-    return data
+    return _legacy_health(build_stats_section(store, "archive_status").data)
 
 
 @router.get("/tags")

@@ -443,7 +443,67 @@ test('tweet app starts with coherent list, panel, modal, and theme state', () =>
     assert.equal(app.tagModalOpen, false);
     assert.equal(app.currentTheme, 'classic-dark');
     assert.equal(app.showEmptyUnavailableReasons, false);
+    assert.equal(app.statsGeneratedAt, null);
+    assert.equal(app.statsRefreshing, false);
     assert.ok(Object.keys(app.THEMES).length >= 15);
+});
+
+test('analytics uses one cached snapshot and retains it during manual refresh', async () => {
+    const context = browserContext();
+    const calls = [];
+    const generatedAt = new Date().toISOString();
+    const snapshot = {
+        generated_at: generatedAt,
+        age_seconds: 0,
+        stale: false,
+        refreshing: false,
+        refresh_failed: false,
+        summary: { unique_posts: 12, latest_sync: 'Aug 10, 2026' },
+        collections: [{ collection: 'Bookmarks', count: 12 }],
+        health: { enrichment: { unavailable: { reasons: [] } } },
+        storage: { total_bytes: 42 },
+        tags: { unique_tags: 3 },
+    };
+    context.fetch = async (url, options = {}) => {
+        calls.push([url, options]);
+        return {
+            ok: true,
+            status: 200,
+            async json() {
+                return url === '/api/stats/refresh'
+                    ? { ...snapshot, refreshing: true }
+                    : snapshot;
+            },
+        };
+    };
+    const { tweetApp } = loadScripts(
+        context,
+        ['themes.js', 'app.js'],
+        '({tweetApp})',
+    );
+    const app = immediateComponent(tweetApp());
+    let polls = 0;
+    app.scheduleStatsRefreshPoll = () => { polls += 1; };
+
+    await app.openStatsModal();
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0][0], '/api/stats/snapshot?revalidate=true');
+    assert.equal(app.statsSummary.unique_posts, 12);
+    assert.equal(app.statsCollections[0].collection, 'Bookmarks');
+    assert.equal(app.storageData.total_bytes, 42);
+    assert.equal(app.statsTags.unique_tags, 3);
+    assert.equal(app.loadingStatsSnapshot, false);
+    assert.equal(app.statsAgeLabel(), 'Updated just now');
+
+    await app.refreshStats();
+
+    assert.equal(calls[1][0], '/api/stats/refresh');
+    assert.equal(calls[1][1].method, 'POST');
+    assert.equal(app.statsSummary.unique_posts, 12);
+    assert.equal(app.statsRefreshing, true);
+    assert.equal(app.statsAgeLabel(), 'Refreshing · updated just now');
+    assert.equal(polls, 1);
 });
 
 test('archive status filters empty reasons and summarizes retry state', () => {
@@ -532,6 +592,11 @@ test('analytics markup exposes the Archive status cards and reason breakdown', (
     assert.match(html, /x-model="showEmptyUnavailableReasons"/);
     assert.match(html, /archive-status-bar-seg/);
     assert.match(html, /archive-status-reason-row/);
+    assert.match(html, /@click="refreshStats\(\)"/);
+    assert.match(html, /x-text="statsAgeLabel\(\)"/);
+    assert.match(html, /x-show="!statsRefreshing">Refresh</);
+    assert.match(html, /x-show="statsRefreshing" class="inline-flex items-center gap-1.5"/);
+    assert.match(html, /\sRefreshing\s+<\/span>/);
     assert.doesNotMatch(html, />Pipeline health</);
 });
 
@@ -819,7 +884,7 @@ test('config and stats requests update their matching UI state', async () => {
                     web: { host: '127.0.0.1', port: 8000 },
                 };
             }
-            if (url === '/api/stats/summary') return { latest_sync: '2026-07-30T00:00:00Z' };
+            if (url === '/api/stats/latest-sync') return { latest_sync: '2026-07-30T00:00:00Z' };
             return {};
         },
     });

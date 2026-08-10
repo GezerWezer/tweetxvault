@@ -23,6 +23,7 @@ from tweetxvault.web.routes.stats import router as stats_router
 from tweetxvault.web.routes.storage_stats import router as storage_stats_router
 from tweetxvault.web.routes.tags import router as tags_router
 from tweetxvault.web.routes.tweets import router as tweets_router
+from tweetxvault.web.stats_cache import web_stats_cache
 
 
 def _build_fts_in_background(store) -> None:
@@ -58,6 +59,8 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         if store := server_state.get("store"):
+            web_stats_cache.wait_for_refreshes()
+            web_stats_cache.clear()
             store.close()
 
 

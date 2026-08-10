@@ -1422,9 +1422,29 @@
                 <!-- Modal Header (Twitter-minimal) -->
                 <div class="stats-modal-header">
                     <h2 class="stats-modal-title">Analytics</h2>
-                    <button @click="showStatsModal = false" class="text-[var(--text-secondary)] hover:text-[var(--text-primary)] p-2 rounded-full hover-bg transition">
-                        <svg viewBox="0 0 24 24" class="w-5 h-5 fill-current"><path d="M13.414 12l5.793-5.793c.39-.39.39-1.023 0-1.414s-1.024-.39-1.414 0L12 10.586 6.207 4.793c-.39-.39-1.023-.39-1.414 0s-.39 1.024 0 1.414L10.586 12l-5.793 5.793c-.39.39-.39 1.023 0 1.414.195.195.45.293.707.293s.512-.098.707-.293L12 13.414l5.793 5.793c.195.195.45.293.707.293s.512-.098.707-.293c.39-.39.39-1.023 0-1.414L13.414 12z"></path></svg>
-                    </button>
+                    <div class="flex items-center gap-1.5 min-w-0">
+                        <span x-show="statsGeneratedAt"
+                              class="text-xs text-[var(--text-secondary)] truncate"
+                              x-text="statsAgeLabel()"></span>
+                        <button type="button"
+                                @click="refreshStats()"
+                                :disabled="statsRefreshing || loadingStatsSnapshot"
+                                class="inline-flex items-center justify-center min-w-[76px] px-3 py-1.5 rounded-full bg-[var(--accent-color)] text-[var(--accent-text)] text-xs font-bold hover:opacity-90 disabled:cursor-not-allowed transition"
+                                aria-label="Refresh statistics"
+                                title="Refresh statistics">
+                            <span x-show="!statsRefreshing">Refresh</span>
+                            <span x-show="statsRefreshing" class="inline-flex items-center gap-1.5">
+                                <svg class="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                    <circle class="opacity-25" cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3"></circle>
+                                    <path class="opacity-90 fill-current" d="M21 12a9 9 0 00-9-9v3a6 6 0 016 6h3z"></path>
+                                </svg>
+                                Refreshing
+                            </span>
+                        </button>
+                        <button type="button" @click="showStatsModal = false" class="text-[var(--text-secondary)] hover:text-[var(--text-primary)] p-2 rounded-full hover-bg transition" aria-label="Close statistics">
+                            <svg viewBox="0 0 24 24" class="w-5 h-5 fill-current"><path d="M13.414 12l5.793-5.793c.39-.39.39-1.023 0-1.414s-1.024-.39-1.414 0L12 10.586 6.207 4.793c-.39-.39-1.023-.39-1.414 0s-.39 1.024 0 1.414L10.586 12l-5.793 5.793c-.39.39-.39 1.023 0 1.414.195.195.45.293.707.293s.512-.098.707-.293L12 13.414l5.793 5.793c.195.195.45.293.707.293s.512-.098.707-.293c.39-.39.39-1.023 0-1.414L13.414 12z"></path></svg>
+                        </button>
+                    </div>
                 </div>
 
                 <!-- Scrollable Content -->

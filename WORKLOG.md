@@ -1,3 +1,17 @@
+- 2026-08-10 (Cached Web statistics)
+  - Added a five-minute process-local Web cache for complete statistics reports. Initial collection
+    and background refreshes are deduplicated; stale data remains available during refresh and
+    after refresh failures.
+  - Replaced the modal's five parallel section requests with one snapshot request, added a colored
+    Refresh capsule that switches to a spinner-backed Refreshing state plus a generated-data age
+    label, and poll-swaps the snapshot only after a refresh finishes.
+  - Moved the feed header to a lightweight latest-sync query so normal page load avoids complete
+    statistics collection. The CLI continues to build a fresh shared report on every invocation.
+  - Added concurrency, stale-success/failure, route, browser-state, markup, and uncached-CLI
+    regressions. Rendered local QA confirmed the header and refresh flow with no application console
+    errors. All 795 tests and repository-wide Ruff lint pass; all task files pass Ruff format and
+    `git diff --check`. The repository-wide format check reports seven pre-existing unrelated files.
+
 - 2026-08-10 (Tagging coverage eligibility)
   - Replaced the tagging coverage denominator's count of every distinct media owner with the actual
     automatic-tagging population: directly saved membership, `done`/`resurrected` tweet object,

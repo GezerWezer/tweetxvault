@@ -186,6 +186,13 @@ function tweetApp() {
         archiveEnrichmentIncomplete: 0,
         statsTags: null,
         loadingStatsTags: false,
+        loadingStatsSnapshot: false,
+        statsGeneratedAt: null,
+        statsRefreshing: false,
+        statsRefreshFailed: false,
+        statsRefreshPollTimer: null,
+        statsRefreshPollAttempts: 0,
+        statsAgeNow: Date.now(),
 
         storageData: null,
         storageLoading: false,
@@ -258,6 +265,7 @@ function tweetApp() {
             this.fetchStats();
             this.fetchArchiveEnrichmentStatus();
             setInterval(() => this.fetchArchiveEnrichmentStatus(), 60000);
+            setInterval(() => { this.statsAgeNow = Date.now(); }, 30000);
             this.fetchGlobalTags();
             
             this.$watch('showSettingsModal', val => {
@@ -664,7 +672,7 @@ function tweetApp() {
 
         async fetchStats() {
             try {
-                const res = await fetch('/api/stats/summary');
+                const res = await fetch('/api/stats/latest-sync');
                 const data = await res.json();
                 if (data.latest_sync) {
                     this.lastSyncFormatted = data.latest_sync;
@@ -674,69 +682,110 @@ function tweetApp() {
             }
         },
 
-        openStatsModal() {
+        async openStatsModal() {
             this.showStatsModal = true;
-            this.fetchStatsSummary();
-            this.fetchStatsCollections();
-            this.fetchStorageBreakdown();
-            this.fetchStatsHealth();
-            this.fetchStatsTags();
+            await this.fetchStatsSnapshot();
         },
 
-        fetchStatsSummary() {
-            this.loadingStatsSummary = true;
-            fetch('/api/stats/summary')
-                .then(r => r.json())
-                .then(d => {
-                    this.statsSummary = d;
-                    this.loadingStatsSummary = false;
-                })
-                .catch(e => {
-                    console.error(e);
-                    this.loadingStatsSummary = false;
-                });
+        setStatsLoading(loading) {
+            this.loadingStatsSnapshot = loading;
+            this.loadingStatsSummary = loading;
+            this.loadingStatsCollections = loading;
+            this.loadingStatsHealth = loading;
+            this.loadingStatsTags = loading;
+            this.storageLoading = loading;
         },
 
-        fetchStatsTags() {
-            this.loadingStatsTags = true;
-            fetch('/api/stats/tags')
-                .then(r => r.json())
-                .then(d => {
-                    this.statsTags = d;
-                    this.loadingStatsTags = false;
-                })
-                .catch(e => {
-                    console.error('Failed to fetch tag stats', e);
-                    this.loadingStatsTags = false;
-                });
+        applyStatsSnapshot(snapshot) {
+            this.statsSummary = snapshot.summary;
+            this.statsCollections = snapshot.collections || [];
+            this.statsHealth = snapshot.health;
+            this.storageData = snapshot.storage;
+            this.statsTags = snapshot.tags;
+            this.statsGeneratedAt = snapshot.generated_at;
+            this.statsRefreshing = Boolean(snapshot.refreshing);
+            this.statsRefreshFailed = Boolean(snapshot.refresh_failed);
+            this.statsAgeNow = Date.now();
+            if (snapshot.summary?.latest_sync) {
+                this.lastSyncFormatted = snapshot.summary.latest_sync;
+            }
         },
 
-        fetchStatsCollections() {
-            this.loadingStatsCollections = true;
-            fetch('/api/stats/collections')
-                .then(r => r.json())
-                .then(d => {
-                    this.statsCollections = d;
-                    this.loadingStatsCollections = false;
-                })
-                .catch(e => {
-                    console.error(e);
-                    this.loadingStatsCollections = false;
-                });
+        async fetchStatsSnapshot(revalidate = true) {
+            const showSkeletons = !this.statsGeneratedAt;
+            if (showSkeletons) this.setStatsLoading(true);
+            try {
+                const res = await fetch(`/api/stats/snapshot?revalidate=${revalidate}`);
+                if (!res.ok) throw new Error(`Statistics request failed (${res.status})`);
+                this.applyStatsSnapshot(await res.json());
+                if (this.statsRefreshing) {
+                    this.statsRefreshPollAttempts = 0;
+                    this.scheduleStatsRefreshPoll();
+                }
+            } catch (e) {
+                console.error('Failed to fetch statistics', e);
+                this.statsRefreshFailed = true;
+            } finally {
+                if (showSkeletons) this.setStatsLoading(false);
+            }
         },
 
-        fetchStatsHealth() {
-            this.loadingStatsHealth = true;
-            fetch('/api/stats/health')
-                .then(r => r.json())
-                .then(d => {
-                    this.statsHealth = d;
-                    this.loadingStatsHealth = false;
-                })
-                .catch(e => {
-                    console.error(e);
-                    this.loadingStatsHealth = false;
-                });
+        async refreshStats() {
+            if (this.statsRefreshing || this.loadingStatsSnapshot) return;
+            this.statsRefreshing = true;
+            this.statsRefreshFailed = false;
+            try {
+                const res = await fetch('/api/stats/refresh', { method: 'POST' });
+                if (!res.ok) throw new Error(`Statistics refresh failed (${res.status})`);
+                this.applyStatsSnapshot(await res.json());
+                if (this.statsRefreshing) {
+                    this.statsRefreshPollAttempts = 0;
+                    this.scheduleStatsRefreshPoll();
+                }
+            } catch (e) {
+                console.error('Failed to refresh statistics', e);
+                this.statsRefreshing = false;
+                this.statsRefreshFailed = true;
+            }
+        },
+
+        scheduleStatsRefreshPoll() {
+            if (this.statsRefreshPollTimer) clearTimeout(this.statsRefreshPollTimer);
+            if (!this.statsRefreshing || !this.showStatsModal) return;
+            this.statsRefreshPollAttempts += 1;
+            if (this.statsRefreshPollAttempts > 300) {
+                this.statsRefreshing = false;
+                this.statsRefreshFailed = true;
+                return;
+            }
+            this.statsRefreshPollTimer = setTimeout(() => this.pollStatsRefresh(), 1000);
+        },
+
+        async pollStatsRefresh() {
+            this.statsRefreshPollTimer = null;
+            if (!this.showStatsModal) return;
+            try {
+                const res = await fetch('/api/stats/snapshot?revalidate=false');
+                if (!res.ok) throw new Error(`Statistics refresh poll failed (${res.status})`);
+                this.applyStatsSnapshot(await res.json());
+            } catch (e) {
+                console.error('Failed to check statistics refresh', e);
+            }
+            if (this.statsRefreshing) {
+                this.scheduleStatsRefreshPoll();
+            } else {
+                this.statsRefreshPollAttempts = 0;
+            }
+        },
+
+        statsAgeLabel() {
+            if (!this.statsGeneratedAt) return '';
+            // Reading the timer-backed value keeps Alpine's relative label current.
+            void this.statsAgeNow;
+            const relative = this.formatRelativeDate(this.statsGeneratedAt);
+            if (this.statsRefreshFailed) return `Refresh failed · updated ${relative}`;
+            if (this.statsRefreshing) return `Refreshing · updated ${relative}`;
+            return `Updated ${relative}`;
         },
 
         getUnavailableReasons() {
@@ -786,19 +835,6 @@ function tweetApp() {
                 .catch(e => console.error('Failed to fetch archive enrichment status', e));
         },
 
-        fetchStorageBreakdown() {
-            this.storageLoading = true;
-            fetch('/api/storage/breakdown')
-                .then(r => r.json())
-                .then(d => {
-                    this.storageData = d;
-                    this.storageLoading = false;
-                })
-                .catch(e => {
-                    console.error('Failed to fetch storage stats', e);
-                    this.storageLoading = false;
-                });
-        },
         setHoveredStorage(id) {
             this.hoveredStorageId = id;
         },

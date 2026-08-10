@@ -74,6 +74,17 @@ def get_enrichment_incomplete_count(store: ArchiveStore) -> int:
     return int(row[0] or 0) if row else 0
 
 
+def get_latest_sync_at(store: ArchiveStore) -> str | None:
+    """Return the latest sync timestamp without collecting archive statistics."""
+    with _STATS_LOCK:
+        row = store.conn.execute(
+            "SELECT max(updated_at) FROM archive WHERE record_type = 'sync_state'"
+        ).fetchone()
+    if row and isinstance(row[0], str) and row[0]:
+        return row[0]
+    return None
+
+
 def _backfill_status(cursor: str | None, incomplete: bool) -> str:
     if incomplete and cursor:
         return "resume older"

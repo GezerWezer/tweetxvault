@@ -11,6 +11,14 @@ Hard constraints:
 
 Definition of done: passes `uv run ruff format --check`, `uv run ruff check`, and `uv run pytest`.
 
+## Cached Web statistics (2026-08-10)
+
+- [x] Add a Web-only, stale-while-revalidate cache for complete statistics snapshots.
+- [x] Deduplicate initial loads and background refreshes while retaining stale data on failure.
+- [x] Load the statistics modal from one cached snapshot and add manual refresh plus data age.
+- [x] Keep the page-level latest-sync lookup lightweight and keep CLI `stats` uncached.
+- [x] Add backend, route, browser, documentation, and complete validation coverage.
+
 ## Tagging coverage statistics (2026-08-10)
 
 - [x] Define coverage eligibility from direct membership, available enrichment, and media rows.

@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
 
 import pytest
 
-from tweetxvault.stats import STATS_SECTION_SPECS
+from tweetxvault.stats import STATS_SECTION_SPECS, build_stats_report
 from tweetxvault.storage.backend import ArchiveCollectionStats, ArchiveStats, ArchiveStore
 from tweetxvault.web.routes import stats as stats_routes
+from tweetxvault.web.stats_cache import WebStatsCache
 
 
 def _stats_store(tmp_path: Path) -> ArchiveStore:
@@ -159,6 +161,61 @@ def test_report_exposes_the_shared_ordered_section_registry(tmp_path, make_web_c
     assert data["archive_path"] == str(store.db_path)
 
 
+def test_cached_snapshot_serves_old_data_during_manual_refresh(
+    tmp_path,
+    make_web_client,
+    monkeypatch,
+) -> None:
+    store = _stats_store(tmp_path)
+    _seed_tag_stats_tweet(store, "t1")
+    refresh_started = Event()
+    allow_refresh = Event()
+    calls = 0
+
+    def build(store_arg):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            refresh_started.set()
+            assert allow_refresh.wait(timeout=2)
+        return build_stats_report(store_arg)
+
+    cache = WebStatsCache(builder=build)
+    monkeypatch.setattr(stats_routes, "web_stats_cache", cache)
+    client = make_web_client(stats_routes.router, store=store)
+
+    initial = client.get("/api/stats/snapshot?revalidate=false").json()
+    _seed_tag_stats_tweet(store, "t2")
+    refreshing = client.post("/api/stats/refresh").json()
+
+    assert refresh_started.wait(timeout=2)
+    assert initial["summary"]["unique_posts"] == 1
+    assert refreshing["summary"]["unique_posts"] == 1
+    assert refreshing["refreshing"] is True
+    assert refreshing["generated_at"] == initial["generated_at"]
+    assert set(refreshing) == {
+        "generated_at",
+        "age_seconds",
+        "stale",
+        "refreshing",
+        "refresh_failed",
+        "summary",
+        "collections",
+        "health",
+        "storage",
+        "tags",
+    }
+
+    allow_refresh.set()
+    cache.wait_for_refreshes()
+    refreshed = client.get("/api/stats/snapshot?revalidate=false").json()
+
+    assert refreshed["summary"]["unique_posts"] == 2
+    assert refreshed["refreshing"] is False
+    assert refreshed["refresh_failed"] is False
+    assert calls == 2
+
+
 def test_enrichment_banner_uses_the_lightweight_shared_count(tmp_path, make_web_client) -> None:
     store = _stats_store(tmp_path)
     store.conn.executemany(
@@ -171,6 +228,31 @@ def test_enrichment_banner_uses_the_lightweight_shared_count(tmp_path, make_web_
 
     assert response.status_code == 200
     assert response.json() == {"incomplete": 2}
+
+
+def test_latest_sync_endpoint_avoids_full_statistics_collection(
+    tmp_path,
+    make_web_client,
+    monkeypatch,
+) -> None:
+    store = _stats_store(tmp_path)
+    store.conn.execute(
+        """
+        INSERT INTO archive (record_type, collection_type, updated_at)
+        VALUES ('sync_state', 'bookmark', '2026-08-10T14:30:00Z')
+        """
+    )
+    monkeypatch.setattr(
+        stats_routes,
+        "build_stats_section",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("full stats called")),
+    )
+    client = make_web_client(stats_routes.router, store=store)
+
+    response = client.get("/api/stats/latest-sync")
+
+    assert response.status_code == 200
+    assert response.json() == {"latest_sync": "Aug 10, 2026"}
 
 
 @pytest.mark.parametrize(

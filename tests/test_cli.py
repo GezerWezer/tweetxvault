@@ -1565,6 +1565,38 @@ def test_stats_archive_renders_summary_tables(paths, monkeypatch) -> None:
     assert "Follow-up" not in normalized
 
 
+def test_stats_archive_builds_a_fresh_report_on_every_invocation(paths, monkeypatch) -> None:
+    class Store:
+        def close(self) -> None:
+            pass
+
+    store = Store()
+    reports: list[object] = []
+    rendered: list[object] = []
+    monkeypatch.setattr(cli, "_configure_logging", lambda: object())
+    monkeypatch.setattr(cli, "_open_store_for_read", lambda _console: (store, paths))
+
+    def build(store_arg):
+        assert store_arg is store
+        report = object()
+        reports.append(report)
+        return report
+
+    monkeypatch.setattr(cli, "build_stats_report", build)
+    monkeypatch.setattr(
+        cli,
+        "render_stats_report",
+        lambda _console, report, *, detailed: rendered.append(report),
+    )
+
+    cli.stats_archive()
+    cli.stats_archive()
+
+    assert len(reports) == 2
+    assert reports[0] is not reports[1]
+    assert rendered == reports
+
+
 def test_stats_archive_detailed_shows_full_storage_and_hidden_rows(paths, monkeypatch) -> None:
     buffer = StringIO()
     _capture_console(monkeypatch, buffer)
