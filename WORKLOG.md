@@ -1,3 +1,13 @@
+- 2026-08-09 (LanceDB migration recovery)
+  - Updated the migration-only dependency from LanceDB 0.29 to the tested 0.34 release line.
+  - Replaced whole-chunk loss with adaptive source recovery: failed reads and native crashes split
+    to progressively smaller ranges, and only an unreadable single row is skipped.
+  - Kept destination writes and worker-launch failures fatal, added distinct worker exit codes, and
+    report skipped rows as a partial migration with instructions to retain the LanceDB archive.
+  - Added focused worker classification, recovery, fatal-error, progress, and rerun regressions.
+  - Full pytest and repository-wide Ruff lint pass under the locked LanceDB 0.34.0 environment;
+    format check reports only pre-existing `tests/test_auth.py` and `tweetxvault/resurrection.py`.
+
 - 2026-08-09 (Web/search performance)
   - Root cause: common normalized filters were Python post-filters, so structured-only searches
     exported the full archive and text-filter searches hydrated outside their bounded FTS candidates.

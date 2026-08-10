@@ -11,6 +11,14 @@ Hard constraints:
 
 Definition of done: passes `uv run ruff format --check`, `uv run ruff check`, and `uv run pytest`.
 
+## LanceDB migration recovery (2026-08-09)
+
+- [x] Support the tested LanceDB 0.34 release line in project metadata and the lockfile.
+- [x] Classify source-read/native failures separately from destination and worker-launch failures.
+- [x] Retry unreadable chunks as progressively smaller ranges, skipping only irrecoverable rows.
+- [x] Report partial migrations distinctly and retain the legacy archive recovery warning.
+- [x] Add focused worker classification, adaptive recovery, fatal failure, and progress tests.
+
 ## Web/search performance (2026-08-09)
 
 - [x] Push normalized media, link, and article filters into SQLite and bound mixed-text hydration.

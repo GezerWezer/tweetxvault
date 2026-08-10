@@ -330,6 +330,59 @@ def test_worker_code_empty_batch_exits_without_opening_destination(
     assert not database_path.exists()
 
 
+def test_worker_code_classifies_lancedb_read_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    paths,
+) -> None:
+    fake_lancedb = SimpleNamespace(
+        connect=lambda path: (_ for _ in ()).throw(RuntimeError("broken fragment"))
+    )
+    monkeypatch.setitem(sys.modules, "lancedb", fake_lancedb)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["-c", str(paths.data_dir / "archive.lancedb"), str(paths.database_path), "8", "2"],
+    )
+
+    with pytest.raises(SystemExit) as exit_info:
+        exec(compile(migrate.WORKER_CODE, "<migration-worker>", "exec"), {"__name__": "__main__"})
+
+    assert exit_info.value.code == migrate.WORKER_SOURCE_READ_FAILED
+
+
+def test_worker_code_classifies_sqlite_write_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    paths,
+) -> None:
+    rows = [{"row_key": "tweet_object:1", "record_type": "tweet_object"}]
+    search = SimpleNamespace(
+        limit=lambda value: SimpleNamespace(
+            offset=lambda offset: SimpleNamespace(to_list=lambda: rows)
+        )
+    )
+    fake_lancedb = SimpleNamespace(
+        connect=lambda path: SimpleNamespace(
+            open_table=lambda name: SimpleNamespace(search=lambda: search)
+        )
+    )
+    fake_sqlite = SimpleNamespace(
+        Row=object,
+        connect=lambda *args, **kwargs: (_ for _ in ()).throw(OSError("disk full")),
+    )
+    monkeypatch.setitem(sys.modules, "lancedb", fake_lancedb)
+    monkeypatch.setitem(sys.modules, "sqlite3", fake_sqlite)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["-c", str(paths.data_dir / "archive.lancedb"), str(paths.database_path), "8", "2"],
+    )
+
+    with pytest.raises(SystemExit) as exit_info:
+        exec(compile(migrate.WORKER_CODE, "<migration-worker>", "exec"), {"__name__": "__main__"})
+
+    assert exit_info.value.code == migrate.WORKER_DESTINATION_WRITE_FAILED
+
+
 def test_module_does_not_require_lancedb_until_migration_runs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -499,7 +552,7 @@ def test_single_and_multi_batch_offsets_and_progress(
     assert result.total_rows == total_rows
     assert result.migrated_rows == total_rows
     assert result.skipped_rows == 0
-    assert result.final_offset == expected_offsets[-1]
+    assert result.final_offset == total_rows
     assert [call[3] for call in worker_calls] == expected_offsets
     assert progress.updates == expected_updates
     assert progress.n == total_rows
@@ -529,31 +582,76 @@ def test_worker_end_code_stops_immediately_without_advancing_progress(
     assert progress.closed is True
 
 
-def test_corrupted_chunk_is_skipped_then_success_resets_failure_count(
+def test_corrupted_chunk_is_narrowed_to_one_unreadable_row(
     monkeypatch: pytest.MonkeyPatch,
     paths,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    install_legacy_source(monkeypatch, paths, total_rows=10_000)
+    install_legacy_source(monkeypatch, paths, total_rows=4)
     install_fake_stores(monkeypatch, events=[])
     worker_calls = install_worker_sequence(
         monkeypatch,
-        [1, 0, migrate.WORKER_END_OF_TABLE],
+        [
+            migrate.WORKER_SOURCE_READ_FAILED,
+            0,
+            migrate.WORKER_SOURCE_READ_FAILED,
+            migrate.WORKER_SOURCE_READ_FAILED,
+            0,
+            migrate.WORKER_END_OF_TABLE,
+        ],
     )
-    progress = FakeProgress(10_000)
+    progress = FakeProgress(4)
     monkeypatch.setattr(migrate, "_create_progress", lambda total: progress)
 
-    result = migrate.run_migration()
+    result = migrate.run_migration(batch_size=4)
+
+    assert result.status == "partial"
+    assert result.skipped_rows == 1
+    assert result.migrated_rows == 3
+    assert [(call[3], call[2]) for call in worker_calls] == [
+        (0, 4),
+        (0, 2),
+        (2, 2),
+        (2, 1),
+        (3, 1),
+        (4, 4),
+    ]
+    assert progress.updates == [2, 1, 1]
+    assert progress.n == 4
+    assert any("Corrupted row at offset 2" in message for message in progress.messages)
+    output = capsys.readouterr().out
+    assert "Migration partially complete: 3 rows copied and 1 unreadable row skipped" in output
+    assert "Keep the original" in output
+
+
+def test_native_worker_crash_is_recovered_by_splitting(
+    monkeypatch: pytest.MonkeyPatch,
+    paths,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    install_legacy_source(monkeypatch, paths, total_rows=2)
+    install_fake_stores(monkeypatch, events=[])
+    worker_calls = install_worker_sequence(
+        monkeypatch,
+        [-11, 0, 0, migrate.WORKER_END_OF_TABLE],
+    )
+    monkeypatch.setattr(migrate, "_create_progress", lambda total: None)
+
+    result = migrate.run_migration(batch_size=2)
 
     assert result.status == "complete"
-    assert result.skipped_rows == 5000
-    assert result.migrated_rows == 5000
-    assert [call[3] for call in worker_calls] == [0, 5000, 10_000]
-    assert progress.updates == [5000, 5000]
-    assert len(progress.messages) == 1
-    assert "offset 0" in progress.messages[0]
+    assert result.skipped_rows == 0
+    assert result.migrated_rows == 2
+    assert [(call[3], call[2]) for call in worker_calls] == [
+        (0, 2),
+        (0, 1),
+        (1, 1),
+        (2, 2),
+    ]
+    assert "retrying smaller ranges" in capsys.readouterr().out
 
 
-def test_corrupted_chunk_without_tqdm_uses_plain_warning(
+def test_destination_worker_failure_aborts_without_splitting(
     monkeypatch: pytest.MonkeyPatch,
     paths,
     capsys: pytest.CaptureFixture[str],
@@ -562,79 +660,44 @@ def test_corrupted_chunk_without_tqdm_uses_plain_warning(
     install_fake_stores(monkeypatch, events=[])
     worker_calls = install_worker_sequence(
         monkeypatch,
-        [7, migrate.WORKER_END_OF_TABLE],
+        [migrate.WORKER_DESTINATION_WRITE_FAILED],
     )
-    monkeypatch.setattr(migrate, "_create_progress", lambda total: None)
-
-    result = migrate.run_migration()
-
-    assert result.status == "complete"
-    assert result.skipped_rows == 5000
-    assert [call[3] for call in worker_calls] == [0, 5000]
-    assert "Corrupted chunk detected at offset 0" in capsys.readouterr().out
-
-
-def test_more_than_one_hundred_consecutive_failures_aborts(
-    monkeypatch: pytest.MonkeyPatch,
-    paths,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    install_legacy_source(monkeypatch, paths, total_rows=1_000_000)
-    install_fake_stores(monkeypatch, events=[])
-    offsets: list[int] = []
-
-    def failed_worker(
-        lance_path: Path,
-        database_path: Path,
-        batch_size: int,
-        offset: int,
-    ) -> SimpleNamespace:
-        offsets.append(offset)
-        return worker_result(1)
-
-    monkeypatch.setattr(migrate, "_run_worker", failed_worker)
     monkeypatch.setattr(migrate, "_create_progress", lambda total: None)
 
     result = migrate.run_migration()
 
     assert result.status == "aborted"
-    assert result.worker_calls == 101
-    assert offsets == list(range(0, 505_000, 5000))
-    assert result.final_offset == 500_000
-    assert result.skipped_rows == 505_000
+    assert result.worker_calls == 1
+    assert len(worker_calls) == 1
+    assert result.final_offset == 0
+    assert result.skipped_rows == 0
     output = capsys.readouterr().out
-    assert "Too many consecutive failures" in output
+    assert f"exit code {migrate.WORKER_DESTINATION_WRITE_FAILED}" in output
     assert "Migration stopped before all readable chunks were processed" in output
     assert "Migration complete!" not in output
 
 
-def test_worker_launch_exception_is_treated_as_corrupted_chunk(
+def test_worker_launch_exception_aborts_without_skipping_rows(
     monkeypatch: pytest.MonkeyPatch,
     paths,
 ) -> None:
     install_legacy_source(monkeypatch, paths, total_rows=5000)
     install_fake_stores(monkeypatch, events=[])
-    attempts = 0
 
-    def flaky_worker(*args: Any, **kwargs: Any) -> SimpleNamespace:
-        nonlocal attempts
-        attempts += 1
-        if attempts == 1:
-            raise OSError("cannot spawn")
-        return worker_result(migrate.WORKER_END_OF_TABLE)
+    def failed_worker(*args: Any, **kwargs: Any) -> SimpleNamespace:
+        raise OSError("cannot spawn")
 
-    monkeypatch.setattr(migrate, "_run_worker", flaky_worker)
+    monkeypatch.setattr(migrate, "_run_worker", failed_worker)
     progress = FakeProgress(5000)
     monkeypatch.setattr(migrate, "_create_progress", lambda total: progress)
 
     result = migrate.run_migration()
 
-    assert result.status == "complete"
-    assert result.skipped_rows == 5000
-    assert result.worker_calls == 2
-    assert len(progress.messages) == 2
+    assert result.status == "aborted"
+    assert result.skipped_rows == 0
+    assert result.worker_calls == 1
+    assert len(progress.messages) == 1
     assert "cannot spawn" in progress.messages[0]
-    assert "Corrupted chunk" in progress.messages[1]
 
 
 def test_fts_rebuild_commits_and_closes_destination(

@@ -102,7 +102,7 @@ To safely port your data over to the new format:
 uv run tweetxvault migrate
 ```
 
-The migration tool reads from the old `archive.lancedb` table and writes into the new native SQLite database. It loads data into memory in controlled chunks to prevent OOM errors and isolates the LanceDB driver in a subprocess to protect against Rust core panics (`index out of bounds`) during index compaction. Your old LanceDB directory is untouched; you can manually delete it after verifying the migration.
+The migration tool reads from the old `archive.lancedb` table with LanceDB 0.34 and writes into the new native SQLite database. It loads data into memory in controlled chunks to prevent OOM errors and isolates the LanceDB driver in a subprocess to protect against Rust core panics (`index out of bounds`) during index compaction. If a source chunk cannot be read, the migrator retries progressively smaller ranges down to one row so that a damaged row does not discard the rest of its chunk. A partial migration reports the skipped row count and tells you to keep the old LanceDB directory; after a complete migration, you can manually delete it after verifying the result.
 
 ## Authentication
 

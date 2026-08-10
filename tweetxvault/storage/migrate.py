@@ -14,8 +14,9 @@ from tweetxvault.pipeline import current_pipeline
 from tweetxvault.storage import open_archive_store
 
 WORKER_END_OF_TABLE = 42
+WORKER_SOURCE_READ_FAILED = 43
+WORKER_DESTINATION_WRITE_FAILED = 44
 DEFAULT_BATCH_SIZE = 5000
-MAX_CONSECUTIVE_FAILURES = 100
 
 WORKER_CODE = """
 import sys
@@ -28,51 +29,60 @@ def worker():
     batch_size = int(sys.argv[3])
     offset = int(sys.argv[4])
     
-    ldb = lancedb.connect(lance_path)
-    table = ldb.open_table("archive")
-    rows = table.search().limit(batch_size).offset(offset).to_list()
-    
+    try:
+        ldb = lancedb.connect(lance_path)
+        table = ldb.open_table("archive")
+        rows = table.search().limit(batch_size).offset(offset).to_list()
+    except Exception as error:
+        print(f"LanceDB read failed: {error}", file=sys.stderr)
+        sys.exit(43)
+
     if not rows:
         sys.exit(42)
-        
-    conn = sqlite3.connect(db_path, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    
-    cols = [
-        "row_key", "record_type", "tweet_id", "collection_type", "folder_id", "sort_index",
-        "operation", "cursor_in", "cursor_out", "captured_at", "http_status", "source",
-        "text", "author_id", "author_username", "author_display_name", "created_at",
-        "deleted_at", "conversation_id", "lang", "note_tweet_text", "enrichment_state",
-        "enrichment_checked_at", "enrichment_http_status", "enrichment_reason", "raw_json",
-        "first_seen_at", "last_seen_at", "added_at", "synced_at", "relation_type",
-        "target_tweet_id", "position", "media_key", "media_type", "media_url", "thumbnail_url",
-        "width", "height", "duration_millis", "variants_json", "download_state", "local_path",
-        "provenance_source", "sha256", "byte_size", "content_type", "thumbnail_local_path",
-        "thumbnail_sha256", "thumbnail_byte_size", "thumbnail_content_type", "downloaded_at",
-        "download_error", "url_hash", "url", "expanded_url", "final_url", "canonical_url",
-        "display_url", "url_host", "description", "site_name", "unfurl_state", "last_fetched_at",
-        "article_id", "title", "summary_text", "content_text", "published_at", "status",
-        "archive_digest", "archive_generation_date", "import_started_at", "import_completed_at",
-        "warnings_json", "counts_json", "last_head_tweet_id", "backfill_cursor",
-        "backfill_incomplete",
-        "updated_at", "key", "value"
-    ]
-    placeholders = ", ".join(["?"] * len(cols))
-    col_names = ", ".join(cols)
-    # A rerun must never overwrite newer data already present in SQLite.
-    sql = f"INSERT OR IGNORE INTO archive ({col_names}) VALUES ({placeholders})"
-    
-    params = []
-    for record in rows:
-        row = []
-        for col in cols:
-            row.append(record.get(col))
-        params.append(row)
-        
-    with conn:
-        conn.executemany(sql, params)
-    conn.close()
+
+    try:
+        conn = sqlite3.connect(db_path, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+
+        cols = [
+            "row_key", "record_type", "tweet_id", "collection_type", "folder_id", "sort_index",
+            "operation", "cursor_in", "cursor_out", "captured_at", "http_status", "source",
+            "text", "author_id", "author_username", "author_display_name", "created_at",
+            "deleted_at", "conversation_id", "lang", "note_tweet_text", "enrichment_state",
+            "enrichment_checked_at", "enrichment_http_status", "enrichment_reason", "raw_json",
+            "first_seen_at", "last_seen_at", "added_at", "synced_at", "relation_type",
+            "target_tweet_id", "position", "media_key", "media_type", "media_url", "thumbnail_url",
+            "width", "height", "duration_millis", "variants_json", "download_state", "local_path",
+            "provenance_source", "sha256", "byte_size", "content_type", "thumbnail_local_path",
+            "thumbnail_sha256", "thumbnail_byte_size", "thumbnail_content_type", "downloaded_at",
+            "download_error", "url_hash", "url", "expanded_url", "final_url", "canonical_url",
+            "display_url", "url_host", "description", "site_name", "unfurl_state",
+            "last_fetched_at",
+            "article_id", "title", "summary_text", "content_text", "published_at", "status",
+            "archive_digest", "archive_generation_date", "import_started_at", "import_completed_at",
+            "warnings_json", "counts_json", "last_head_tweet_id", "backfill_cursor",
+            "backfill_incomplete",
+            "updated_at", "key", "value"
+        ]
+        placeholders = ", ".join(["?"] * len(cols))
+        col_names = ", ".join(cols)
+        # A rerun must never overwrite newer data already present in SQLite.
+        sql = f"INSERT OR IGNORE INTO archive ({col_names}) VALUES ({placeholders})"
+
+        params = []
+        for record in rows:
+            row = []
+            for col in cols:
+                row.append(record.get(col))
+            params.append(row)
+
+        with conn:
+            conn.executemany(sql, params)
+        conn.close()
+    except Exception as error:
+        print(f"SQLite write failed: {error}", file=sys.stderr)
+        sys.exit(44)
 
     sys.exit(0)
 
@@ -160,6 +170,15 @@ def _advance_progress(progress: Any | None, total_rows: int, batch_size: int) ->
         progress.update(min(batch_size, remaining))
 
 
+def _worker_error(worker_result: subprocess.CompletedProcess[bytes]) -> str:
+    stderr = worker_result.stderr.decode(errors="replace").strip()
+    return f": {stderr}" if stderr else ""
+
+
+def _recoverable_source_failure(return_code: int) -> bool:
+    return return_code == WORKER_SOURCE_READ_FAILED or return_code < 0
+
+
 def _copy_batches(
     *,
     lance_path: Path,
@@ -170,56 +189,102 @@ def _copy_batches(
 ) -> MigrationResult:
     result = MigrationResult(status="complete", total_rows=total_rows)
     offset = 0
-    consecutive_failures = 0
 
-    while True:
+    def copy_range(range_offset: int, range_size: int) -> bool:
         try:
             worker_result = _run_worker(
                 lance_path,
                 database_path,
-                batch_size,
-                offset,
+                range_size,
+                range_offset,
             )
-            return_code = worker_result.returncode
         except Exception as error:
-            return_code = 1
+            result.worker_calls += 1
+            result.status = "aborted"
             _progress_warning(
                 progress,
-                f"Warning: Migration worker failed at offset {offset}: {error}",
+                f"Warning: Migration worker could not start at offset {range_offset}: {error}",
             )
+            return False
 
         result.worker_calls += 1
-        if return_code == WORKER_END_OF_TABLE:
-            break
+        return_code = worker_result.returncode
+        if return_code == 0:
+            result.migrated_rows += range_size
+            result.final_offset = max(result.final_offset, range_offset + range_size)
+            _advance_progress(progress, total_rows, range_size)
+            return True
 
-        rows_in_chunk = min(batch_size, max(0, total_rows - offset))
-        if return_code != 0:
-            consecutive_failures += 1
-            result.skipped_rows += rows_in_chunk
+        if return_code == WORKER_END_OF_TABLE:
+            result.skipped_rows += range_size
+            result.status = "partial"
+            result.final_offset = max(result.final_offset, range_offset + range_size)
+            _advance_progress(progress, total_rows, range_size)
             _progress_warning(
                 progress,
-                "Warning: Corrupted chunk detected at "
-                f"offset {offset}. Skipping {batch_size} rows to recover data...",
+                f"Warning: LanceDB ended unexpectedly at offset {range_offset}; "
+                f"{range_size} rows could not be read.",
             )
-            if consecutive_failures > MAX_CONSECUTIVE_FAILURES:
+            return True
+
+        if not _recoverable_source_failure(return_code):
+            result.status = "aborted"
+            _progress_warning(
+                progress,
+                f"Warning: Migration worker failed at offset {range_offset} "
+                f"with exit code {return_code}{_worker_error(worker_result)}",
+            )
+            return False
+
+        if range_size == 1:
+            result.skipped_rows += 1
+            result.status = "partial"
+            result.final_offset = max(result.final_offset, range_offset + 1)
+            _advance_progress(progress, total_rows, 1)
+            _progress_warning(
+                progress,
+                f"Warning: Corrupted row at offset {range_offset} could not be recovered"
+                f"{_worker_error(worker_result)}",
+            )
+            return True
+
+        left_size = range_size // 2
+        right_size = range_size - left_size
+        _progress_warning(
+            progress,
+            f"Warning: Corrupted range at offset {range_offset} ({range_size} rows); "
+            "retrying smaller ranges.",
+        )
+        return copy_range(range_offset, left_size) and copy_range(
+            range_offset + left_size,
+            right_size,
+        )
+
+    while True:
+        rows_in_chunk = min(batch_size, max(0, total_rows - offset))
+        if rows_in_chunk == 0:
+            result.worker_calls += 1
+            try:
+                worker_result = _run_worker(lance_path, database_path, batch_size, offset)
+            except Exception as error:
                 result.status = "aborted"
-                pipeline = current_pipeline()
-                if pipeline is not None:
-                    pipeline.issue(
-                        "Too many consecutive migration worker failures; aborting.",
-                        level="error",
-                        dedupe_key="migration:aborted",
-                    )
-                else:
-                    print("Too many consecutive failures. Aborting migration.")
+                _progress_warning(
+                    progress,
+                    f"Warning: Migration worker could not confirm the end of the table: {error}",
+                )
                 break
-        else:
-            consecutive_failures = 0
-            result.migrated_rows += rows_in_chunk
+            if worker_result.returncode != WORKER_END_OF_TABLE:
+                result.status = "aborted"
+                _progress_warning(
+                    progress,
+                    "Warning: Migration worker did not confirm the end of the LanceDB table.",
+                )
+            break
+
+        if not copy_range(offset, rows_in_chunk):
+            break
 
         offset += batch_size
-        result.final_offset = offset
-        _advance_progress(progress, total_rows, batch_size)
 
     return result
 
@@ -416,14 +481,29 @@ def run_migration(
             activity="Rebuilding the SQLite full-text search index",
         )
     result.fts_rebuilt = _rebuild_fts(config, paths, console=console)
+    skipped_unit = "row" if result.skipped_rows == 1 else "rows"
     if pipeline is not None:
         if result.fts_rebuilt:
             pipeline.complete_step("migration-index", "SQLite full-text search index rebuilt")
         else:
             pipeline.fail_step("migration-index", "SQLite full-text search index rebuild failed")
-        pipeline.final_note(
-            f"Migration complete: {result.migrated_rows:,} rows copied into {database_path}."
+        if result.status == "partial":
+            pipeline.final_note(
+                f"Migration partially complete: {result.migrated_rows:,} rows copied and "
+                f"{result.skipped_rows:,} unreadable {skipped_unit} skipped. Keep {lance_path}."
+            )
+        else:
+            pipeline.final_note(
+                f"Migration complete: {result.migrated_rows:,} rows copied into {database_path}."
+            )
+        return result
+
+    if result.status == "partial":
+        print(
+            f"Migration partially complete: {result.migrated_rows} rows copied and "
+            f"{result.skipped_rows} unreadable {skipped_unit} skipped."
         )
+        print(f"Keep the original `{lance_path}` directory for future recovery attempts.")
         return result
 
     print("Migration complete! You can now run `tweetxvault stats`.")
