@@ -1,3 +1,28 @@
+- 2026-08-09 (Web/search performance)
+  - Root cause: common normalized filters were Python post-filters, so structured-only searches
+    exported the full archive and text-filter searches hydrated outside their bounded FTS candidates.
+  - Added correlated SQLite `EXISTS` pushdown for media/image/video/link/article filters (including
+    negation), retained bounded SQL pagination for filter-only searches, and preserved relevance
+    while filtering FTS candidate IDs before final-page hydration. Python-only text filters now
+    hydrate only their bounded FTS candidates; explicit OR and negative-text fallback is unchanged.
+  - Narrowed thread relation/object/media/collection/tag selects, parsed each tweet object's JSON
+    once, grouped media once, and replaced Python quote-row deduplication with parameterized SQLite
+    `COUNT(DISTINCT tweet_id)`. Added a shared 25-entry successful-response cache for normal and
+    split-panel detail views; failures are evicted and in-flight requests are deduplicated.
+  - Production before/after benchmarking and production `EXPLAIN QUERY PLAN` were blocked: both
+    interactive SSH attempts to the requested host failed before authentication with `No route to
+    host`. No production files, processes, or databases were opened or modified, and no performance
+    ratio is claimed. A populated temporary SQLite plan used the existing record/page index for the
+    outer tweet scan and `idx_archive_tweet_id` for correlated related-row lookup, so no index was
+    added without production evidence.
+  - Did not replace ancestor traversal with a recursive CTE: the required production timing gate
+    could not be measured, and there is no evidence that traversal remains a material bottleneck
+    after the lower-risk detail reductions.
+  - Validation passed 85 focused search/Web tests before the final detail regression, all 75 Web API
+    tests after it, 22 browser asset tests, all 780 repository tests, repository-wide Ruff lint,
+    task-file formatting, and `git diff --check`. Repository-wide format check still reports only
+    pre-existing unrelated `tests/test_auth.py` and `tweetxvault/resurrection.py`.
+
 - 2026-08-09 (Quoted-post thread expansion)
   - Added stored `quote_of` relations to the existing membership-rooted BFS so quoted originals
     receive their own `TweetDetail` request instead of remaining known-but-unexpanded objects.

@@ -11,6 +11,14 @@ Hard constraints:
 
 Definition of done: passes `uv run ruff format --check`, `uv run ruff check`, and `uv run pytest`.
 
+## Web/search performance (2026-08-09)
+
+- [x] Push normalized media, link, and article filters into SQLite and bound mixed-text hydration.
+- [x] Reduce tweet-detail query columns, JSON parsing, media scans, and quote-count work.
+- [x] Share a bounded successful thread-response cache across normal and split-panel views.
+- [x] Add search, detail, and browser regressions; pass focused and full local validation.
+- [ ] Capture production before/after timings and query plans when `192.168.1.52` is reachable.
+
 ## Quoted-post thread expansion (2026-08-09)
 
 - [x] Add stored `quote_of` relations to the existing membership-rooted thread traversal graph.
