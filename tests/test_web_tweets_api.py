@@ -510,9 +510,20 @@ class ThreadStore:
     def __init__(self) -> None:
         self.relation_call = 0
         self.expressions: list[str] = []
+        self.query_columns: list[tuple[str, list[str] | None]] = []
+        self.quote_count_call: tuple[str, tuple[str, ...]] | None = None
+        self.conn = self
 
-    def _query(self, *, expr: str, limit: int | None = None, **_: Any) -> list[dict[str, Any]]:
+    def _query(
+        self,
+        *,
+        expr: str,
+        cols: list[str] | None = None,
+        limit: int | None = None,
+        **_: Any,
+    ) -> list[dict[str, Any]]:
         self.expressions.append(expr)
+        self.query_columns.append((expr, cols))
         if "record_type = 'tweet_relation'" in expr and "quote_of" not in expr:
             self.relation_call += 1
             relation_responses = {
@@ -573,18 +584,33 @@ class ThreadStore:
                 {"tweet_id": "main", "raw_json": '{"tags":["Night"]}'},
                 {"tweet_id": "child", "raw_json": "not-json"},
             ]
-        if "quote_of" in expr:
-            return [
-                {"tweet_id": "q1"},
-                {"tweet_id": "q1"},
-                {"tweet_id": "q2"},
-            ]
         return []
 
+    def execute(self, sql: str, params: tuple[str, ...]):
+        self.quote_count_call = (sql, params)
+        return self
+
+    def fetchone(self) -> tuple[int]:
+        return (2,)
+
     def _rows_for_values(
-        self, record_type: str, field: str, values: list[str]
+        self,
+        record_type: str,
+        field: str,
+        values: list[str],
+        *,
+        columns: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         assert (record_type, field, values) == ("media", "tweet_id", ["quoted"])
+        assert columns == [
+            "tweet_id",
+            "media_type",
+            "width",
+            "height",
+            "duration_millis",
+            "local_path",
+            "thumbnail_local_path",
+        ]
         return [
             {
                 "tweet_id": "quoted",
@@ -607,6 +633,65 @@ def test_api_tweet_thread_builds_parents_children_op_replies_quotes_media_and_ta
     assert [tweet["tweet_id"] for tweet in result["parents"]] == ["parent"]
     assert [tweet["tweet_id"] for tweet in result["children"]] == ["child", "popular"]
     assert [reply["tweet_id"] for reply in result["children"][0]["op_replies"]] == ["grandchild"]
+    assert store.quote_count_call is not None
+    assert store.quote_count_call[1] == ("main",)
+    relation_columns = {
+        tuple(columns or [])
+        for expr, columns in store.query_columns
+        if "record_type = 'tweet_relation'" in expr
+    }
+    assert relation_columns == {("tweet_id", "target_tweet_id", "relation_type")}
+    expected_columns = {
+        "tweet_object": {
+            "tweet_id",
+            "text",
+            "author_id",
+            "author_username",
+            "author_display_name",
+            "created_at",
+            "synced_at",
+            "raw_json",
+        },
+        "media": {
+            "tweet_id",
+            "media_type",
+            "width",
+            "height",
+            "duration_millis",
+            "local_path",
+            "thumbnail_local_path",
+        },
+        "media_tag": {"tweet_id", "raw_json"},
+    }
+    for record_type, columns in expected_columns.items():
+        actual = next(
+            selected
+            for expr, selected in store.query_columns
+            if f"record_type = '{record_type}'" in expr
+        )
+        assert set(actual or []) == columns
+
+
+def test_api_tweet_thread_parses_each_tweet_json_once_and_tolerates_malformed(monkeypatch):
+    class MalformedThreadStore(ThreadStore):
+        def _query(self, **kwargs: Any) -> list[dict[str, Any]]:
+            rows = super()._query(**kwargs)
+            if "record_type = 'tweet_object'" in kwargs["expr"]:
+                rows[0]["raw_json"] = "not-json"
+            return rows
+
+    original_loads = json.loads
+    parsed_values: list[object] = []
+
+    def track_loads(value: object, *args: Any, **kwargs: Any) -> Any:
+        parsed_values.append(value)
+        return original_loads(value, *args, **kwargs)
+
+    monkeypatch.setattr("tweetxvault.web.routes.tweets.json.loads", track_loads)
+    result = api_tweet_thread("main", store=MalformedThreadStore(), _auth=True)
+
+    assert result["main"]["raw_json"] is None
+    assert len(parsed_values) == 7  # five tweet objects and two media-tag rows
 
 
 class CycleStore(ThreadStore):

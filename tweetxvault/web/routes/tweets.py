@@ -132,6 +132,7 @@ def api_tweet_thread(
                     f"(target_tweet_id = {quoted_curr_id} "
                     "AND relation_type = 'thread_child'))"
                 ),
+                cols=["tweet_id", "target_tweet_id", "relation_type"],
                 limit=10,
             )
             if not p_rels:
@@ -168,6 +169,7 @@ def api_tweet_thread(
                 f"(tweet_id = {quoted_tweet_id} "
                 "AND relation_type = 'thread_child'))"
             ),
+            cols=["tweet_id", "target_tweet_id", "relation_type"],
             limit=100,
         )
         child_candidates = set()
@@ -189,6 +191,7 @@ def api_tweet_thread(
             child_id_list = ", ".join(_sql_quote(cid) for cid in child_candidates if cid)
             sub_rels = store._query(
                 expr=f"record_type = 'tweet_relation' AND target_tweet_id IN ({child_id_list})",
+                cols=["tweet_id", "target_tweet_id", "relation_type"],
                 limit=100,
             )
             for sr in sub_rels:
@@ -200,14 +203,41 @@ def api_tweet_thread(
 
         id_list = ", ".join(_sql_quote(tid) for tid in related_ids)
         objs = store._query(
-            expr=f"record_type = 'tweet_object' AND tweet_id IN ({id_list})", limit=100
+            expr=f"record_type = 'tweet_object' AND tweet_id IN ({id_list})",
+            cols=[
+                "tweet_id",
+                "text",
+                "author_id",
+                "author_username",
+                "author_display_name",
+                "created_at",
+                "synced_at",
+                "raw_json",
+            ],
+            limit=100,
         )
-        media = store._query(expr=f"record_type = 'media' AND tweet_id IN ({id_list})", limit=100)
+        media = store._query(
+            expr=f"record_type = 'media' AND tweet_id IN ({id_list})",
+            cols=[
+                "tweet_id",
+                "media_type",
+                "width",
+                "height",
+                "duration_millis",
+                "local_path",
+                "thumbnail_local_path",
+            ],
+            limit=100,
+        )
         col_rows = store._query(
-            expr=f"record_type = 'tweet' AND tweet_id IN ({id_list})", limit=100
+            expr=f"record_type = 'tweet' AND tweet_id IN ({id_list})",
+            cols=["tweet_id", "collection_type"],
+            limit=100,
         )
         tag_rows = store._query(
-            expr=f"record_type = 'media_tag' AND tweet_id IN ({id_list})", limit=100
+            expr=f"record_type = 'media_tag' AND tweet_id IN ({id_list})",
+            cols=["tweet_id", "raw_json"],
+            limit=100,
         )
 
         col_dict = {}
@@ -223,22 +253,50 @@ def api_tweet_thread(
             except (TypeError, json.JSONDecodeError):
                 continue
 
+        raw_by_tweet_id = {}
         qt_ids = set()
         for obj in objs:
+            tid = obj.get("tweet_id")
+            raw_json = None
             if obj.get("raw_json"):
-                raw_json = json.loads(obj["raw_json"])
-                if isinstance(raw_json, dict):
-                    quote = raw_json.get("quoted_status_result", {}).get("result")
-                    if isinstance(quote, dict):
-                        if quote.get("__typename") == "TweetWithVisibilityResults":
-                            quote = quote.get("tweet", {})
-                        qt_id = quote.get("rest_id")
-                        if qt_id:
-                            qt_ids.add(qt_id)
+                try:
+                    parsed_raw = json.loads(obj["raw_json"])
+                    if isinstance(parsed_raw, dict):
+                        raw_json = parsed_raw
+                except (TypeError, json.JSONDecodeError):
+                    pass
+            if tid:
+                raw_by_tweet_id[tid] = raw_json
+            if raw_json:
+                quote = raw_json.get("quoted_status_result", {}).get("result")
+                if isinstance(quote, dict):
+                    if quote.get("__typename") == "TweetWithVisibilityResults":
+                        quote = quote.get("tweet", {})
+                    qt_id = quote.get("rest_id")
+                    if qt_id:
+                        qt_ids.add(qt_id)
+
+        media_by_tweet_id = {}
+        for row in media:
+            if row.get("tweet_id"):
+                media_by_tweet_id.setdefault(row["tweet_id"], []).append(row)
 
         qt_media_by_id = {}
         if qt_ids:
-            qt_media_rows = store._rows_for_values("media", "tweet_id", list(qt_ids))
+            qt_media_rows = store._rows_for_values(
+                "media",
+                "tweet_id",
+                list(qt_ids),
+                columns=[
+                    "tweet_id",
+                    "media_type",
+                    "width",
+                    "height",
+                    "duration_millis",
+                    "local_path",
+                    "thumbnail_local_path",
+                ],
+            )
             for m in qt_media_rows:
                 tid = m.get("tweet_id")
                 if tid:
@@ -247,8 +305,8 @@ def api_tweet_thread(
         formatted = {}
         for obj in objs:
             tid = obj["tweet_id"]
-            t_media = [m for m in media if m.get("tweet_id") == tid]
-            raw_json = json.loads(obj["raw_json"]) if obj.get("raw_json") else None
+            t_media = media_by_tweet_id.get(tid, [])
+            raw_json = raw_by_tweet_id.get(tid)
 
             qt_media_formatted = []
             if raw_json and isinstance(raw_json, dict):
@@ -305,13 +363,16 @@ def api_tweet_thread(
         if not main_tweet:
             raise HTTPException(status_code=404, detail="Tweet not found")
 
-        quote_rows = store._query(
-            expr="record_type = 'tweet_relation' AND relation_type = 'quote_of' "
-            f"AND target_tweet_id = {_sql_quote(tweet_id)}"
-        )
-        main_tweet["local_quote_count"] = len(
-            set(r.get("tweet_id") for r in quote_rows if r.get("tweet_id"))
-        )
+        main_tweet["local_quote_count"] = store.conn.execute(
+            """
+            SELECT COUNT(DISTINCT tweet_id)
+            FROM archive
+            WHERE record_type = 'tweet_relation'
+              AND relation_type = 'quote_of'
+              AND target_tweet_id = ?
+            """,
+            (tweet_id,),
+        ).fetchone()[0]
 
         parents = []
         curr_id = tweet_id
