@@ -11,6 +11,14 @@ Hard constraints:
 
 Definition of done: passes `uv run ruff format --check`, `uv run ruff check`, and `uv run pytest`.
 
+## Web tweet overflow and manual tag editing (2026-08-10)
+
+- [x] Add a Twitter-style overflow menu to top-level list cards and main detail tweets.
+- [x] Move tag access into the overflow menu and support a one-second press-and-hold shortcut.
+- [x] Let the tag modal create tags for untagged tweets and add/edit descriptions.
+- [x] Persist manual descriptions through the tag API/storage layer and refresh visible tweet state.
+- [x] Add route, storage, browser-state, and markup regressions; pass targeted validation.
+
 ## Cached Web statistics (2026-08-10)
 
 - [x] Add a Web-only, stale-while-revalidate cache for complete statistics snapshots.

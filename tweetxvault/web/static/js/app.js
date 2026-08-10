@@ -46,12 +46,17 @@ function tweetApp() {
         panelQuotesLoading: false,
         panelQuotesLoadingMore: false,
 
+        tweetMenuOpen: null,
+        tweetMenuPressTimer: null,
+        tweetMenuClickBlockedUntil: 0,
+
         tagModalOpen: false,
         tagModalData: null,
         tagModalTweetId: null,
         
         isEditingTags: false,
         editableTags: [],
+        editableDescription: '',
         tagSearchQuery: '',
         tagAutocompleteOptions: [],
         tagSearchDropdown: false,
@@ -930,20 +935,96 @@ function tweetApp() {
             return '?';
         },
 
+        toggleTweetMenu(menuKey) {
+            if (Date.now() < this.tweetMenuClickBlockedUntil) return;
+            this.tweetMenuOpen = this.tweetMenuOpen === menuKey ? null : menuKey;
+        },
+
+        closeTweetMenu(menuKey = null) {
+            if (!menuKey || this.tweetMenuOpen === menuKey) this.tweetMenuOpen = null;
+        },
+
+        startTweetMenuPress(event, tweetId, tagsData) {
+            if (event?.pointerType === 'mouse' && event.button !== 0) return;
+            this.cancelTweetMenuPress();
+            this.tweetMenuPressTimer = setTimeout(() => {
+                this.tweetMenuPressTimer = null;
+                this.tweetMenuClickBlockedUntil = Date.now() + 750;
+                this.openTagModal(tweetId, tagsData);
+            }, 1000);
+        },
+
+        cancelTweetMenuPress() {
+            if (this.tweetMenuPressTimer !== null) {
+                clearTimeout(this.tweetMenuPressTimer);
+                this.tweetMenuPressTimer = null;
+            }
+        },
+
+        openTagsFromTweetMenu(tweetId, tagsData) {
+            this.closeTweetMenu();
+            this.openTagModal(tweetId, tagsData);
+        },
+
         openTagModal(tweetId, tagsData) {
+            const normalizedData = {
+                description: typeof tagsData?.description === 'string' ? tagsData.description : '',
+                tags: Array.isArray(tagsData?.tags) ? [...tagsData.tags] : [],
+            };
+            if (this._tagModalCloseTimer) clearTimeout(this._tagModalCloseTimer);
+            this.closeTweetMenu();
             this.tagModalTweetId = tweetId;
-            this.tagModalData = tagsData;
+            this.tagModalData = normalizedData;
+            this.isEditingTags = false;
+            this.editableTags = [...normalizedData.tags];
+            this.editableDescription = normalizedData.description;
             this.tagModalOpen = true;
             document.body.style.overflow = 'hidden';
         },
         
         closeTagModal() {
             this.tagModalOpen = false;
-            setTimeout(() => {
+            this._tagModalCloseTimer = setTimeout(() => {
                 this.tagModalData = null;
                 this.tagModalTweetId = null;
+                this.isEditingTags = false;
+                this.editableTags = [];
+                this.editableDescription = '';
+                this.tagSearchDropdown = false;
                 document.body.style.overflow = '';
+                this._tagModalCloseTimer = null;
             }, 300);
+        },
+
+        updateTweetTagData(tweetId, tagData) {
+            const assign = tweet => {
+                if (!tweet || tweet.tweet_id !== tweetId) return;
+                tweet.media_tags = tagData ? {
+                    description: tagData.description,
+                    tags: [...tagData.tags],
+                } : null;
+            };
+            const visitThread = thread => {
+                if (!thread) return;
+                assign(thread.main);
+                for (const tweet of thread.parents || []) assign(tweet);
+                for (const tweet of thread.children || []) {
+                    assign(tweet);
+                    for (const reply of tweet.op_replies || []) assign(reply);
+                }
+            };
+
+            for (const tweet of this.tweets) assign(tweet);
+            for (const tweet of this.quotesList) assign(tweet);
+            for (const tweet of this.panelQuotesList) assign(tweet);
+            visitThread(this.threadData);
+            visitThread(this.panelThreadData);
+            for (const entry of this.panelStack) {
+                if (entry.type === 'thread') visitThread(entry.data);
+                else if (entry.type === 'quotes') {
+                    for (const tweet of entry.data || []) assign(tweet);
+                }
+            }
         },
         
         async deleteTags() {
@@ -951,9 +1032,7 @@ function tweetApp() {
             try {
                 const res = await fetch(`/api/tags/${this.tagModalTweetId}`, { method: 'DELETE' });
                 if (res.ok) {
-                    const tweet = this.tweets.find(t => t.tweet_id === this.tagModalTweetId);
-                    if (tweet) tweet.media_tags = null;
-                    if (this.threadData?.main?.tweet_id === this.tagModalTweetId) this.threadData.main.media_tags = null;
+                    this.updateTweetTagData(this.tagModalTweetId, null);
                     this.closeTagModal();
                 } else {
                     alert("Failed to delete tags.");
@@ -966,6 +1045,7 @@ function tweetApp() {
         startEditingTags() {
             this.isEditingTags = true;
             this.editableTags = [...(this.tagModalData?.tags || [])];
+            this.editableDescription = this.tagModalData?.description || '';
         },
         async fetchTagAutocomplete(query) {
             try {
@@ -985,25 +1065,24 @@ function tweetApp() {
         },
         async saveTags() {
             try {
+                const description = this.editableDescription.trim();
                 const res = await fetch(`/api/tags/${this.tagModalTweetId}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ tags: this.editableTags })
+                    body: JSON.stringify({ tags: this.editableTags, description })
                 });
                 if (res.ok) {
-                    const tweet = this.tweets.find(t => t.tweet_id === this.tagModalTweetId);
-                    if (tweet) {
-                        if(!tweet.media_tags) tweet.media_tags = {};
-                        tweet.media_tags.tags = [...this.editableTags];
+                    const savedData = this.editableTags.length || description ? {
+                        description,
+                        tags: [...this.editableTags],
+                    } : null;
+                    this.updateTweetTagData(this.tagModalTweetId, savedData);
+                    if (savedData) {
+                        this.tagModalData = savedData;
+                        this.isEditingTags = false;
+                    } else {
+                        this.closeTagModal();
                     }
-                    if (this.threadData?.main?.tweet_id === this.tagModalTweetId) {
-                        if(!this.threadData.main.media_tags) this.threadData.main.media_tags = {};
-                        this.threadData.main.media_tags.tags = [...this.editableTags];
-                    }
-                    if (this.tagModalData) {
-                        this.tagModalData.tags = [...this.editableTags];
-                    }
-                    this.isEditingTags = false;
                 } else {
                     alert("Failed to save tags.");
                 }
@@ -1742,12 +1821,7 @@ function tweetApp() {
                     <svg viewBox="0 0 24 24" class="w-[18.5px] h-[18.5px] fill-current"><path d="M8.75 21V3h2v18h-2zM18 21V8.5h2V21h-2zM4 21l.004-10h2L6 21H4zm9.248 0v-7h2v7h-2z"></path></svg>
                     <span class="text-[13px] ml-2 font-medium">${formatNum(viewCount)}</span>
                 </div>
-                <div class="flex items-center space-x-5">
-                    ${tweet.media_tags ? `
-                    <div class="flex items-center text-[var(--text-secondary)] cursor-pointer hover:text-[var(--text-primary)] transition" @click.stop="openTagModal('${tweet.tweet_id}', ${JSON.stringify(tweet.media_tags).replace(/"/g, '&quot;')})" title="View Tags">
-                        <svg viewBox="0 0 24 24" class="w-[18.5px] h-[18.5px] fill-current"><path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10-4.477 10-10 10zm-1-11v6h2v-6h-2zm0-4v2h2V7h-2z"></path></svg>
-                    </div>
-                    ` : ''}
+                <div class="flex items-center">
                     <a href="https://x.com/${tweet.author?.username || 'i'}/status/${tweet.tweet_id}" target="_blank" @click.stop class="flex items-center" title="Open on Twitter">
                         <svg viewBox="0 0 24 24" class="w-[18.5px] h-[18.5px] fill-current hover:text-[#e7e9ea] transition"><path d="M18 19H6c-.55 0-1-.45-1-1V6c0-.55.45-1 1-1h5c.55 0 1-.45 1-1s-.45-1-1-1H6c-1.65 0-3 1.35-3 3v12c0 1.65 1.35 3 3 3h12c1.65 0 3-1.35 3-3v-5c0-.55-.45-1-1-1s-1 .45-1 1v5c0 .55-.45 1-1 1zM14 4c0 .55.45 1 1 1h2.59l-9.13 9.13c-.39.39-.39 1.02 0 1.41.19.19.45.29.71.29s.51-.1.71-.29L19 6.41V9c0 .55.45 1 1 1s1-.45 1-1V4c0-.55-.45-1-1-1h-5c-.55 0-1 .45-1 1z"></path></svg>
                     </a>

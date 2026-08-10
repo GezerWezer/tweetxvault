@@ -11,6 +11,7 @@ router = APIRouter()
 
 class TagUpdateRequest(BaseModel):
     tags: list[str]
+    description: str | None = None
 
 
 class TagMergeRequest(BaseModel):
@@ -39,7 +40,7 @@ def api_update_tag(
     _auth: bool = Depends(verify_credentials),
 ) -> dict[str, bool]:
     try:
-        store.update_media_tags(tweet_id, req.tags)
+        store.update_media_tags(tweet_id, req.tags, description=req.description)
         return {"success": True}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc

@@ -846,22 +846,98 @@ test('tag editing deduplicates case-insensitively and persists response state', 
         '({tweetApp})',
     );
     const app = immediateComponent(tweetApp());
-    app.tweets = [{ tweet_id: '1', media_tags: { tags: ['Old'] } }];
+    app.tweets = [{ tweet_id: '1', media_tags: { description: 'Old description', tags: ['Old'] } }];
+    app.panelThreadData = {
+        main: { tweet_id: '1', media_tags: { description: 'Old description', tags: ['Old'] } },
+        parents: [],
+        children: [],
+    };
     app.tagModalTweetId = '1';
     app.tagModalData = app.tweets[0].media_tags;
     app.editableTags = ['Night'];
+    app.editableDescription = '  A moonlit view  ';
     app.addEditableTag(' night ');
     app.addEditableTag('Sky');
     assert.deepEqual(Array.from(app.editableTags), ['Night', 'Sky']);
 
     await app.saveTags();
     assert.deepEqual(Array.from(app.tweets[0].media_tags.tags), ['Night', 'Sky']);
+    assert.equal(app.tweets[0].media_tags.description, 'A moonlit view');
+    assert.equal(app.panelThreadData.main.media_tags.description, 'A moonlit view');
     assert.equal(requests[0][1].method, 'PUT');
-    assert.deepEqual(JSON.parse(requests[0][1].body), { tags: ['Night', 'Sky'] });
+    assert.deepEqual(JSON.parse(requests[0][1].body), {
+        tags: ['Night', 'Sky'],
+        description: 'A moonlit view',
+    });
 
     await app.fetchGlobalTags();
     assert.equal(app.globalTags[0].tag, 'Night');
     assert.equal(app.globalTagsLoading, false);
+});
+
+test('tweet overflow supports untagged posts and a one-second Tags shortcut', () => {
+    const context = browserContext();
+    let pressCallback = null;
+    let clearedTimer = null;
+    context.setTimeout = (callback, delay) => {
+        assert.equal(delay, 1000);
+        pressCallback = callback;
+        return 41;
+    };
+    context.clearTimeout = timer => { clearedTimer = timer; };
+    const { tweetApp } = loadScripts(
+        context,
+        ['themes.js', 'app.js'],
+        '({tweetApp})',
+    );
+    const app = immediateComponent(tweetApp());
+
+    app.toggleTweetMenu('list:2');
+    assert.equal(app.tweetMenuOpen, 'list:2');
+    app.openTagsFromTweetMenu('2', null);
+    assert.equal(app.tweetMenuOpen, null);
+    assert.equal(app.tagModalOpen, true);
+    assert.equal(app.isEditingTags, false);
+    assert.deepEqual(Array.from(app.tagModalData.tags), []);
+    assert.equal(app.tagModalData.description, '');
+
+    app.startEditingTags();
+    assert.equal(app.isEditingTags, true);
+    assert.deepEqual(Array.from(app.editableTags), []);
+
+    app.startTweetMenuPress({ pointerType: 'touch', button: 0 }, '3', {
+        description: 'Existing',
+        tags: ['Bird'],
+    });
+    assert.equal(app.tweetMenuPressTimer, 41);
+    pressCallback();
+    assert.equal(app.tagModalTweetId, '3');
+    assert.equal(app.tagModalData.description, 'Existing');
+    assert.equal(app.isEditingTags, false);
+    assert.equal(app.tweetMenuPressTimer, null);
+
+    app.startTweetMenuPress({ pointerType: 'mouse', button: 0 }, '4', null);
+    app.cancelTweetMenuPress();
+    assert.equal(clearedTimer, 41);
+    assert.equal(app.tweetMenuPressTimer, null);
+});
+
+test('tweet overflow markup covers list and detail surfaces without legacy tag icons', () => {
+    const html = fs.readFileSync(
+        path.join(ROOT, 'tweetxvault', 'web', 'index.html'),
+        'utf8',
+    );
+    const appJs = fs.readFileSync(path.join(JS_DIR, 'app.js'), 'utf8');
+
+    assert.equal((html.match(/aria-label="More actions"/g) || []).length, 3);
+    assert.equal((html.match(/<span>Tags<\/span>/g) || []).length, 3);
+    assert.equal((html.match(/right-\[18px\] top-\[18px\]/g) || []).length, 3);
+    assert.match(html, /startTweetMenuPress\(\$event, tweet\.tweet_id, tweet\.media_tags\)/);
+    assert.match(html, /startTweetMenuPress\(\$event, threadData\.main\.tweet_id/);
+    assert.match(html, /startTweetMenuPress\(\$event, panelThreadData\.main\.tweet_id/);
+    assert.doesNotMatch(html, /View quoted tweet tags/);
+    assert.doesNotMatch(appJs, /title="View Tags"/);
+    assert.match(html, /x-model="editableDescription"/);
 });
 
 test('config and stats requests update their matching UI state', async () => {

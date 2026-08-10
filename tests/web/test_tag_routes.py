@@ -21,8 +21,8 @@ class TagStore:
     def delete_media_tag(self, tweet_id):
         self._call("delete_media_tag", tweet_id)
 
-    def update_media_tags(self, tweet_id, tags):
-        self._call("update_media_tags", tweet_id, tags)
+    def update_media_tags(self, tweet_id, tags, *, description=None):
+        self._call("update_media_tags", tweet_id, tags, description)
 
     def delete_global_tag(self, tag):
         self._call("delete_global_tag", tag)
@@ -42,8 +42,8 @@ class TagStore:
         (
             "put",
             "/api/tags/t1",
-            {"tags": ["Bird", "Night sky"]},
-            ("update_media_tags", "t1", ["Bird", "Night sky"]),
+            {"tags": ["Bird", "Night sky"], "description": "Evening birds"},
+            ("update_media_tags", "t1", ["Bird", "Night sky"], "Evening birds"),
         ),
         (
             "delete",

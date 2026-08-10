@@ -215,14 +215,42 @@
                         </div>
 
                         <div class="flex-1 min-w-0">
-                            <div class="flex items-center space-x-1 text-[15px]">
-                                <span class="font-bold text-[var(--text-primary)] truncate hover:underline" x-text="tweet.author.display_name || 'Unknown'" @click.stop="openProfileCard($event, tweet)"></span>
-                                <span class="text-[var(--text-secondary)] truncate" x-text="'@' + (tweet.author.username || 'unknown')"></span>
-                                <span class="text-[var(--text-secondary)]">·</span>
-                                <div class="roll-wrapper text-[var(--text-secondary)]" @click.stop>
-                                    <div class="roll-inner">
-                                        <span class="roll-item hover:underline" x-text="formatDate(tweet.created_at)"></span>
-                                        <span class="roll-item text-[var(--accent-color)] text-[13px] font-medium" x-text="formatSyncDate(tweet)"></span>
+                            <div class="flex items-start text-[15px]">
+                                <div class="flex items-center space-x-1 min-w-0">
+                                    <span class="font-bold text-[var(--text-primary)] truncate hover:underline" x-text="tweet.author.display_name || 'Unknown'" @click.stop="openProfileCard($event, tweet)"></span>
+                                    <span class="text-[var(--text-secondary)] truncate" x-text="'@' + (tweet.author.username || 'unknown')"></span>
+                                    <span class="text-[var(--text-secondary)]">·</span>
+                                    <div class="roll-wrapper text-[var(--text-secondary)]" @click.stop>
+                                        <div class="roll-inner">
+                                            <span class="roll-item hover:underline" x-text="formatDate(tweet.created_at)"></span>
+                                            <span class="roll-item text-[var(--accent-color)] text-[13px] font-medium" x-text="formatSyncDate(tweet)"></span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="relative ml-auto -mr-2 -mt-2 flex-shrink-0" @click.outside="closeTweetMenu('list:' + tweet.tweet_id)" @keydown.escape.window="closeTweetMenu('list:' + tweet.tweet_id)">
+                                    <button type="button"
+                                            class="w-9 h-9 rounded-full flex items-center justify-center text-[var(--text-secondary)] hover:text-[var(--accent-color)] hover:bg-[color-mix(in_srgb,var(--accent-color)_10%,transparent)] transition select-none touch-manipulation"
+                                            aria-label="More actions" aria-haspopup="menu"
+                                            :aria-expanded="tweetMenuOpen === 'list:' + tweet.tweet_id"
+                                            title="More actions (hold for Tags)"
+                                            @pointerdown.stop="startTweetMenuPress($event, tweet.tweet_id, tweet.media_tags)"
+                                            @pointerup.stop="cancelTweetMenuPress()"
+                                            @pointercancel.stop="cancelTweetMenuPress()"
+                                            @pointerleave="cancelTweetMenuPress()"
+                                            @contextmenu.prevent
+                                            @click.stop="toggleTweetMenu('list:' + tweet.tweet_id)">
+                                        <svg viewBox="0 0 24 24" class="w-[18px] h-[18px] fill-current" aria-hidden="true"><circle cx="5" cy="12" r="1.8"></circle><circle cx="12" cy="12" r="1.8"></circle><circle cx="19" cy="12" r="1.8"></circle></svg>
+                                    </button>
+                                    <div x-show="tweetMenuOpen === 'list:' + tweet.tweet_id" x-cloak
+                                         x-transition:enter="transition ease-out duration-100" x-transition:enter-start="opacity-0 scale-95" x-transition:enter-end="opacity-100 scale-100"
+                                         x-transition:leave="transition ease-in duration-75" x-transition:leave-start="opacity-100 scale-100" x-transition:leave-end="opacity-0 scale-95"
+                                         class="absolute right-[18px] top-[18px] z-50 w-56 origin-top-right overflow-hidden rounded-xl border border-[var(--border-color)] bg-[var(--dropdown-bg)] py-1 shadow-2xl"
+                                         role="menu">
+                                        <button type="button" role="menuitem" @click.stop="openTagsFromTweetMenu(tweet.tweet_id, tweet.media_tags)"
+                                                class="flex w-full items-center gap-3 px-4 py-3 text-left text-[15px] font-bold text-[var(--text-primary)] hover:bg-[var(--hover-bg)] transition">
+                                            <svg viewBox="0 0 24 24" class="w-5 h-5 fill-current flex-shrink-0" aria-hidden="true"><path d="M20.95 13.05 10.9 3H3v7.9l10.05 10.05a1.5 1.5 0 0 0 2.12 0l5.78-5.78a1.5 1.5 0 0 0 0-2.12ZM7.5 9A1.5 1.5 0 1 1 7.5 6a1.5 1.5 0 0 1 0 3Z"></path></svg>
+                                            <span>Tags</span>
+                                        </button>
                                     </div>
                                 </div>
                             </div>
@@ -258,11 +286,6 @@
                                                 <span class="text-[var(--text-secondary)] truncate" x-text="'@' + getQuoteAuthor(getQuoteTweet(tweet)).screen_name"></span>
                                                 <span class="text-[var(--text-secondary)]">·</span>
                                                 <span class="text-[var(--text-secondary)]" x-text="formatDate(getQuoteTweet(tweet)?.legacy?.created_at || getQuoteTweet(tweet)?.created_at)"></span>
-                                                <template x-if="tweet.qt_media_tags">
-                                                    <button class="ml-auto text-[var(--text-secondary)] hover:text-[var(--text-primary)]" @click.stop="openTagModal(getQuoteTweet(tweet).rest_id || getQuoteTweet(tweet).id_str, tweet.qt_media_tags)" title="View quoted tweet tags">
-                                                        <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current"><path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10-4.477 10-10 10zm-1-11v6h2v-6h-2zm0-4v2h2V7h-2z"></path></svg>
-                                                    </button>
-                                                </template>
                                             </div>
                                             
                                             <template x-if="getReplyTo({raw_json: getQuoteTweet(tweet)})">
@@ -360,6 +383,32 @@
                                 <div class="font-bold text-[var(--text-primary)] hover:underline" x-text="threadData.main.author.display_name || 'Unknown'"></div>
                                 <div class="text-[var(--text-secondary)]" x-text="'@' + (threadData.main.author.username || 'unknown')"></div>
                             </div>
+                            <div class="relative -mr-2 -mt-2 flex-shrink-0" @click.outside="closeTweetMenu('detail:' + threadData.main.tweet_id)" @keydown.escape.window="closeTweetMenu('detail:' + threadData.main.tweet_id)">
+                                <button type="button"
+                                        class="w-9 h-9 rounded-full flex items-center justify-center text-[var(--text-secondary)] hover:text-[var(--accent-color)] hover:bg-[color-mix(in_srgb,var(--accent-color)_10%,transparent)] transition select-none touch-manipulation"
+                                        aria-label="More actions" aria-haspopup="menu"
+                                        :aria-expanded="tweetMenuOpen === 'detail:' + threadData.main.tweet_id"
+                                        title="More actions (hold for Tags)"
+                                        @pointerdown.stop="startTweetMenuPress($event, threadData.main.tweet_id, threadData.main.media_tags)"
+                                        @pointerup.stop="cancelTweetMenuPress()"
+                                        @pointercancel.stop="cancelTweetMenuPress()"
+                                        @pointerleave="cancelTweetMenuPress()"
+                                        @contextmenu.prevent
+                                        @click.stop="toggleTweetMenu('detail:' + threadData.main.tweet_id)">
+                                    <svg viewBox="0 0 24 24" class="w-[18px] h-[18px] fill-current" aria-hidden="true"><circle cx="5" cy="12" r="1.8"></circle><circle cx="12" cy="12" r="1.8"></circle><circle cx="19" cy="12" r="1.8"></circle></svg>
+                                </button>
+                                <div x-show="tweetMenuOpen === 'detail:' + threadData.main.tweet_id" x-cloak
+                                     x-transition:enter="transition ease-out duration-100" x-transition:enter-start="opacity-0 scale-95" x-transition:enter-end="opacity-100 scale-100"
+                                     x-transition:leave="transition ease-in duration-75" x-transition:leave-start="opacity-100 scale-100" x-transition:leave-end="opacity-0 scale-95"
+                                     class="absolute right-[18px] top-[18px] z-50 w-56 origin-top-right overflow-hidden rounded-xl border border-[var(--border-color)] bg-[var(--dropdown-bg)] py-1 shadow-2xl"
+                                     role="menu">
+                                    <button type="button" role="menuitem" @click.stop="openTagsFromTweetMenu(threadData.main.tweet_id, threadData.main.media_tags)"
+                                            class="flex w-full items-center gap-3 px-4 py-3 text-left text-[15px] font-bold text-[var(--text-primary)] hover:bg-[var(--hover-bg)] transition">
+                                        <svg viewBox="0 0 24 24" class="w-5 h-5 fill-current flex-shrink-0" aria-hidden="true"><path d="M20.95 13.05 10.9 3H3v7.9l10.05 10.05a1.5 1.5 0 0 0 2.12 0l5.78-5.78a1.5 1.5 0 0 0 0-2.12ZM7.5 9A1.5 1.5 0 1 1 7.5 6a1.5 1.5 0 0 1 0 3Z"></path></svg>
+                                        <span>Tags</span>
+                                    </button>
+                                </div>
+                            </div>
                         </div>
                         
                         <template x-if="getReplyTo(threadData.main) && threadData.parents.length === 0">
@@ -389,11 +438,6 @@
                                             <span class="text-[var(--text-secondary)] truncate" x-text="'@' + getQuoteAuthor(getQuoteTweet(threadData?.main)).screen_name"></span>
                                             <span class="text-[var(--text-secondary)]">·</span>
                                             <span class="text-[var(--text-secondary)]" x-text="formatDate(getQuoteTweet(threadData?.main)?.legacy?.created_at || getQuoteTweet(threadData?.main)?.created_at)"></span>
-                                            <template x-if="threadData?.main?.qt_media_tags">
-                                                <button class="ml-auto text-[var(--text-secondary)] hover:text-[var(--text-primary)]" @click.stop="openTagModal(getQuoteTweet(threadData.main).rest_id || getQuoteTweet(threadData.main).id_str, threadData.main.qt_media_tags)" title="View quoted tweet tags">
-                                                    <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current"><path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10-4.477 10-10 10zm-1-11v6h2v-6h-2zm0-4v2h2V7h-2z"></path></svg>
-                                                </button>
-                                            </template>
                                         </div>
                                         
                                         <template x-if="getReplyTo({raw_json: getQuoteTweet(threadData?.main)})">
@@ -670,6 +714,32 @@
                                 <div class="font-bold text-[var(--text-primary)] hover:underline" x-text="panelThreadData.main.author.display_name || 'Unknown'"></div>
                                 <div class="text-[var(--text-secondary)]" x-text="'@' + (panelThreadData.main.author.username || 'unknown')"></div>
                             </div>
+                            <div class="relative -mr-2 -mt-2 flex-shrink-0" @click.outside="closeTweetMenu('panel:' + panelThreadData.main.tweet_id)" @keydown.escape.window="closeTweetMenu('panel:' + panelThreadData.main.tweet_id)">
+                                <button type="button"
+                                        class="w-9 h-9 rounded-full flex items-center justify-center text-[var(--text-secondary)] hover:text-[var(--accent-color)] hover:bg-[color-mix(in_srgb,var(--accent-color)_10%,transparent)] transition select-none touch-manipulation"
+                                        aria-label="More actions" aria-haspopup="menu"
+                                        :aria-expanded="tweetMenuOpen === 'panel:' + panelThreadData.main.tweet_id"
+                                        title="More actions (hold for Tags)"
+                                        @pointerdown.stop="startTweetMenuPress($event, panelThreadData.main.tweet_id, panelThreadData.main.media_tags)"
+                                        @pointerup.stop="cancelTweetMenuPress()"
+                                        @pointercancel.stop="cancelTweetMenuPress()"
+                                        @pointerleave="cancelTweetMenuPress()"
+                                        @contextmenu.prevent
+                                        @click.stop="toggleTweetMenu('panel:' + panelThreadData.main.tweet_id)">
+                                    <svg viewBox="0 0 24 24" class="w-[18px] h-[18px] fill-current" aria-hidden="true"><circle cx="5" cy="12" r="1.8"></circle><circle cx="12" cy="12" r="1.8"></circle><circle cx="19" cy="12" r="1.8"></circle></svg>
+                                </button>
+                                <div x-show="tweetMenuOpen === 'panel:' + panelThreadData.main.tweet_id" x-cloak
+                                     x-transition:enter="transition ease-out duration-100" x-transition:enter-start="opacity-0 scale-95" x-transition:enter-end="opacity-100 scale-100"
+                                     x-transition:leave="transition ease-in duration-75" x-transition:leave-start="opacity-100 scale-100" x-transition:leave-end="opacity-0 scale-95"
+                                     class="absolute right-[18px] top-[18px] z-50 w-56 origin-top-right overflow-hidden rounded-xl border border-[var(--border-color)] bg-[var(--dropdown-bg)] py-1 shadow-2xl"
+                                     role="menu">
+                                    <button type="button" role="menuitem" @click.stop="openTagsFromTweetMenu(panelThreadData.main.tweet_id, panelThreadData.main.media_tags)"
+                                            class="flex w-full items-center gap-3 px-4 py-3 text-left text-[15px] font-bold text-[var(--text-primary)] hover:bg-[var(--hover-bg)] transition">
+                                        <svg viewBox="0 0 24 24" class="w-5 h-5 fill-current flex-shrink-0" aria-hidden="true"><path d="M20.95 13.05 10.9 3H3v7.9l10.05 10.05a1.5 1.5 0 0 0 2.12 0l5.78-5.78a1.5 1.5 0 0 0 0-2.12ZM7.5 9A1.5 1.5 0 1 1 7.5 6a1.5 1.5 0 0 1 0 3Z"></path></svg>
+                                        <span>Tags</span>
+                                    </button>
+                                </div>
+                            </div>
                         </div>
                         <template x-if="getReplyTo(panelThreadData.main) && panelThreadData.parents.length === 0">
                             <div class="text-[15px] text-[var(--text-secondary)] mb-2">
@@ -697,11 +767,6 @@
                                             <span class="text-[var(--text-secondary)] truncate" x-text="'@' + getQuoteAuthor(getQuoteTweet(panelThreadData?.main)).screen_name"></span>
                                             <span class="text-[var(--text-secondary)]">·</span>
                                             <span class="text-[var(--text-secondary)]" x-text="formatDate(getQuoteTweet(panelThreadData?.main)?.legacy?.created_at || getQuoteTweet(panelThreadData?.main)?.created_at)"></span>
-                                            <template x-if="panelThreadData?.main?.qt_media_tags">
-                                                <button class="ml-auto text-[var(--text-secondary)] hover:text-[var(--text-primary)]" @click.stop="openTagModal(getQuoteTweet(panelThreadData.main).rest_id || getQuoteTweet(panelThreadData.main).id_str, panelThreadData.main.qt_media_tags)" title="View quoted tweet tags">
-                                                    <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current"><path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10-4.477 10-10 10zm-1-11v6h2v-6h-2zm0-4v2h2V7h-2z"></path></svg>
-                                                </button>
-                                            </template>
                                         </div>
                                         <template x-if="getReplyTo({raw_json: getQuoteTweet(panelThreadData?.main)})">
                                             <div class="text-[15px] text-[var(--text-secondary)] mb-1">
@@ -927,7 +992,7 @@
                 
                 <div class="flex items-center justify-between p-4 border-b border-[var(--border-color)]">
                     <div class="flex items-center text-[var(--text-primary)] font-bold text-lg">
-                        <svg viewBox="0 0 24 24" class="w-5 h-5 fill-current mr-2 text-[var(--accent-color)]"><path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10-4.477 10-10 10zm-1-11v6h2v-6h-2zm0-4v2h2V7h-2z"></path></svg>
+                        <svg viewBox="0 0 24 24" class="w-5 h-5 fill-current mr-2 text-[var(--accent-color)]"><path d="M20.95 13.05 10.9 3H3v7.9l10.05 10.05a1.5 1.5 0 0 0 2.12 0l5.78-5.78a1.5 1.5 0 0 0 0-2.12ZM7.5 9A1.5 1.5 0 1 1 7.5 6a1.5 1.5 0 0 1 0 3Z"></path></svg>
                         Tags
                     </div>
                     <button @click="closeTagModal()" class="text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-secondary)] p-2 rounded-full transition">
@@ -938,10 +1003,18 @@
                 <div class="p-4 overflow-y-auto max-h-[60vh] text-[var(--text-primary)] min-h-[150px]">
                     <template x-if="tagModalData">
                         <div>
-                            <template x-if="tagModalData.description">
+                            <template x-if="isEditingTags">
+                                <div class="mb-4">
+                                    <label for="tag-description" class="block text-sm text-[var(--text-secondary)] font-bold uppercase tracking-wider mb-2">Description</label>
+                                    <textarea id="tag-description" x-model="editableDescription" rows="4" maxlength="4000"
+                                              placeholder="Add a description..."
+                                              class="w-full resize-y rounded-xl border border-[var(--input-border)] bg-[var(--bg-secondary)] px-3 py-2 text-[15px] leading-relaxed text-[var(--text-primary)] placeholder:text-[var(--text-secondary)] focus:outline-none focus:border-[var(--accent-color)] transition"></textarea>
+                                </div>
+                            </template>
+                            <template x-if="!isEditingTags && tagModalData.description">
                                 <div class="mb-4">
                                     <div class="text-sm text-[var(--text-secondary)] font-bold uppercase tracking-wider mb-2">Description</div>
-                                    <div class="text-[15px] leading-relaxed" x-text="tagModalData.description"></div>
+                                    <div class="text-[15px] leading-relaxed whitespace-pre-wrap break-words" x-text="tagModalData.description"></div>
                                 </div>
                             </template>
                             
@@ -983,16 +1056,17 @@
                                     </div>
 
                                 </div>
+                                <div x-show="!isEditingTags && tagModalData.tags.length === 0" class="text-[15px] text-[var(--text-secondary)]">No tags yet.</div>
                             </div>
                         </div>
                     </template>
                 </div>
 
                 <div class="p-4 border-t border-[var(--border-color)] bg-[var(--bg-secondary)] flex justify-between items-center">
-                    <button @click="isEditingTags ? (isEditingTags = false) : deleteTags()" 
+                    <button @click="isEditingTags ? (isEditingTags = false) : ((tagModalData?.tags?.length || tagModalData?.description) ? deleteTags() : closeTagModal())"
                             class="text-sm font-medium px-4 py-2 rounded-full transition"
-                            :class="isEditingTags ? 'text-[var(--text-primary)] hover:bg-[var(--hover-bg)] border border-[var(--border-color)]' : 'danger-capsule'"
-                            x-text="isEditingTags ? 'Cancel' : 'Delete Tags'">
+                            :class="isEditingTags || (!tagModalData?.tags?.length && !tagModalData?.description) ? 'text-[var(--text-primary)] hover:bg-[var(--hover-bg)] border border-[var(--border-color)]' : 'danger-capsule'"
+                            x-text="isEditingTags ? 'Cancel' : ((tagModalData?.tags?.length || tagModalData?.description) ? 'Delete Tags' : 'Close')">
                     </button>
                     <button @click="isEditingTags ? saveTags() : startEditingTags()" 
                             class="text-sm font-bold px-4 py-2 rounded-full transition"

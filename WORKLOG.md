@@ -1,3 +1,19 @@
+- 2026-08-10 (Web tweet overflow and manual tag editing)
+  - Added Twitter-style three-dot menus to top-level feed cards plus full-width and split-panel
+    main tweet details. The dropdown currently contains Tags, anchors its rounded corner over the
+    button center, and opens the tag view on click; a one-second press opens the same view directly.
+  - Removed the legacy action-bar and quoted-post tag icons. Untagged tweets now show an empty tag
+    view before editing, and visible feed/detail state stays synchronized after saves or deletes.
+  - Extended the tag editor and API/storage update path to add, edit, clear, and retain descriptions,
+    including description-only records; legacy callers that omit descriptions retain prior behavior.
+  - Added storage, route, browser-state, long-press, empty-state, description, markup, and placement
+    regressions. Rendered isolated-archive QA verified list/detail menus and view-to-edit behavior with
+    no application errors; the only clean-run console warning is the pre-existing Tailwind CDN notice.
+  - All 796 Python tests, all 25 deterministic browser asset tests, repository-wide Ruff lint, and
+    `git diff --check` pass. Repository-wide Ruff format check reports the same seven pre-existing
+    files, including `tests/test_media_tags.py` and `tweetxvault/storage/backend.py` outside the
+    task hunks.
+
 - 2026-08-10 (Cached Web statistics)
   - Added a five-minute process-local Web cache for complete statistics reports. Initial collection
     and background refreshes are deduplicated; stale data remains available during refresh and

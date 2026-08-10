@@ -200,6 +200,27 @@ def test_update_media_tags_preserves_description_and_recovers_invalid_json(paths
     store.close()
 
 
+def test_update_media_tags_can_edit_clear_and_store_description_without_tags(paths) -> None:
+    store = open_archive_store(paths, create=True)
+    assert store is not None
+
+    store.update_media_tags("1", ["Nature"], description="  A quiet scene  ")
+    assert _tag_payload(store, "1") == {
+        "description": "A quiet scene",
+        "tags": ["Nature"],
+    }
+
+    store.update_media_tags("1", ["Nature"], description="  ")
+    assert _tag_payload(store, "1") == {"description": "", "tags": ["Nature"]}
+
+    store.update_media_tags("2", [], description="Description only")
+    assert _tag_payload(store, "2") == {
+        "description": "Description only",
+        "tags": [],
+    }
+    store.close()
+
+
 def test_empty_update_and_delete_media_tag_remove_row(paths) -> None:
     store = open_archive_store(paths, create=True)
     assert store is not None

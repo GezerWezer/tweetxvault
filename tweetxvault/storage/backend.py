@@ -2783,8 +2783,14 @@ class ArchiveStore:
         )
         self.conn.commit()
 
-    def update_media_tags(self, tweet_id: str, tags: list[str]) -> None:
-        """Overwrite tags for a specific tweet."""
+    def update_media_tags(
+        self,
+        tweet_id: str,
+        tags: list[str],
+        *,
+        description: str | None = None,
+    ) -> None:
+        """Overwrite tags and optionally the description for a specific tweet."""
         normalized_tags: list[str] = []
         seen: set[str] = set()
         for tag in tags:
@@ -2800,7 +2806,8 @@ class ArchiveStore:
             (tweet_id,),
         ).fetchone()
 
-        if not normalized_tags:
+        cleaned_description = description.strip() if description is not None else None
+        if not normalized_tags and (description is None or not cleaned_description):
             self.delete_media_tag(tweet_id)
             return
 
@@ -2810,9 +2817,14 @@ class ArchiveStore:
                 data = json.loads(row["raw_json"])
             except json.JSONDecodeError:
                 data = {}
+            if not isinstance(data, dict):
+                data = {}
             data["tags"] = normalized_tags
         else:
             data = {"description": "", "tags": normalized_tags}
+
+        if cleaned_description is not None:
+            data["description"] = cleaned_description
 
         payload = json.dumps(data)
 
