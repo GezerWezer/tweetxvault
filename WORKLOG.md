@@ -18,6 +18,25 @@
   - Did not replace ancestor traversal with a recursive CTE: the required production timing gate
     could not be measured, and there is no evidence that traversal remains a material bottleneck
     after the lower-risk detail reductions.
+  - A read-only run against the configured 7.75 GB local archive exposed missing SQLite planner
+    statistics as the remaining dominant detail bottleneck. With no `sqlite_stat1`, simple parent,
+    child, object, media, tag, membership, and quote-count lookups chose broad record-type indexes;
+    even a tweet with no relations exceeded 90 seconds. Index-forced probes using the existing
+    `idx_archive_tweet_id` / `idx_archive_target_tweet_id` indexes took roughly 0.004–0.02 ms for
+    ordinary cases and 3–4 ms for the busiest sampled tweet, so neither new indexes nor a recursive
+    CTE are indicated.
+  - On a copy-on-write archive clone, approximate `ANALYZE` took 24.3 seconds, changed relation plans
+    to multi-index ID lookups, and reduced simple detail to a 0.159 ms median. SQLite 3.50.4's
+    recommended `PRAGMA optimize=0x10002` took 36.8 seconds on a fresh clone and reduced detail to a
+    0.273 ms median. Because that first run is too slow for blocking Web startup, the recommended
+    detail-specific follow-up is deterministic SQL using the existing ID indexes; planner-statistics
+    maintenance should be added separately to the explicit optimize/write lifecycle.
+  - Local search measurements without statistics were 27.9 seconds for `has:media` and more than
+    150 seconds for `has:image` before the run was stopped. With approximate statistics on a clone:
+    `has:media` was 4.71 seconds, `has:image` 0.90 seconds, `has:video` 0.67 seconds, `has:links`
+    1.75 seconds, `filter:articles` 0.18 seconds, selected text `fortnite` 28.16 seconds, and combined
+    `fortnite has:media` 32.79 seconds. Search therefore has separate FTS/count work remaining after
+    the full-archive hydration fix.
   - Validation passed 85 focused search/Web tests before the final detail regression, all 75 Web API
     tests after it, 22 browser asset tests, all 780 repository tests, repository-wide Ruff lint,
     task-file formatting, and `git diff --check`. Repository-wide format check still reports only
