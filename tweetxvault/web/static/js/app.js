@@ -19,6 +19,7 @@ function tweetApp() {
         
         threadData: null,
         loadingThread: false,
+        threadCache: new Map(),
         
         quotesTweetId: null,
         quotesList: [],
@@ -513,6 +514,30 @@ function tweetApp() {
             this.fetchTweets(true);
         },
 
+        async loadThread(tweetId) {
+            if (this.threadCache.has(tweetId)) {
+                return this.threadCache.get(tweetId);
+            }
+
+            const request = (async () => {
+                const res = await fetch(`/api/tweets/${tweetId}`);
+                if (!res.ok) throw new Error('Failed to load thread');
+                return res.json();
+            })();
+            this.threadCache.set(tweetId, request);
+            if (this.threadCache.size > 25) {
+                this.threadCache.delete(this.threadCache.keys().next().value);
+            }
+            try {
+                return await request;
+            } catch (error) {
+                if (this.threadCache.get(tweetId) === request) {
+                    this.threadCache.delete(tweetId);
+                }
+                throw error;
+            }
+        },
+
         async openThread(tweetId, fromPopState = false, fromPanel = false) {
             // Split panel mode (desktop only)
             if (this.splitPanel && window.innerWidth >= 1024 && !fromPopState) {
@@ -536,9 +561,7 @@ function tweetApp() {
                     if (this.$refs.detailPanel) this.$refs.detailPanel.scrollTop = 0;
                 });
                 try {
-                    const res = await fetch(`/api/tweets/${tweetId}`);
-                    if (!res.ok) throw new Error('Failed to load thread');
-                    this.panelThreadData = await res.json();
+                    this.panelThreadData = await this.loadThread(tweetId);
                     const top = this.panelStack[this.panelStack.length - 1];
                     if (top) top.data = this.panelThreadData;
                 } catch (e) {
@@ -565,9 +588,7 @@ function tweetApp() {
             }
 
             try {
-                const res = await fetch(`/api/tweets/${tweetId}`);
-                if (!res.ok) throw new Error('Failed to load thread');
-                this.threadData = await res.json();
+                this.threadData = await this.loadThread(tweetId);
             } catch (e) {
                 console.error(e);
                 this.goBack();

@@ -661,12 +661,14 @@ test('themes, accents, fonts, sizes, density, and split panel persist preference
 
 test('thread and quote navigation update history, panel state, and network state', async () => {
     const context = browserContext();
+    let threadFetches = 0;
     context.fetch = async url => ({
         ok: true,
         async json() {
             if (url.includes('/quotes')) {
                 return { tweets: [{ tweet_id: 'q1' }], total: 21, limit: 20 };
             }
+            threadFetches++;
             return { main: { tweet_id: '42' }, parents: [], children: [] };
         },
     });
@@ -698,6 +700,7 @@ test('thread and quote navigation update history, panel state, and network state
     await app.openThread('42');
     assert.equal(app.panelMode, 'thread');
     assert.equal(app.panelThreadData.main.tweet_id, '42');
+    assert.equal(threadFetches, 1);
     await app.openQuotes('42', true);
     assert.equal(app.panelMode, 'quotes');
     assert.equal(app.panelStack.length, 2);
@@ -705,6 +708,37 @@ test('thread and quote navigation update history, panel state, and network state
     assert.equal(app.panelMode, 'thread');
     app.closePanel();
     assert.equal(app.panelMode, null);
+});
+
+test('thread cache reuses successes across modes but retries failures', async () => {
+    const context = browserContext();
+    let fetches = 0;
+    let fail = true;
+    context.fetch = async url => {
+        fetches++;
+        if (fail) return { ok: false };
+        return {
+            ok: true,
+            async json() {
+                return { main: { tweet_id: url.split('/').at(-1) }, parents: [], children: [] };
+            },
+        };
+    };
+    const { tweetApp } = loadScripts(
+        context,
+        ['themes.js', 'app.js'],
+        '({tweetApp})',
+    );
+    const app = immediateComponent(tweetApp());
+
+    await assert.rejects(app.loadThread('failed'), /Failed to load thread/);
+    fail = false;
+    const loaded = await app.loadThread('failed');
+    const cached = await app.loadThread('failed');
+
+    assert.equal(loaded.main.tweet_id, 'failed');
+    assert.equal(cached, loaded);
+    assert.equal(fetches, 2);
 });
 
 test('goBack tears down playing videos before navigating history', () => {
