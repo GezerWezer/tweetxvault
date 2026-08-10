@@ -77,8 +77,11 @@ def test_tagging_eligibility_filters_dedupes_orders_and_limits(paths) -> None:
         "resurrected",
         "older",
     ]
+    assert store.get_tagging_coverage_counts() == (4, 1)
     eligibility_queries = [
-        statement for statement in statements if "SELECT DISTINCT t.tweet_id" in statement
+        statement
+        for statement in statements
+        if statement.lstrip().startswith("SELECT DISTINCT t.tweet_id")
     ]
     assert len(eligibility_queries) == 2
     assert all(
@@ -88,6 +91,12 @@ def test_tagging_eligibility_filters_dedupes_orders_and_limits(paths) -> None:
     assert all(
         statement.count("INDEXED BY idx_archive_tweet_id") == 3 for statement in eligibility_queries
     )
+    coverage_queries = [
+        statement for statement in statements if "WITH eligible_tweets AS" in statement
+    ]
+    assert len(coverage_queries) == 1
+    assert "FROM archive t INDEXED BY idx_archive_record_page" in coverage_queries[0]
+    assert coverage_queries[0].count("INDEXED BY idx_archive_tweet_id") == 3
     store.close()
 
 

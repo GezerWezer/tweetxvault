@@ -2634,6 +2634,46 @@ class ArchiveStore:
         rows = self.conn.execute(query, (*AVAILABLE_ENRICHMENT_STATES, limit)).fetchall()
         return [row["tweet_id"] for row in rows]
 
+    def get_tagging_coverage_counts(self) -> tuple[int, int]:
+        """Return eligible and validly tagged post counts for coverage reporting."""
+        state_placeholders = ", ".join("?" for _state in AVAILABLE_ENRICHMENT_STATES)
+        query = f"""
+            WITH eligible_tweets AS (
+                SELECT DISTINCT t.tweet_id
+                FROM archive t INDEXED BY idx_archive_record_page
+                WHERE t.record_type = 'tweet'
+                  AND EXISTS (
+                      SELECT 1
+                      FROM archive o INDEXED BY idx_archive_tweet_id
+                      WHERE o.tweet_id = t.tweet_id
+                        AND o.record_type = 'tweet_object'
+                        AND o.enrichment_state IN ({state_placeholders})
+                  )
+                  AND EXISTS (
+                      SELECT 1
+                      FROM archive m INDEXED BY idx_archive_tweet_id
+                      WHERE m.tweet_id = t.tweet_id
+                        AND m.record_type = 'media'
+                  )
+            )
+            SELECT
+                COUNT(*) AS eligible_tweets,
+                COALESCE(SUM(EXISTS (
+                    SELECT 1
+                    FROM archive tg INDEXED BY idx_archive_tweet_id
+                    WHERE tg.tweet_id = eligible_tweets.tweet_id
+                      AND tg.record_type = 'media_tag'
+                      AND json_valid(tg.raw_json)
+                      AND json_type(tg.raw_json, '$.tags') = 'array'
+                      AND json_array_length(tg.raw_json, '$.tags') > 0
+                )), 0) AS tagged_tweets
+            FROM eligible_tweets
+        """
+        row = self.conn.execute(query, AVAILABLE_ENRICHMENT_STATES).fetchone()
+        if row is None:
+            return 0, 0
+        return int(row["eligible_tweets"]), int(row["tagged_tweets"])
+
     def delete_media_tag(self, tweet_id: str) -> None:
         self.conn.execute(
             "DELETE FROM archive WHERE record_type = 'media_tag' AND tweet_id = ?", (tweet_id,)

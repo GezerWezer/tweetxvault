@@ -11,6 +11,15 @@ Hard constraints:
 
 Definition of done: passes `uv run ruff format --check`, `uv run ruff check`, and `uv run pytest`.
 
+## Tagging coverage statistics (2026-08-10)
+
+- [x] Define coverage eligibility from direct membership, available enrichment, and media rows.
+- [x] Count valid tagged posts only within that eligible population while retaining tagged posts
+  in the denominator.
+- [x] Force existing record-page and tweet-ID indexes throughout the coverage query.
+- [x] Exclude thread-only, incomplete-enrichment, and text-only rows in functional regressions.
+- [x] Pass focused and complete repository validation.
+
 ## Tagging queue performance (2026-08-09)
 
 - [x] Remove the exact full-queue eligibility count added for pipeline progress.

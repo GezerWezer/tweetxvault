@@ -15,6 +15,43 @@ def _stats_store(tmp_path: Path) -> ArchiveStore:
     return ArchiveStore(tmp_path / "archive.db", create=True)
 
 
+def _seed_tag_stats_tweet(
+    store: ArchiveStore,
+    tweet_id: str,
+    *,
+    membership: bool = True,
+    enrichment_state: str = "done",
+    media: bool = True,
+) -> None:
+    rows = [
+        store._record(
+            row_key=f"tweet_object:{tweet_id}",
+            record_type="tweet_object",
+            tweet_id=tweet_id,
+            enrichment_state=enrichment_state,
+        )
+    ]
+    if membership:
+        rows.append(
+            store._record(
+                row_key=f"tweet:like::{tweet_id}",
+                record_type="tweet",
+                tweet_id=tweet_id,
+                collection_type="like",
+            )
+        )
+    if media:
+        rows.append(
+            store._record(
+                row_key=f"media:{tweet_id}:photo",
+                record_type="media",
+                tweet_id=tweet_id,
+                media_key="photo",
+            )
+        )
+    store._merge_records(rows)
+
+
 def test_summary_reports_counts_ranges_owner_and_latest_sync(tmp_path, make_web_client) -> None:
     store = _stats_store(tmp_path)
     store.conn.executemany(
@@ -335,15 +372,27 @@ def test_health_breaks_unavailable_tweets_down_by_reason_and_retry_state(
 
 def test_tag_stats_reports_case_insensitive_usage_and_coverage(tmp_path, make_web_client) -> None:
     store = _stats_store(tmp_path)
-    store.conn.executemany(
-        "INSERT INTO archive (record_type, tweet_id, raw_json) VALUES (?, ?, ?)",
+    for tweet_id in ("t1", "t2", "t3"):
+        _seed_tag_stats_tweet(store, tweet_id)
+    store._merge_records(
         [
-            ("media", "t1", None),
-            ("media", "t1", None),
-            ("media", "t2", None),
-            ("media", "t3", None),
-            ("media_tag", "t1", json.dumps({"tags": ["Nature", "Bird"]})),
-            ("media_tag", "t2", json.dumps({"tags": ["nature", "Sky"]})),
+            store._record(
+                row_key="tweet:bookmark::t1",
+                record_type="tweet",
+                tweet_id="t1",
+                collection_type="bookmark",
+            )
+        ]
+    )
+    _seed_tag_stats_tweet(store, "thread-only", membership=False)
+    _seed_tag_stats_tweet(store, "pending", enrichment_state="pending")
+    _seed_tag_stats_tweet(store, "text-only", media=False)
+    store.conn.executemany(
+        "INSERT INTO archive (row_key, record_type, tweet_id, raw_json) VALUES (?, ?, ?, ?)",
+        [
+            ("media:t1:second", "media", "t1", None),
+            ("media_tag:t1", "media_tag", "t1", json.dumps({"tags": ["Nature", "Bird"]})),
+            ("media_tag:t2", "media_tag", "t2", json.dumps({"tags": ["nature", "Sky"]})),
         ],
     )
     client = make_web_client(stats_routes.router, store=store)
@@ -383,13 +432,13 @@ def test_tag_stats_handles_empty_archive(tmp_path, make_web_client) -> None:
 
 def test_tag_stats_ignore_malformed_tag_json(tmp_path, make_web_client) -> None:
     store = _stats_store(tmp_path)
+    _seed_tag_stats_tweet(store, "t1")
+    _seed_tag_stats_tweet(store, "t2")
     store.conn.executemany(
-        "INSERT INTO archive (record_type, tweet_id, raw_json) VALUES (?, ?, ?)",
+        "INSERT INTO archive (row_key, record_type, tweet_id, raw_json) VALUES (?, ?, ?, ?)",
         [
-            ("media", "t1", None),
-            ("media", "t2", None),
-            ("media_tag", "t1", "not-json"),
-            ("media_tag", "t2", json.dumps({"tags": ["Bird"]})),
+            ("media_tag:t1", "media_tag", "t1", "not-json"),
+            ("media_tag:t2", "media_tag", "t2", json.dumps({"tags": ["Bird"]})),
         ],
     )
     client = make_web_client(stats_routes.router, store=store)
@@ -404,15 +453,14 @@ def test_tag_stats_ignore_malformed_tag_json(tmp_path, make_web_client) -> None:
 
 def test_tag_stats_require_a_nonempty_tags_array(tmp_path, make_web_client) -> None:
     store = _stats_store(tmp_path)
+    for tweet_id in ("t1", "t2", "t3"):
+        _seed_tag_stats_tweet(store, tweet_id)
     store.conn.executemany(
-        "INSERT INTO archive (record_type, tweet_id, raw_json) VALUES (?, ?, ?)",
+        "INSERT INTO archive (row_key, record_type, tweet_id, raw_json) VALUES (?, ?, ?, ?)",
         [
-            ("media", "t1", None),
-            ("media", "t2", None),
-            ("media", "t3", None),
-            ("media_tag", "t1", "{}"),
-            ("media_tag", "t2", '{"tags":[]}'),
-            ("media_tag", "t3", '{"tags":["Bird"]}'),
+            ("media_tag:t1", "media_tag", "t1", "{}"),
+            ("media_tag:t2", "media_tag", "t2", '{"tags":[]}'),
+            ("media_tag:t3", "media_tag", "t3", '{"tags":["Bird"]}'),
         ],
     )
     client = make_web_client(stats_routes.router, store=store)

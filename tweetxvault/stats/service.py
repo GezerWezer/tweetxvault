@@ -400,25 +400,7 @@ def _collect_archive_status(context: _StatsContext) -> StatsSection:
 
 def _collect_tags(context: _StatsContext) -> StatsSection:
     conn = context.store.conn
-    eligible_tweets = int(
-        conn.execute(
-            "SELECT count(DISTINCT tweet_id) FROM archive WHERE record_type = 'media'"
-        ).fetchone()[0]
-        or 0
-    )
-    tagged_tweets = int(
-        conn.execute(
-            """
-            SELECT count(DISTINCT tweet_id)
-            FROM archive
-            WHERE record_type = 'media_tag'
-              AND json_valid(raw_json)
-              AND json_type(raw_json, '$.tags') = 'array'
-              AND json_array_length(raw_json, '$.tags') > 0
-            """
-        ).fetchone()[0]
-        or 0
-    )
+    eligible_tweets, tagged_tweets = context.store.get_tagging_coverage_counts()
     unique_tags = int(
         conn.execute(
             """

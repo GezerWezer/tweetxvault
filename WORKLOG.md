@@ -1,3 +1,18 @@
+- 2026-08-10 (Tagging coverage eligibility)
+  - Replaced the tagging coverage denominator's count of every distinct media owner with the actual
+    automatic-tagging population: directly saved membership, `done`/`resurrected` tweet object,
+    and at least one media row. Thread-only related objects, incomplete enrichment, and text-only
+    saved posts no longer inflate coverage.
+  - Count valid nonempty media tags only inside that eligible population while retaining tagged
+    posts in the denominator. Empty, invalid, and failed tag rows remain coverage gaps.
+  - Kept the full-population count deterministic on the existing record-page and tweet-ID indexes;
+    a read-only query against the 7.75 GB statistic-free local archive returned 5,264 eligible posts
+    in 5.9 seconds with every correlated lookup using `idx_archive_tweet_id`.
+  - Clarified the shared CLI/Web metric definition and Web tooltip. Added duplicate membership/media,
+    thread-only, pending-enrichment, text-only, malformed-tag, and empty-tag regressions.
+  - Validation passed all 785 Python tests, repository-wide Ruff lint, scoped formatting,
+    `git diff --check`, and all 22 browser asset tests.
+
 - 2026-08-09 (Tagging queue performance)
   - Removed the pipeline's exact full eligibility count, which added an unbounded four-way archive
     self-join before the first Gemini request. Bounded runs now derive an upper progress total from
