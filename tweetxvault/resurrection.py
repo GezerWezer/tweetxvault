@@ -251,9 +251,7 @@ async def resurrect_due_tweets(
                 total=len(candidates),
                 unit="tweets",
                 detail=(
-                    f"{len(candidates)} due selected · {budget}-request ceiling · "
-                    "reason-weighted retry queue"
-                ),
+                    f"{len(candidates)} due selected"),
                 rate_unit="tweets/s",
             )
             pipeline.start_step(
