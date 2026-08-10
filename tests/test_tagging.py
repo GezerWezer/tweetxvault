@@ -42,6 +42,7 @@ class FakeStore:
             )
             """
         )
+        self.conn.execute("CREATE INDEX idx_archive_tweet_id ON archive(tweet_id)")
         self.tag_counts: list[dict[str, Any]] = []
 
     def add_tweet(
@@ -116,9 +117,6 @@ class PendingTagStore:
         selected = self.remaining[:limit]
         del self.remaining[: len(selected)]
         return selected
-
-    def count_eligible_tweets_for_tagging(self) -> int:
-        return len(self.remaining)
 
 
 class FakeFiles:
@@ -311,16 +309,16 @@ async def test_pending_tagging_marks_planned_step_skipped_when_queue_is_empty(pa
 
 
 @pytest.mark.asyncio
-async def test_tagging_step_is_active_while_the_eligible_queue_is_counted(paths) -> None:
+async def test_tagging_step_is_active_while_the_first_batch_is_selected(paths) -> None:
     console, _ = make_console()
     reporter = PipelineReporter(console, "tag", interactive=False)
 
     class ObservedStore(PendingTagStore):
-        def count_eligible_tweets_for_tagging(self) -> int:
+        def get_eligible_tweets_for_tagging(self, *, limit: int) -> list[str]:
             assert reporter.active_step is not None
             assert reporter.active_step.key == "tagging"
-            assert "Counting eligible" in reporter.active_step.activity
-            return super().count_eligible_tweets_for_tagging()
+            assert "Preparing the first media batch" in reporter.active_step.activity
+            return super().get_eligible_tweets_for_tagging(limit=limit)
 
     with reporter:
         result = await tagging.tag_pending_media_tweets(
@@ -331,6 +329,37 @@ async def test_tagging_step_is_active_while_the_eligible_queue_is_counted(paths)
         )
 
     assert result == tagging.TaggingRunResult()
+
+
+@pytest.mark.asyncio
+async def test_pending_tagging_never_counts_the_full_eligible_queue(
+    monkeypatch: pytest.MonkeyPatch,
+    paths,
+) -> None:
+    class NoCountStore(PendingTagStore):
+        def count_eligible_tweets_for_tagging(self) -> int:
+            pytest.fail("tagging must not count the full eligible queue")
+
+    async def fake_tag_media_tweets(**kwargs: Any) -> int:
+        return len(kwargs["tweet_ids"])
+
+    monkeypatch.setattr(tagging, "tag_media_tweets", fake_tag_media_tweets)
+    console, _ = make_console()
+    reporter = PipelineReporter(console, "tag", interactive=False)
+
+    with reporter:
+        result = await tagging.tag_pending_media_tweets(
+            NoCountStore(["1", "2"]),
+            make_config(batch=True, limit=2),
+            paths,
+            console,
+            batch_limit=1,
+        )
+
+    assert result == tagging.TaggingRunResult(processed=2, tagged=2, batches=1)
+    step = reporter._step_by_key["tagging"]
+    assert step.total == 2
+    assert "up to 2 tweets" in step.detail
 
 
 @pytest.mark.asyncio
@@ -744,6 +773,42 @@ async def test_prompt_uses_data_dir_tweet_context_existing_tags_and_model_overri
     assert 'Text: "A quoted \\"caption\\""' in string_parts
     assert "[Attached Image: media-1]" in string_parts
     assert any(isinstance(part, Image.Image) for part in call["contents"])
+
+
+@pytest.mark.asyncio
+async def test_tagging_hydrates_a_batch_with_two_id_indexed_queries(
+    monkeypatch: pytest.MonkeyPatch,
+    paths,
+) -> None:
+    store = FakeStore()
+    prepare_photo(store, paths.data_dir, "1")
+    prepare_photo(store, paths.data_dir, "2")
+    statements: list[str] = []
+    store.conn.set_trace_callback(statements.append)
+    client = FakeClient([response([*successful_result("1"), *successful_result("2")])])
+    monkeypatch.setattr(tagging.genai, "Client", lambda **kwargs: client)
+    console, _ = make_console()
+
+    assert (
+        await tagging.tag_media_tweets(
+            store,
+            make_config(),
+            paths,
+            console,
+            ["1", "2"],
+        )
+        == 2
+    )
+
+    indexed_reads = [
+        statement
+        for statement in statements
+        if "FROM archive INDEXED BY idx_archive_tweet_id" in statement
+    ]
+    assert len(indexed_reads) == 2
+    assert any("record_type = 'media'" in statement for statement in indexed_reads)
+    assert any("record_type = 'tweet_object'" in statement for statement in indexed_reads)
+    assert all("tweet_id IN ('1', '2')" in statement for statement in indexed_reads)
 
 
 @pytest.mark.asyncio

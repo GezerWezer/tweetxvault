@@ -68,6 +68,8 @@ def test_tagging_eligibility_filters_dedupes_orders_and_limits(paths) -> None:
     _seed_tag_candidate(store, "no-media", created_at_ts=40, with_media=False)
     _seed_tag_candidate(store, "tagged", created_at_ts=60)
     store.update_media_tags("tagged", ["Existing"])
+    statements: list[str] = []
+    store.conn.set_trace_callback(statements.append)
 
     assert store.get_eligible_tweets_for_tagging(limit=1) == ["newest"]
     assert store.get_eligible_tweets_for_tagging(limit=20) == [
@@ -75,6 +77,17 @@ def test_tagging_eligibility_filters_dedupes_orders_and_limits(paths) -> None:
         "resurrected",
         "older",
     ]
+    eligibility_queries = [
+        statement for statement in statements if "SELECT DISTINCT t.tweet_id" in statement
+    ]
+    assert len(eligibility_queries) == 2
+    assert all(
+        "FROM archive t INDEXED BY idx_archive_record_page" in statement
+        for statement in eligibility_queries
+    )
+    assert all(
+        statement.count("INDEXED BY idx_archive_tweet_id") == 3 for statement in eligibility_queries
+    )
     store.close()
 
 

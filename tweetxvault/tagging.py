@@ -221,20 +221,30 @@ async def tag_media_tweets(
     tweet_objs: dict[str, dict[str, Any]] = {}
     tweet_contexts: dict[str, _TweetTagContext] = {}
 
-    for tid in tweet_ids:
-        media_rows = store.conn.execute(
-            "SELECT * FROM archive WHERE record_type = 'media' AND tweet_id = ?",
-            (tid,),
-        ).fetchall()
-        for m in media_rows:
-            all_media[tid].append(dict(m))
+    placeholders = ", ".join("?" for _tweet_id in tweet_ids)
+    media_rows = store.conn.execute(
+        f"""
+        SELECT tweet_id, media_key, media_type, local_path
+        FROM archive INDEXED BY idx_archive_tweet_id
+        WHERE record_type = 'media' AND tweet_id IN ({placeholders})
+        """,
+        tweet_ids,
+    ).fetchall()
+    for media_row in media_rows:
+        media = dict(media_row)
+        all_media[media["tweet_id"]].append(media)
 
-        tweet_row = store.conn.execute(
-            "SELECT * FROM archive WHERE record_type = 'tweet_object' AND tweet_id = ?",
-            (tid,),
-        ).fetchone()
-        if tweet_row:
-            tweet_objs[tid] = dict(tweet_row)
+    tweet_rows = store.conn.execute(
+        f"""
+        SELECT tweet_id, raw_json, author_display_name, author_username, text
+        FROM archive INDEXED BY idx_archive_tweet_id
+        WHERE record_type = 'tweet_object' AND tweet_id IN ({placeholders})
+        """,
+        tweet_ids,
+    ).fetchall()
+    for tweet_row in tweet_rows:
+        tweet = dict(tweet_row)
+        tweet_objs[tweet["tweet_id"]] = tweet
 
     top_tags_list = store.get_tag_counts(limit=50)
     existing_tags_str = (
@@ -700,8 +710,8 @@ async def tag_pending_media_tweets(
         )
         pipeline.start_step(
             step_key,
-            activity="Counting eligible media tweets and checking daily quota",
-            counters="selection not yet complete",
+            activity="Checking daily quota and preparing the first media batch",
+            counters="0 processed · 0 tagged · 0 batches",
         )
     rpd_status: RpdStatus | None = None
     if pipeline is not None and config.tagging.rpd is not None:
@@ -739,27 +749,27 @@ async def tag_pending_media_tweets(
                 _print_rpd_exhausted(console, rpd_status, model_name)
             return TaggingRunResult()
 
+    effective_batch_limit = 1 if dry_run else batch_limit
+    if pipeline is not None and rpd_status is not None:
+        effective_batch_limit = (
+            min(effective_batch_limit, rpd_status.remaining)
+            if effective_batch_limit is not None
+            else rpd_status.remaining
+        )
+
     if pipeline is not None:
-        eligible_count = store.count_eligible_tweets_for_tagging()
-        effective_batch_limit = 1 if dry_run else batch_limit
-        if rpd_status is not None:
-            effective_batch_limit = (
-                min(effective_batch_limit, rpd_status.remaining)
-                if effective_batch_limit is not None
-                else rpd_status.remaining
-            )
-        effective_total = eligible_count
-        if effective_batch_limit is not None:
-            effective_total = min(
-                effective_total,
-                effective_batch_limit * effective_batch_size,
-            )
+        effective_total = (
+            effective_batch_limit * effective_batch_size
+            if effective_batch_limit is not None
+            else effective_batch_size
+        )
         if dry_run:
-            effective_total = min(effective_total, 1)
-        if effective_total <= 0:
-            pipeline.skip_step(step_key, "no eligible untagged media tweets")
-            return TaggingRunResult()
+            effective_total = 1
         detail = f"{model_name} · batch size {effective_batch_size}"
+        if effective_batch_limit is not None:
+            detail += f" · up to {effective_total} tweets"
+        else:
+            detail += " · queue discovered one batch at a time"
         if rpd_status is not None:
             detail += f" · {rpd_status.remaining}/{rpd_status.limit} daily requests available"
         pipeline.add_step(
@@ -776,20 +786,16 @@ async def tag_pending_media_tweets(
             activity=f"Preparing the first media batch for {model_name}",
             counters="0 processed · 0 tagged · 0 batches",
         )
-
-    effective_batch_limit = 1 if dry_run else batch_limit
-    if pipeline is not None and rpd_status is not None:
-        effective_batch_limit = (
-            min(effective_batch_limit, rpd_status.remaining)
-            if effective_batch_limit is not None
-            else rpd_status.remaining
-        )
     processed = 0
     tagged = 0
     batches = 0
 
     while effective_batch_limit is None or batches < effective_batch_limit:
         selection_limit = 1 if dry_run else effective_batch_size
+
+        if pipeline is not None and effective_batch_limit is None and batches > 0:
+            effective_total = processed + selection_limit
+            pipeline.update_step(step_key, completed=processed, total=effective_total)
 
         tweet_ids = store.get_eligible_tweets_for_tagging(limit=selection_limit)
         if not tweet_ids:
@@ -827,6 +833,9 @@ async def tag_pending_media_tweets(
         if dry_run or tagged_batch < len(tweet_ids) or len(tweet_ids) < selection_limit:
             break
 
+    if pipeline is not None and processed == 0:
+        pipeline.skip_step(step_key, "no eligible untagged media tweets")
+        return TaggingRunResult()
     if pipeline is not None:
         pipeline.update_step(
             step_key,

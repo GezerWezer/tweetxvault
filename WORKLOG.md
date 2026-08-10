@@ -1,3 +1,19 @@
+- 2026-08-09 (Tagging queue performance)
+  - Removed the pipeline's exact full eligibility count, which added an unbounded four-way archive
+    self-join before the first Gemini request. Bounded runs now derive an upper progress total from
+    batch/RPD ceilings; unlimited runs expand progress one selected batch at a time.
+  - Rewrote candidate checks as correlated `EXISTS` probes forced through the existing tweet-ID
+    index, preserving saved-membership, available-object, media, untagged, ordering, and limit
+    semantics without adding an index or schema migration.
+  - Replaced two unhinted reads per tweet with two narrow ID-indexed reads per batch for media and
+    tweet-object context. Filesystem/media validation and Gemini behavior remain unchanged.
+  - On the read-only 7.75 GB statistic-free archive, selecting five candidates took 3.2 ms; media
+    and tweet-object hydration took 0.04 ms and 0.17 ms. `EXPLAIN QUERY PLAN` used
+    `idx_archive_tweet_id` for every correlated and hydration lookup.
+  - Added no-full-count, active-selection, bounded-progress, deterministic eligibility SQL, and
+    two-query batch hydration regressions. All 785 tests, repository-wide Ruff lint, scoped format,
+    focused 97-test tagging coverage, and `git diff --check` pass.
+
 - 2026-08-09 (LanceDB migration recovery)
   - Updated the migration-only dependency from LanceDB 0.29 to the tested 0.34 release line.
   - Replaced whole-chunk loss with adaptive source recovery: failed reads and native crashes split

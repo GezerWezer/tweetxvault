@@ -11,6 +11,15 @@ Hard constraints:
 
 Definition of done: passes `uv run ruff format --check`, `uv run ruff check`, and `uv run pytest`.
 
+## Tagging queue performance (2026-08-09)
+
+- [x] Remove the exact full-queue eligibility count added for pipeline progress.
+- [x] Derive bounded progress from batch/RPD ceilings and discover unlimited queues per batch.
+- [x] Force the existing tweet-ID index for candidate relation checks and batch hydration.
+- [x] Preserve tagging eligibility, batching, runtime media validation, and empty-queue reporting.
+- [x] Add no-full-count, deterministic-plan, batch-hydration, progress, and functional regressions.
+- [x] Pass focused and complete repository validation.
+
 ## LanceDB migration recovery (2026-08-09)
 
 - [x] Support the tested LanceDB 0.34 release line in project metadata and the lockfile.

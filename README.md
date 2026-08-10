@@ -230,9 +230,11 @@ sync declares its full flag-relevant lifecycle before work starts, while steps e
 with `--skip-*` flags are omitted. A planned step whose queue is empty remains visible with a line
 symbol and a specific `skipped due to …` reason. The header shows total command elapsed time and
 each completed step keeps its own elapsed time. Exact local queues show determinate totals,
-throughput, and a per-step ETA, except tagging intentionally shows only its exact counts. X
-timeline pagination does not expose a trustworthy remote total, so sync shows determinate progress
-for the current page and durable page/tweet counts without inventing an overall percentage or ETA.
+throughput, and a per-step ETA. Tagging avoids a full archive pre-count: bounded runs show the
+batch/RPD ceiling, unlimited runs discover work one batch at a time, and both show processed/tagged
+counts without a rate or ETA. X timeline pagination does not expose a trustworthy remote total, so
+sync shows determinate progress for the current page and durable page/tweet counts without
+inventing an overall percentage or ETA.
 The side panel is reserved for warnings and recoverable errors; retry activity and current
 tweet/file/host details remain attached to their step. The legacy `tweetxvault migrate` command
 uses the same lifecycle display for source inspection, row copying, and FTS rebuilding.
