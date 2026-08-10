@@ -536,7 +536,7 @@ uv run tweetxvault threads expand 2026531440414925307
 uv run tweetxvault threads expand --refresh 2026531440414925307
 ```
 
-**Thread Depth Limits:** Twitter's `TweetDetail` payload includes large swaths of surrounding reply trees. To prevent the thread crawler from snowballing into an infinite queue, tweetxvault builds an in-memory Breadth-First Search (BFS) graph. The `--max-linked-depth` flag dynamically limits how many "degrees of separation" the crawler is allowed to stray from your root bookmarks and likes. By default, it is set to `1` (only follow URLs directly extracted from your bookmarks or likes). You can set it to `0` to disable URL crawling entirely.
+**Thread Depth Limits:** Twitter's `TweetDetail` payload includes large swaths of surrounding reply trees. To prevent the thread crawler from snowballing into an infinite queue, tweetxvault builds an in-memory Breadth-First Search (BFS) graph over quoted-post relationships and linked X status URLs. The `--max-linked-depth` flag limits how many "degrees of separation" the crawler can stray from root bookmarks and likes. The default `1` expands posts directly quoted or linked by those roots; `0` disables all relationship traversal. Relations discovered by a `TweetDetail` request become eligible on the next sync rather than extending the active command's snapshot.
 
 ### Article Refresh
 

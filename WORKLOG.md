@@ -1,3 +1,16 @@
+- 2026-08-09 (Quoted-post thread expansion)
+  - Added stored `quote_of` relations to the existing membership-rooted BFS so quoted originals
+    receive their own `TweetDetail` request instead of remaining known-but-unexpanded objects.
+  - Applied `max_linked_depth` across both quote relations and linked X status URLs; newly
+    discovered deeper relations remain command-start snapshot work for the next sync.
+  - Preserved membership/expanded-target dedupe, limits, pacing, and the linked-URL known-object
+    guard while allowing quote-derived targets to bypass that inappropriate guard.
+  - Included quote-derived work in thread progress and pending-related-status statistics, and
+    documented the shared depth behavior without adding schema, config, Web, or CLI surfaces.
+  - Added mixed-edge depth, wrapper/original reply capture, rerun, membership-dedup, and archive
+    statistics regressions. Focused tests, the full pytest suite, repository-wide Ruff lint,
+    compilation, and diff checks pass.
+
 - 2026-08-09 (Numeric tagging batches)
   - Changed `tweetxvault tag --batch` from a boolean override to a required positive batch size.
   - Redefined the command's `--limit` as a top-level batch count; for example,

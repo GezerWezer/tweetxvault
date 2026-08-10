@@ -328,6 +328,7 @@ async def expand_threads(
         )
         known_tweet_ids: set[str] = set()
         pending_membership_ids: list[str] = []
+        pending_quote_ids: list[str] = []
         pending_linked_ids: list[str] = []
 
         if targets:
@@ -367,7 +368,7 @@ async def expand_threads(
             _log_threads(console, "loading archived url refs...")
             url_ref_rows = store.list_url_ref_rows()
             max_linked_depth = config.sync.max_linked_depth
-            edges: dict[str, list[str]] = {}
+            url_edges: dict[str, list[str]] = {}
             for row in url_ref_rows:
                 target_id = next(
                     (
@@ -380,42 +381,72 @@ async def expand_threads(
                 )
                 source_id = row.get("tweet_id")
                 if isinstance(source_id, str) and target_id:
-                    edges.setdefault(source_id, []).append(target_id)
+                    url_edges.setdefault(source_id, []).append(target_id)
 
             depths = {tweet_id: 0 for tweet_id in membership_ids if tweet_id}
+            discovery_kinds: dict[str, str] = {}
+            quote_reachable_targets: set[str] = set()
+            reachable_quote_count = 0
+            reachable_link_count = 0
             for depth in range(1, max_linked_depth + 1):
-                for source_id in [
+                frontier = [
                     tweet_id for tweet_id, known_depth in depths.items() if known_depth == depth - 1
-                ]:
-                    for target_id in edges.get(source_id, []):
-                        depths.setdefault(target_id, depth)
+                ]
+                quote_edges: dict[str, list[str]] = {}
+                for row in store.list_quote_relation_rows(set(frontier)):
+                    source_id = row.get("tweet_id")
+                    target_id = row.get("target_tweet_id")
+                    if isinstance(source_id, str) and isinstance(target_id, str) and target_id:
+                        quote_edges.setdefault(source_id, []).append(target_id)
 
-            seen_linked: set[str] = set()
-            reachable_count = 0
-            if max_linked_depth > 0:
-                for source_id, target_ids in edges.items():
-                    if source_id not in depths or depths[source_id] >= max_linked_depth:
-                        continue
-                    for target_id in target_ids:
-                        reachable_count += 1
-                        if (
-                            target_id == source_id
-                            or target_id in seen_linked
-                            or target_id in expanded_targets
-                            or target_id in known_tweet_ids
-                        ):
+                for source_id in frontier:
+                    candidates = [
+                        *(("quote", target_id) for target_id in quote_edges.get(source_id, [])),
+                        *(("linked", target_id) for target_id in url_edges.get(source_id, [])),
+                    ]
+                    for kind, target_id in candidates:
+                        if kind == "quote":
+                            reachable_quote_count += 1
+                            quote_reachable_targets.add(target_id)
+                        else:
+                            reachable_link_count += 1
+                        if target_id == source_id:
                             result.skipped += 1
                             continue
-                        seen_linked.add(target_id)
-                        pending_linked_ids.append(target_id)
+                        if target_id in depths:
+                            result.skipped += 1
+                            continue
+                        depths[target_id] = depth
+                        discovery_kinds[target_id] = kind
+
+            membership_id_set = set(membership_ids)
+            for target_id, depth in depths.items():
+                if depth == 0:
+                    continue
+                kind = (
+                    "quote" if target_id in quote_reachable_targets else discovery_kinds[target_id]
+                )
+                if target_id in membership_id_set or target_id in expanded_targets:
+                    result.skipped += 1
+                    continue
+                if kind == "linked" and target_id in known_tweet_ids:
+                    result.skipped += 1
+                    continue
+                if kind == "quote":
+                    pending_quote_ids.append(target_id)
+                else:
+                    pending_linked_ids.append(target_id)
             _log_threads(
                 console,
-                "linked-status pass over "
-                f"{reachable_count} reachable url refs "
-                f"(from {len(url_ref_rows)} total, max depth {max_linked_depth})",
+                "related-status pass over "
+                f"{reachable_quote_count} quote relations and "
+                f"{reachable_link_count} reachable url refs "
+                f"(from {len(url_ref_rows)} total url refs, max depth {max_linked_depth})",
             )
 
-        pending_total = len(pending_membership_ids) + len(pending_linked_ids)
+        pending_total = (
+            len(pending_membership_ids) + len(pending_quote_ids) + len(pending_linked_ids)
+        )
         if pending_total == 0:
             if pipeline is not None:
                 pipeline.skip_step(
@@ -435,10 +466,12 @@ async def expand_threads(
                 ),
                 counters=(
                     f"{len(pending_membership_ids)} membership · "
+                    f"{len(pending_quote_ids)} quoted · "
                     f"{len(pending_linked_ids)} linked · {result.skipped} already known"
                 ),
                 detail=(
                     f"{len(pending_membership_ids)} membership candidates · "
+                    f"{len(pending_quote_ids)} quoted-status candidates · "
                     f"{len(pending_linked_ids)} reachable linked-status candidates"
                 ),
             )
@@ -463,6 +496,7 @@ async def expand_threads(
         try:
             for phase, target_ids in (
                 ("thread", pending_membership_ids),
+                ("quoted tweet", pending_quote_ids),
                 ("linked tweet", pending_linked_ids),
             ):
                 for tweet_id in target_ids:

@@ -11,6 +11,16 @@ Hard constraints:
 
 Definition of done: passes `uv run ruff format --check`, `uv run ruff check`, and `uv run pytest`.
 
+## Quoted-post thread expansion (2026-08-09)
+
+- [x] Add stored `quote_of` relations to the existing membership-rooted thread traversal graph.
+- [x] Apply `max_linked_depth` uniformly to quote relations and linked X status URLs.
+- [x] Expand quoted originals even though their embedded tweet objects are already known locally.
+- [x] Preserve command-start snapshots, expanded-target skipping, shared limits, and request pacing.
+- [x] Include quote-derived work in thread progress and pending-related-status statistics.
+- [x] Add mixed-edge depth, wrapper/original reply capture, rerun, and membership-dedup regressions.
+- [x] Pass focused and complete repository validation.
+
 ## Numeric tagging batches (2026-08-09)
 
 - [x] Require a positive size for `tweetxvault tag --batch N`.

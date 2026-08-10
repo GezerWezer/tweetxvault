@@ -678,8 +678,8 @@ Reserved for future (not implemented in MVP):
 
 - [ ] Bookmark folders
 - [x] Own tweet timeline sync (`UserTweets`)
-- [x] Thread/context expansion (`TweetDetail`) for archived tweets
-- [x] Linked X-status URL expansion
+- [x] Thread/context expansion (`TweetDetail`) for archived tweets, including quoted originals
+- [x] Linked X-status URL and quote-relation expansion under one `max_linked_depth` limit
 - [x] Articles capture / export (`UserArticlesTweets` + article-bearing tweet payloads)
 - [ ] URL snapshot queue / ArchiveBox integration
 - [ ] Following/followers lists

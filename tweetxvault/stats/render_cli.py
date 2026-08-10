@@ -318,7 +318,7 @@ def _archive_tiles(
         (
             "Thread memberships pending",
             int(data.get("pending_thread_memberships", 0)),
-            f"{int(data.get('pending_linked_statuses', 0)):,} linked pending",
+            f"{int(data.get('pending_linked_statuses', 0)):,} related pending",
         ),
         (
             "Local rehydrate gaps",

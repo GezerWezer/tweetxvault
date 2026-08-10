@@ -381,7 +381,7 @@ def test_archive_stats_reports_followup_work(paths) -> None:
     assert stats.missing_tweet_object_count == 1
     assert stats.expanded_thread_target_count == 1
     assert stats.pending_thread_membership_count == 2
-    assert stats.pending_thread_linked_status_count == 1
+    assert stats.pending_thread_linked_status_count == 2
     store.close()
 
 
@@ -498,6 +498,57 @@ def test_archive_stats_bfs_depth(paths) -> None:
     assert (
         store.archive_stats(max_linked_depth=3).pending_thread_linked_status_count == 3
     )  # 200, 300, 400
+
+    store.close()
+
+
+def test_archive_stats_bfs_depth_combines_quote_and_url_edges(paths) -> None:
+    store = open_archive_store(paths, create=True)
+    assert store is not None
+    store._merge_records(
+        [
+            store._record(
+                record_type="tweet",
+                row_key="tweet:100",
+                tweet_id="100",
+            ),
+            store._record(
+                record_type="tweet_object",
+                row_key="tweet_object:200",
+                tweet_id="200",
+            ),
+            store._record(
+                record_type="tweet_object",
+                row_key="tweet_object:400",
+                tweet_id="400",
+            ),
+            store._record(
+                record_type="tweet_relation",
+                row_key="tweet_relation:100:quote_of:200",
+                tweet_id="100",
+                relation_type="quote_of",
+                target_tweet_id="200",
+            ),
+            store._record(
+                record_type="url_ref",
+                row_key="url_ref:200:0",
+                tweet_id="200",
+                expanded_url="https://x.com/user/status/300",
+            ),
+            store._record(
+                record_type="tweet_relation",
+                row_key="tweet_relation:300:quote_of:400",
+                tweet_id="300",
+                relation_type="quote_of",
+                target_tweet_id="400",
+            ),
+        ]
+    )
+
+    assert store.archive_stats(max_linked_depth=0).pending_thread_linked_status_count == 0
+    assert store.archive_stats(max_linked_depth=1).pending_thread_linked_status_count == 1
+    assert store.archive_stats(max_linked_depth=2).pending_thread_linked_status_count == 2
+    assert store.archive_stats(max_linked_depth=3).pending_thread_linked_status_count == 3
 
     store.close()
 

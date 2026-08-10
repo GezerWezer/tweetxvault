@@ -1559,6 +1559,7 @@ def test_stats_archive_renders_summary_tables(paths, monkeypatch) -> None:
     assert "Tagging & search" not in normalized
     assert "Local rehydrate gaps" in normalized
     assert "Thread memberships pending" in normalized
+    assert "related pending" in normalized
     assert "Versions" not in normalized
     assert "Optimize" not in normalized
     assert "Follow-up" not in normalized

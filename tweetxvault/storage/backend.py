@@ -3070,6 +3070,26 @@ class ArchiveStore:
         )
         return rows
 
+    def list_quote_relation_rows(self, source_tweet_ids: set[str]) -> list[dict[str, Any]]:
+        if not source_tweet_ids:
+            return []
+        rows: list[dict[str, Any]] = []
+        source_ids = sorted(source_tweet_ids)
+        chunk_size = 500
+        for start in range(0, len(source_ids), chunk_size):
+            chunk = source_ids[start : start + chunk_size]
+            placeholders = ", ".join("?" for _ in chunk)
+            query = f"""
+                SELECT tweet_id, target_tweet_id
+                FROM archive INDEXED BY idx_archive_tweet_id
+                WHERE record_type = 'tweet_relation'
+                  AND relation_type = 'quote_of'
+                  AND tweet_id IN ({placeholders})
+                ORDER BY tweet_id, target_tweet_id
+            """
+            rows.extend(dict(row) for row in self.conn.execute(query, chunk).fetchall())
+        return rows
+
     def _serialize_media_row(self, row: dict[str, Any]) -> dict[str, Any]:
         variants = json.loads(row["variants_json"]) if row.get("variants_json") else []
         return {
@@ -3726,7 +3746,7 @@ class ArchiveStore:
         known_tweet_ids = unique_post_ids | tweet_object_ids
         pending_linked_status_targets: set[str] = set()
 
-        edges = {}
+        url_edges: dict[str, list[str]] = {}
         for row in url_ref_rows:
             target_id = None
             for field_name in ("canonical_url", "expanded_url", "url"):
@@ -3737,33 +3757,47 @@ class ArchiveStore:
                         break
             src = row.get("tweet_id")
             if src and target_id:
-                if src not in edges:
-                    edges[src] = []
-                edges[src].append((target_id, row))
+                url_edges.setdefault(src, []).append(target_id)
 
         depths = {tid: 0 for tid in unique_post_ids if tid}
-        for d in range(1, max_linked_depth + 1):
-            current_layer = [tid for tid, depth in depths.items() if depth == d - 1]
-            for src in current_layer:
-                if src in edges:
-                    for tgt_id, _ in edges[src]:
-                        if tgt_id not in depths:
-                            depths[tgt_id] = d
+        discovery_kinds: dict[str, str] = {}
+        quote_reachable_targets: set[str] = set()
+        for depth in range(1, max_linked_depth + 1):
+            frontier = {
+                tweet_id for tweet_id, known_depth in depths.items() if known_depth == depth - 1
+            }
+            quote_edges: dict[str, list[str]] = {}
+            for row in self.list_quote_relation_rows(frontier):
+                source_id = row.get("tweet_id")
+                target_id = row.get("target_tweet_id")
+                if isinstance(source_id, str) and isinstance(target_id, str) and target_id:
+                    quote_edges.setdefault(source_id, []).append(target_id)
 
-        for src, target_list in edges.items():
-            if max_linked_depth == 0:
-                break
-            if src not in depths or depths[src] >= max_linked_depth:
+            for source_id in sorted(frontier):
+                candidates = [
+                    *(("quote", target_id) for target_id in quote_edges.get(source_id, [])),
+                    *(("linked", target_id) for target_id in url_edges.get(source_id, [])),
+                ]
+                for kind, target_id in candidates:
+                    if not target_id or target_id == source_id:
+                        continue
+                    if kind == "quote":
+                        quote_reachable_targets.add(target_id)
+                    if target_id in depths:
+                        continue
+                    depths[target_id] = depth
+                    discovery_kinds[target_id] = kind
+
+        for target_id, depth in depths.items():
+            if depth == 0 or target_id in expanded_thread_targets:
                 continue
-            for target_id, _row in target_list:
-                if (
-                    not target_id
-                    or target_id == src
-                    or target_id in expanded_thread_targets
-                    or target_id in known_tweet_ids
-                ):
-                    continue
-                pending_linked_status_targets.add(target_id)
+            if (
+                target_id not in quote_reachable_targets
+                and discovery_kinds[target_id] == "linked"
+                and target_id in known_tweet_ids
+            ):
+                continue
+            pending_linked_status_targets.add(target_id)
         return ArchiveStats(
             owner_user_id=self.get_archive_owner_id(),
             unique_post_count=len(unique_post_ids),

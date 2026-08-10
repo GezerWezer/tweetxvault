@@ -64,6 +64,50 @@ def _seed_thread_archive(paths) -> dict[str, object]:
     return root_raw
 
 
+def _seed_quote_archive(
+    paths,
+) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
+    deepest_raw = make_tweet_result("300", "deepest quoted tweet", user_id="3000")
+    quoted_raw = make_tweet_result(
+        "200",
+        "quoted tweet",
+        user_id="2000",
+        quoted_tweet=deepest_raw,
+    )
+    wrapper_raw = make_tweet_result(
+        "100",
+        "quote wrapper",
+        user_id="1000",
+        quoted_tweet=quoted_raw,
+    )
+    wrapper = TimelineTweet(
+        tweet_id="100",
+        text="quote wrapper",
+        author_id="1000",
+        author_username="user1000",
+        author_display_name="User 1000",
+        created_at="Sat Mar 14 00:00:00 +0000 2026",
+        sort_index="10",
+        raw_json=wrapper_raw,
+    )
+    store = open_archive_store(paths, create=True)
+    assert store is not None
+    store.persist_page(
+        operation="Likes",
+        collection_type="like",
+        cursor_in=None,
+        cursor_out=None,
+        http_status=200,
+        raw_json={"ok": True},
+        tweets=[wrapper],
+        last_head_tweet_id="100",
+        backfill_cursor=None,
+        backfill_incomplete=False,
+    )
+    store.close()
+    return wrapper_raw, quoted_raw, deepest_raw
+
+
 def test_normalize_thread_target_accepts_ids_and_urls() -> None:
     assert normalize_thread_target("2026531440414925307") == "2026531440414925307"
     assert (
@@ -336,6 +380,173 @@ async def test_expand_threads_fetches_membership_and_linked_status(
     assert second.expanded == 0
     assert second.failed == 0
     assert second.skipped >= 1
+
+
+@pytest.mark.asyncio
+async def test_expand_threads_follows_quote_edges_at_configured_depth(
+    paths,
+    config,
+    auth_bundle,
+) -> None:
+    wrapper_raw, quoted_raw, deepest_raw = _seed_quote_archive(paths)
+    wrapper_reply = make_tweet_result(
+        "101",
+        "wrapper reply",
+        user_id="1001",
+        conversation_id="100",
+        in_reply_to_status_id="100",
+    )
+    quoted_reply = make_tweet_result(
+        "201",
+        "quoted reply",
+        user_id="2001",
+        conversation_id="200",
+        in_reply_to_status_id="200",
+    )
+    deepest_reply = make_tweet_result(
+        "301",
+        "deepest reply",
+        user_id="3001",
+        conversation_id="300",
+        in_reply_to_status_id="300",
+    )
+    QueryIdStore(paths).save({"TweetDetail": "detail-qid"})
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        focal = request.url.params["variables"]
+        if '"focalTweetId":"100"' in focal:
+            requests.append("100")
+            results = [wrapper_raw, wrapper_reply]
+        elif '"focalTweetId":"200"' in focal:
+            requests.append("200")
+            results = [quoted_raw, quoted_reply]
+        elif '"focalTweetId":"300"' in focal:
+            requests.append("300")
+            results = [deepest_raw, deepest_reply]
+        else:
+            raise AssertionError(f"unexpected request {request.url}")
+        return httpx.Response(
+            200,
+            json=make_tweet_detail_response(results, module=True),
+            request=request,
+        )
+
+    depth_one = config.model_copy(
+        update={"sync": config.sync.model_copy(update={"max_linked_depth": 1})}
+    )
+    first = await expand_threads(
+        config=depth_one,
+        paths=paths,
+        auth_bundle=auth_bundle,
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert first.processed == 2
+    assert first.expanded == 2
+    assert requests == ["100", "200"]
+
+    second = await expand_threads(
+        config=depth_one,
+        paths=paths,
+        auth_bundle=auth_bundle,
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert second.processed == 0
+    assert requests == ["100", "200"]
+
+    depth_two = config.model_copy(
+        update={"sync": config.sync.model_copy(update={"max_linked_depth": 2})}
+    )
+    third = await expand_threads(
+        config=depth_two,
+        paths=paths,
+        auth_bundle=auth_bundle,
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert third.processed == 1
+    assert third.expanded == 1
+    assert requests == ["100", "200", "300"]
+
+    store = open_archive_store(paths, create=False)
+    assert store is not None
+    try:
+        relation_rows = store._query(expr="record_type = 'tweet_relation'")
+        relations = {
+            (row["tweet_id"], row["relation_type"], row["target_tweet_id"]) for row in relation_rows
+        }
+        assert ("101", "reply_to", "100") in relations
+        assert ("201", "reply_to", "200") in relations
+        assert ("301", "reply_to", "300") in relations
+        assert store.list_raw_capture_target_ids("ThreadExpandDetail") == ["100", "200", "300"]
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_expand_threads_deduplicates_quoted_original_with_membership(
+    paths,
+    config,
+    auth_bundle,
+) -> None:
+    wrapper_raw, quoted_raw, _deepest_raw = _seed_quote_archive(paths)
+    quoted_raw.pop("quoted_status_result")
+    quoted = TimelineTweet(
+        tweet_id="200",
+        text="quoted tweet",
+        author_id="2000",
+        author_username="user2000",
+        author_display_name="User 2000",
+        created_at="Sat Mar 14 00:00:00 +0000 2026",
+        sort_index="9",
+        raw_json=quoted_raw,
+    )
+    store = open_archive_store(paths, create=False)
+    assert store is not None
+    store.persist_page(
+        operation="Bookmarks",
+        collection_type="bookmark",
+        cursor_in=None,
+        cursor_out=None,
+        http_status=200,
+        raw_json={"ok": True},
+        tweets=[quoted],
+        last_head_tweet_id="200",
+        backfill_cursor=None,
+        backfill_incomplete=False,
+    )
+    store.close()
+    QueryIdStore(paths).save({"TweetDetail": "detail-qid"})
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        focal = request.url.params["variables"]
+        if '"focalTweetId":"100"' in focal:
+            requests.append("100")
+            result = wrapper_raw
+        elif '"focalTweetId":"200"' in focal:
+            requests.append("200")
+            result = quoted_raw
+        else:
+            raise AssertionError(f"unexpected request {request.url}")
+        return httpx.Response(
+            200,
+            json=make_tweet_detail_response([result]),
+            request=request,
+        )
+
+    result = await expand_threads(
+        config=config,
+        paths=paths,
+        auth_bundle=auth_bundle,
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert result.processed == 2
+    assert result.expanded == 2
+    assert requests == ["100", "200"]
 
 
 @pytest.mark.asyncio
