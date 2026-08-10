@@ -152,6 +152,17 @@ def test_sync_help_lists_subcommand_descriptions() -> None:
     assert "configured media tagging" in result.stdout
 
 
+def test_stats_help_describes_detailed_view() -> None:
+    result = runner.invoke(cli.app, ["stats", "--help"])
+
+    assert result.exit_code == 0
+    assert "--detailed" in result.stdout
+    normalized = " ".join(result.stdout.split())
+    assert "full storage breakdown" in normalized
+    assert "unavailable" in normalized
+    assert "zero-count maintenance queues" in normalized
+
+
 def test_sync_all_help_describes_default_followups() -> None:
     result = runner.invoke(cli.app, ["sync", "all", "--help"])
 
@@ -1529,111 +1540,44 @@ def test_stats_archive_renders_summary_tables(paths, monkeypatch) -> None:
     buffer = StringIO()
     _capture_console(monkeypatch, buffer)
     monkeypatch.setattr(cli, "load_config", lambda: (AppConfig(), paths))
-    monkeypatch.setattr(cli, "_format_stats_timestamp", lambda raw: raw or "-")
-    monkeypatch.setattr(
-        cli,
-        "_path_size_bytes",
-        lambda path: 2_048 if path == paths.database_path else 4_096,
-    )
-
-    class FakeStore:
-        def __init__(self) -> None:
-            self.closed = False
-
-        def archive_stats(self):
-            return SimpleNamespace(
-                owner_user_id="42",
-                unique_post_count=7,
-                collection_membership_count=9,
-                article_count=2,
-                raw_capture_count=12,
-                media_count=4,
-                url_count=3,
-                oldest_created_at="oldest",
-                newest_created_at="newest",
-                latest_capture_at="capture",
-                latest_sync_at="sync",
-                version_count=6,
-                collections=[
-                    SimpleNamespace(
-                        collection_type="bookmark",
-                        post_count=3,
-                        oldest_created_at="b-old",
-                        newest_created_at="b-new",
-                        last_synced_at="b-sync",
-                        backfill_cursor="cursor-1",
-                        backfill_incomplete=True,
-                    ),
-                    SimpleNamespace(
-                        collection_type="like",
-                        post_count=4,
-                        oldest_created_at=None,
-                        newest_created_at=None,
-                        last_synced_at=None,
-                        backfill_cursor=None,
-                        backfill_incomplete=False,
-                    ),
-                ],
-                pending_enrichment_count=2,
-                transient_enrichment_failure_count=1,
-                transient_enrichment_due_count=1,
-                transient_enrichment_delayed_count=0,
-                terminal_enrichment_count=3,
-                retryable_unavailable_count=2,
-                permanent_unavailable_count=1,
-                due_resurrection_count=2,
-                resurrected_enrichment_count=1,
-                done_enrichment_count=4,
-                preview_article_count=5,
-                missing_tweet_object_count=6,
-                expanded_thread_target_count=7,
-                pending_thread_membership_count=8,
-                pending_thread_linked_status_count=9,
-            )
-
-        def close(self) -> None:
-            self.closed = True
-
-        def count_incomplete_initial_enrichment(self) -> int:
-            return 3
-
-    store = FakeStore()
-    monkeypatch.setattr(cli, "open_archive_store", lambda _paths, create=False, config=None: store)
+    _seed_archive(paths)
 
     cli.stats_archive()
 
     output = buffer.getvalue()
     normalized = " ".join(output.split())
-    assert "archive:" in normalized
-    assert "Summary" in normalized
+    assert "tweetxvault statistics" in normalized
+    assert "View summary" in normalized
+    assert "Archive" in normalized
     assert "Unique posts" in normalized
-    assert "Collection memberships" in normalized
+    assert "Collection" in normalized
+    assert "memberships" in normalized
     assert "Collections" in normalized
-    assert "bookmark" in normalized
-    assert "resume older" in normalized
     assert "Storage" in normalized
-    assert "2.0 KiB" in normalized
-    assert "4.0 KiB" in normalized
-    assert "run optimize" in normalized
-    assert "Follow-Up" in normalized
-    assert "Archive enrich (TweetDetail)" in normalized
-    assert (
-        "2 pending, 1 transient due, 0 transient delayed, 2 retryable unavailable, "
-        "1 permanent unavailable, 1 resurrected, 4 done"
-    ) in normalized
-    assert "Tweet resurrection" in normalized
-    assert "2 unavailable tweets currently due" in normalized
-    assert "Archive enrichment is incomplete: 3 tweets remain." in normalized
-    assert "Rehydrate gaps (local rebuild)" in normalized
-    assert "6 tweets missing normalized tweet_object rows" in normalized
-    assert "Threads expand (TweetDetail)" in normalized
-    assert "7 expanded, 8 membership targets pending, 9 linked-status targets pending" in normalized
-    assert "Legend" in normalized
-    assert "'resume older' means the next sync" in normalized
-    assert "Sparse archive-imported tweets still waiting" in normalized
-    assert "tweetxvault rehydrate" in normalized
-    assert "saved x.com status URLs" in normalized
-    assert store.closed is True
+    assert "Database & Indexes" in normalized
+    assert "Archive health" in normalized
+    assert "Tagging & search" not in normalized
+    assert "Local rehydrate gaps" in normalized
+    assert "Thread memberships pending" in normalized
+    assert "Versions" not in normalized
+    assert "Optimize" not in normalized
+    assert "Follow-up" not in normalized
+
+
+def test_stats_archive_detailed_shows_full_storage_and_hidden_rows(paths, monkeypatch) -> None:
+    buffer = StringIO()
+    _capture_console(monkeypatch, buffer)
+    monkeypatch.setattr(cli, "load_config", lambda: (AppConfig(), paths))
+    _seed_archive(paths)
+
+    cli.stats_archive(detailed=True)
+
+    normalized = " ".join(buffer.getvalue().split())
+    assert "tweetxvault statistics" in normalized
+    assert "View detailed" in normalized
+    assert "Core Tweet Database" in normalized
+    assert "Protected account" in normalized
+    assert "Enrichment pending" in normalized
 
 
 def test_rehydrate_archive_uses_write_lock(paths, monkeypatch) -> None:

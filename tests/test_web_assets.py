@@ -51,7 +51,8 @@ def test_index_loads_local_assets_in_dependency_order():
 
     app_js = (WEB_DIR / "static" / "js" / "app.js").read_text(encoding="utf-8")
     assert "fetchArchiveEnrichmentStatus" in app_js
-    assert "d.enrichment?.incomplete" in app_js
+    assert "/api/stats/enrichment-incomplete" in app_js
+    assert "d.incomplete" in app_js
 
 
 @pytest.mark.parametrize(

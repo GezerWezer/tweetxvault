@@ -757,10 +757,10 @@ function tweetApp() {
         },
 
         fetchArchiveEnrichmentStatus() {
-            fetch('/api/stats/health')
+            fetch('/api/stats/enrichment-incomplete')
                 .then(r => r.json())
                 .then(d => {
-                    this.archiveEnrichmentIncomplete = d.enrichment?.incomplete || 0;
+                    this.archiveEnrichmentIncomplete = d.incomplete || 0;
                 })
                 .catch(e => console.error('Failed to fetch archive enrichment status', e));
         },

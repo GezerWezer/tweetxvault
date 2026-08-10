@@ -611,6 +611,19 @@ tweetxvault import enrich             # all currently eligible sparse rows
 
 `--limit N` limits persisted sync pagination to N pages per collection (useful for testing or cautious first runs).
 
+Statistics are collected as typed, presentation-neutral sections outside both presentation
+layers. The registry owns metric identity, raw values, table columns, and specialized breakdown
+data. `tweetxvault stats` renders a responsive Rich bento grid from those sections; related tiles
+share rows on wide terminals and stack on narrow terminals. `--detailed` swaps the compact storage
+summary for component-level rows and reveals zero-count operational and
+availability records. Posters, thumbnails, and other derived supporting files are a distinct
+storage segment and never count as primary photos or videos. Empty tagging sections are omitted in
+the terminal. The Web UI keeps its original specialized markup and per-section requests; its
+compatibility endpoints adapt the same shared sections into the existing payloads. Adding a metric
+therefore starts in one collector, then receives an intentional surface-appropriate presentation
+instead of implicitly changing either interface. Lightweight page-status polling remains a
+dedicated aggregate and must not collect the complete report.
+
 ### First-Run Behavior
 
 On first invocation, tweetxvault:

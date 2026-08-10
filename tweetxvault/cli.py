@@ -47,8 +47,9 @@ from tweetxvault.grailbird import convert_archive as convert_grailbird_archive
 from tweetxvault.media import download_media
 from tweetxvault.pipeline import PipelineReporter, current_pipeline
 from tweetxvault.query_ids import QueryIdStore, refresh_query_ids
-from tweetxvault.reminders import print_pending_archive_enrichment_reminder
 from tweetxvault.search import SearchQueryError, parse_search_query, search_posts
+from tweetxvault.stats import build_stats_report
+from tweetxvault.stats.render_cli import render_stats_report
 from tweetxvault.storage import open_archive_store
 from tweetxvault.sync import (
     ProcessLock,
@@ -893,60 +894,6 @@ def _format_created_at(raw: str | None) -> str:
         return f"{date_part}\n{time_part}"
     except (ValueError, TypeError):
         return raw
-
-
-def _format_stats_timestamp(raw: str | None) -> str:
-    if not raw:
-        return "-"
-    parsed = _parse_created_at(raw)
-    if parsed is None:
-        try:
-            parsed = datetime.fromisoformat(raw)
-        except (ValueError, TypeError):
-            return raw
-    local_dt = parsed.astimezone() if parsed.tzinfo is not None else parsed
-    date_part = local_dt.strftime("%b %-d, %Y")
-    time_part = local_dt.strftime("%-I:%M %p").lower()
-    return f"{date_part} {time_part}"
-
-
-def _format_byte_size(size_bytes: int) -> str:
-    if size_bytes < 1024:
-        return f"{size_bytes} B"
-    size = float(size_bytes)
-    for unit in ("KiB", "MiB", "GiB", "TiB"):
-        size /= 1024.0
-        if size < 1024.0 or unit == "TiB":
-            return f"{size:.1f} {unit}"
-    return f"{size_bytes} B"
-
-
-def _path_size_bytes(path: Path) -> int:
-    if not path.exists():
-        return 0
-    if path.is_file():
-        return path.stat().st_size
-    total = 0
-    for child in path.rglob("*"):
-        if child.is_file():
-            total += child.stat().st_size
-    return total
-
-
-def _format_backfill_status(backfill_cursor: str | None, backfill_incomplete: bool) -> str:
-    if backfill_incomplete and backfill_cursor:
-        return "resume older"
-    if backfill_incomplete:
-        return "incomplete"
-    if backfill_cursor:
-        return "saved only"
-    return "none saved"
-
-
-def _format_optimize_status(version_count: int) -> str:
-    if version_count >= 4:
-        return "run optimize"
-    return "ok"
 
 
 def _parse_created_at(raw: str | None) -> datetime | None:
@@ -2037,146 +1984,23 @@ def check_database(
 
 
 @app.command("stats")
-def stats_archive() -> None:
+def stats_archive(
+    detailed: Annotated[
+        bool,
+        typer.Option(
+            "--detailed",
+            help=(
+                "Show the full storage breakdown, all unavailable-reason rows, "
+                "and zero-count maintenance queues."
+            ),
+        ),
+    ] = False,
+) -> None:
     """Show archive totals, collection coverage, sync timestamps, and storage health."""
     console = _configure_logging()
-    store, paths = _open_store_for_read(console)
+    store, _paths = _open_store_for_read(console)
     try:
-        stats = store.archive_stats()
-        db_size = _path_size_bytes(paths.database_path)
-        media_size = _path_size_bytes(paths.media_dir)
-
-        console.print(f"archive: {paths.database_path}", highlight=False)
-
-        summary = Table(title="Summary", box=box.HORIZONTALS)
-        summary.add_column("Metric", style="cyan", no_wrap=True)
-        summary.add_column("Value", overflow="fold")
-        summary.add_row("Owner", stats.owner_user_id or "unknown")
-        summary.add_row("Unique posts", str(stats.unique_post_count))
-        summary.add_row("Articles", str(stats.article_count))
-        summary.add_row("Collection memberships", str(stats.collection_membership_count))
-        summary.add_row("Raw captures", str(stats.raw_capture_count))
-        summary.add_row("Media rows", str(stats.media_count))
-        summary.add_row("URL rows", str(stats.url_count))
-        summary.add_row("First post", _format_stats_timestamp(stats.oldest_created_at))
-        summary.add_row("Latest post", _format_stats_timestamp(stats.newest_created_at))
-        summary.add_row("Latest capture", _format_stats_timestamp(stats.latest_capture_at))
-        summary.add_row("Last sync", _format_stats_timestamp(stats.latest_sync_at))
-        console.print(summary)
-
-        collections = Table(title="Collections", box=box.HORIZONTALS)
-        collections.add_column("Collection", style="green", no_wrap=True)
-        collections.add_column("Posts", justify="right", no_wrap=True)
-        collections.add_column("First", no_wrap=True)
-        collections.add_column("Last", no_wrap=True)
-        collections.add_column("Last sync", no_wrap=True)
-        collections.add_column("Backfill", no_wrap=True)
-        for collection in stats.collections:
-            collections.add_row(
-                collection.collection_type,
-                str(collection.post_count),
-                _format_stats_timestamp(collection.oldest_created_at),
-                _format_stats_timestamp(collection.newest_created_at),
-                _format_stats_timestamp(collection.last_synced_at),
-                _format_backfill_status(
-                    collection.backfill_cursor,
-                    collection.backfill_incomplete,
-                ),
-            )
-        console.print(collections)
-
-        storage = Table(title="Storage", box=box.HORIZONTALS)
-        storage.add_column("Metric", style="cyan", no_wrap=True)
-        storage.add_column("Value", overflow="fold")
-        storage.add_row("DB size", _format_byte_size(db_size))
-        storage.add_row("Media size", _format_byte_size(media_size))
-        storage.add_row("Versions", str(stats.version_count))
-        storage.add_row("Optimize", _format_optimize_status(stats.version_count))
-        console.print(storage)
-
-        followup = Table(title="Follow-Up", box=box.HORIZONTALS)
-        followup.add_column("Task", style="cyan", no_wrap=True)
-        followup.add_column("Status", overflow="fold")
-        followup.add_row(
-            "Archive enrich (TweetDetail)",
-            (
-                f"{stats.pending_enrichment_count} pending, "
-                f"{getattr(stats, 'transient_enrichment_due_count', 0)} transient due, "
-                f"{getattr(stats, 'transient_enrichment_delayed_count', 0)} transient delayed, "
-                f"{getattr(stats, 'retryable_unavailable_count', stats.terminal_enrichment_count)} "
-                "retryable unavailable, "
-                f"{getattr(stats, 'permanent_unavailable_count', 0)} permanent unavailable, "
-                f"{stats.resurrected_enrichment_count} resurrected, "
-                f"{stats.done_enrichment_count} done"
-            ),
-        )
-        followup.add_row(
-            "Tweet resurrection",
-            f"{getattr(stats, 'due_resurrection_count', 0)} unavailable tweets currently due "
-            "for checking",
-        )
-        followup.add_row(
-            "Articles refresh",
-            f"{stats.preview_article_count} preview-only article rows",
-        )
-        followup.add_row(
-            "Rehydrate gaps (local rebuild)",
-            f"{stats.missing_tweet_object_count} tweets missing normalized tweet_object rows",
-        )
-        followup.add_row(
-            "Threads expand (TweetDetail)",
-            (
-                f"{stats.expanded_thread_target_count} expanded, "
-                f"{stats.pending_thread_membership_count} membership targets pending, "
-                f"{stats.pending_thread_linked_status_count} linked-status targets pending"
-            ),
-        )
-        console.print(followup)
-
-        legend = Table(title="Legend", box=box.HORIZONTALS)
-        legend.add_column("Label", style="cyan", no_wrap=True)
-        legend.add_column("Meaning", overflow="fold")
-        legend.add_row(
-            "Backfill",
-            (
-                "'resume older' means the next sync will do its normal head pass, then "
-                "resume older history from a saved cursor. 'none saved' means no older-"
-                "history cursor is saved. 'saved only' and 'incomplete' are unusual "
-                "transition states."
-            ),
-        )
-        legend.add_row(
-            "Archive enrich",
-            (
-                "Sparse archive-imported tweets still waiting for network TweetDetail "
-                "lookups from X. Retryable failures can succeed later; terminal ones are "
-                "known unavailable."
-            ),
-        )
-        legend.add_row(
-            "Articles refresh",
-            (
-                "Article rows that only have preview metadata. "
-                "'tweetxvault articles refresh' can fetch the full body later."
-            ),
-        )
-        legend.add_row(
-            "Rehydrate gaps",
-            (
-                "Stored raw tweet JSON exists locally, but the normalized tweet_object row "
-                "is missing. 'tweetxvault rehydrate' can rebuild these without a network call."
-            ),
-        )
-        legend.add_row(
-            "Threads expand",
-            (
-                "'membership targets' are archived bookmark/like/tweet post ids that have "
-                "not been expanded through TweetDetail yet. 'linked-status targets' are "
-                "extra post ids discovered inside saved x.com status URLs."
-            ),
-        )
-        console.print(legend)
-        print_pending_archive_enrichment_reminder(console, store)
+        render_stats_report(console, build_stats_report(store), detailed=detailed)
     finally:
         store.close()
 

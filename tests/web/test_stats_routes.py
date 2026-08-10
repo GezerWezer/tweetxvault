@@ -1,57 +1,54 @@
 from __future__ import annotations
 
 import json
-import sqlite3
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+from tweetxvault.stats import STATS_SECTION_SPECS
 from tweetxvault.storage.backend import ArchiveCollectionStats, ArchiveStats, ArchiveStore
 from tweetxvault.web.routes import stats as stats_routes
 
 
-def _stats_store() -> SimpleNamespace:
-    conn = sqlite3.connect(":memory:", check_same_thread=False)
-    conn.execute(
-        """
-        CREATE TABLE archive (
-            record_type TEXT,
-            tweet_id TEXT,
-            author_id TEXT,
-            created_at_ts INTEGER,
-            updated_at TEXT,
-            key TEXT,
-            value TEXT,
-            enrichment_state TEXT,
-            enrichment_reason TEXT,
-            enrichment_retry_eligible INTEGER,
-            enrichment_next_retry_at TEXT,
-            deleted_at TEXT,
-            conversation_id TEXT,
-            status TEXT,
-            raw_json TEXT
-        )
-        """
-    )
-    return SimpleNamespace(conn=conn)
+def _stats_store(tmp_path: Path) -> ArchiveStore:
+    return ArchiveStore(tmp_path / "archive.db", create=True)
 
 
-def test_summary_reports_counts_ranges_owner_and_latest_sync(make_web_client) -> None:
-    store = _stats_store()
+def test_summary_reports_counts_ranges_owner_and_latest_sync(tmp_path, make_web_client) -> None:
+    store = _stats_store(tmp_path)
     store.conn.executemany(
         """
         INSERT INTO archive (
-            record_type, tweet_id, author_id, created_at_ts, updated_at, key, value
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            record_type, tweet_id, author_id, created_at, created_at_ts, updated_at, key, value
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
-            ("tweet", "t1", "a1", 1_700_000_000, None, None, None),
-            ("tweet", "t2", "a2", 1_800_000_000, None, None, None),
-            ("article", None, None, None, None, None, None),
-            ("media", "t1", "a1", None, None, None, None),
-            ("url", "t1", None, None, None, None, None),
-            ("sync_state", None, None, None, "2025-06-15T00:00:00Z", None, None),
-            ("metadata", None, None, None, None, "owner_user_id", "owner-42"),
+            (
+                "tweet",
+                "t1",
+                "a1",
+                "Tue Nov 14 22:13:20 +0000 2023",
+                1_700_000_000,
+                None,
+                None,
+                None,
+            ),
+            (
+                "tweet",
+                "t2",
+                "a2",
+                "Fri Jan 15 08:00:00 +0000 2027",
+                1_800_000_000,
+                None,
+                None,
+                None,
+            ),
+            ("article", None, None, None, None, None, None, None),
+            ("media", "t1", "a1", None, None, None, None, None),
+            ("url", "t1", None, None, None, None, None, None),
+            ("sync_state", None, None, None, None, "2025-06-15T00:00:00Z", None, None),
+            ("metadata", None, None, None, None, None, "owner_user_id", "owner-42"),
         ],
     )
     store.conn.executemany(
@@ -60,6 +57,10 @@ def test_summary_reports_counts_ranges_owner_and_latest_sync(make_web_client) ->
             ("tweet_object", "t1", "done"),
             ("tweet_object", "t2", "terminal_unavailable"),
         ],
+    )
+    store.set_archive_owner_id("owner-42")
+    store.conn.execute(
+        "UPDATE archive SET collection_type = 'bookmark' WHERE record_type = 'sync_state'"
     )
     client = make_web_client(stats_routes.router, store=store)
 
@@ -82,8 +83,8 @@ def test_summary_reports_counts_ranges_owner_and_latest_sync(make_web_client) ->
     }
 
 
-def test_summary_uses_empty_defaults(make_web_client) -> None:
-    store = _stats_store()
+def test_summary_uses_empty_defaults(tmp_path, make_web_client) -> None:
+    store = _stats_store(tmp_path)
     client = make_web_client(stats_routes.router, store=store)
 
     data = client.get("/api/stats/summary").json()
@@ -102,6 +103,37 @@ def test_summary_uses_empty_defaults(make_web_client) -> None:
         "newest_post": None,
         "latest_sync": None,
     }
+
+
+def test_report_exposes_the_shared_ordered_section_registry(tmp_path, make_web_client) -> None:
+    store = _stats_store(tmp_path)
+    client = make_web_client(stats_routes.router, store=store)
+
+    response = client.get("/api/stats/report")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert [section["id"] for section in data["sections"]] == [
+        spec.id for spec in STATS_SECTION_SPECS
+    ]
+    assert [section["title"] for section in data["sections"]] == [
+        spec.title for spec in STATS_SECTION_SPECS
+    ]
+    assert data["archive_path"] == str(store.db_path)
+
+
+def test_enrichment_banner_uses_the_lightweight_shared_count(tmp_path, make_web_client) -> None:
+    store = _stats_store(tmp_path)
+    store.conn.executemany(
+        "INSERT INTO archive (record_type, enrichment_state) VALUES ('tweet_object', ?)",
+        [("pending",), ("transient_failure",), ("done",)],
+    )
+    client = make_web_client(stats_routes.router, store=store)
+
+    response = client.get("/api/stats/enrichment-incomplete")
+
+    assert response.status_code == 200
+    assert response.json() == {"incomplete": 2}
 
 
 @pytest.mark.parametrize(
@@ -155,8 +187,8 @@ def test_collections_formats_names_and_backfill_states(make_web_client) -> None:
     assert all(row["oldest"] == row["newest"] == row["last_synced"] == "-" for row in rows)
 
 
-def test_health_reports_pipeline_counts(make_web_client) -> None:
-    store = _stats_store()
+def test_health_reports_pipeline_counts(tmp_path, make_web_client) -> None:
+    store = _stats_store(tmp_path)
     store.conn.executemany(
         """
         INSERT INTO archive (
@@ -186,6 +218,13 @@ def test_health_reports_pipeline_counts(make_web_client) -> None:
             ("article", None, None, None, None, None, "preview_only"),
             ("article", None, None, None, None, None, "body_present"),
         ],
+    )
+    store.conn.executemany(
+        """
+        INSERT INTO archive (record_type, operation, cursor_in)
+        VALUES ('raw_capture', 'ThreadExpandDetail', ?)
+        """,
+        [("t1",), ("t2",)],
     )
     client = make_web_client(stats_routes.router, store=store)
 
@@ -243,9 +282,10 @@ def test_health_reports_pipeline_counts(make_web_client) -> None:
 
 
 def test_health_breaks_unavailable_tweets_down_by_reason_and_retry_state(
+    tmp_path,
     make_web_client,
 ) -> None:
-    store = _stats_store()
+    store = _stats_store(tmp_path)
     store.conn.executemany(
         """
         INSERT INTO archive (
@@ -293,8 +333,8 @@ def test_health_breaks_unavailable_tweets_down_by_reason_and_retry_state(
     assert reasons["archive_deleted"]["count"] == 0
 
 
-def test_tag_stats_reports_case_insensitive_usage_and_coverage(make_web_client) -> None:
-    store = _stats_store()
+def test_tag_stats_reports_case_insensitive_usage_and_coverage(tmp_path, make_web_client) -> None:
+    store = _stats_store(tmp_path)
     store.conn.executemany(
         "INSERT INTO archive (record_type, tweet_id, raw_json) VALUES (?, ?, ?)",
         [
@@ -329,8 +369,8 @@ def test_tag_stats_reports_case_insensitive_usage_and_coverage(make_web_client) 
     }
 
 
-def test_tag_stats_handles_empty_archive(make_web_client) -> None:
-    store = _stats_store()
+def test_tag_stats_handles_empty_archive(tmp_path, make_web_client) -> None:
+    store = _stats_store(tmp_path)
     client = make_web_client(stats_routes.router, store=store)
 
     data = client.get("/api/stats/tags").json()
@@ -341,8 +381,8 @@ def test_tag_stats_handles_empty_archive(make_web_client) -> None:
     assert data["top_tags"] == []
 
 
-def test_tag_stats_ignore_malformed_tag_json(make_web_client) -> None:
-    store = _stats_store()
+def test_tag_stats_ignore_malformed_tag_json(tmp_path, make_web_client) -> None:
+    store = _stats_store(tmp_path)
     store.conn.executemany(
         "INSERT INTO archive (record_type, tweet_id, raw_json) VALUES (?, ?, ?)",
         [
@@ -362,8 +402,8 @@ def test_tag_stats_ignore_malformed_tag_json(make_web_client) -> None:
     assert response.json()["top_tags"] == [{"tag": "bird", "count": 1}]
 
 
-def test_tag_stats_require_a_nonempty_tags_array(make_web_client) -> None:
-    store = _stats_store()
+def test_tag_stats_require_a_nonempty_tags_array(tmp_path, make_web_client) -> None:
+    store = _stats_store(tmp_path)
     store.conn.executemany(
         "INSERT INTO archive (record_type, tweet_id, raw_json) VALUES (?, ?, ?)",
         [
@@ -429,8 +469,12 @@ def test_summary_and_health_follow_real_archive_schema(tmp_path, make_web_client
     store.close()
 
 
-def test_stats_routes_require_authentication(make_web_client) -> None:
-    client = make_web_client(stats_routes.router, store=_stats_store(), password="secret")
+def test_stats_routes_require_authentication(tmp_path, make_web_client) -> None:
+    client = make_web_client(
+        stats_routes.router,
+        store=_stats_store(tmp_path),
+        password="secret",
+    )
 
     response = client.get("/api/stats/summary")
 

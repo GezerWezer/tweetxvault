@@ -785,7 +785,8 @@ test('config and stats requests update their matching UI state', async () => {
                     web: { host: '127.0.0.1', port: 8000 },
                 };
             }
-            return { latest_sync: '2026-07-30T00:00:00Z' };
+            if (url === '/api/stats/summary') return { latest_sync: '2026-07-30T00:00:00Z' };
+            return {};
         },
     });
     const { tweetApp } = loadScripts(

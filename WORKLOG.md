@@ -19,6 +19,28 @@
     pre-existing formatting in `tests/test_auth.py` and `tweetxvault/resurrection.py`; neither was
     modified for search.
 
+- 2026-08-09 (Shared statistics service and Rich CLI dashboard)
+  - Replaced independent CLI/Web SQL collection with typed shared sections covering overview,
+    collections, archive status, storage, and tagging/search; removed the added Follow-up section.
+  - Redesigned `tweetxvault stats` as a responsive Rich bento grid: archive/timeline and
+    health/work tiles pair on wide terminals, while narrow terminals stack every tile and dense
+    collection/storage tables stay full-width.
+  - Packed the paired overview/health tiles as independent masonry columns so following tiles fill
+    shorter neighbors, with clean edge-aligned metric labels and values inside each tile.
+  - Added `stats --detailed` to replace simplified storage with component-level rows and reveal
+    zero-count maintenance/unavailable-reason rows; removed obsolete LanceDB version/optimize data.
+  - Loosened the terminal layout with section spacing and faint metric leaders, omitted empty tag
+    sections, and split posters/thumbnails/supporting files away from primary photo/video counts.
+  - Restored the Web modal's original markup and per-section loading behavior exactly; its legacy
+    endpoints now act as adapters over the shared collectors without changing the browser design.
+  - Kept legacy statistics endpoints as shared-service adapters and moved the recurring Web warning
+    poll to a lightweight enrichment count so page startup and one-minute polling avoid full scans.
+  - Serialized shared statistics snapshots around the Web server's single SQLite connection; a
+    rendered parallel-load check confirmed all original modal sections hydrate without errors.
+  - Added service serialization/registry parity, Rich rendering, API compatibility, storage, and
+    browser-state/markup coverage. The full Python suite, repository-wide Ruff, scoped formatting,
+    compile, diff checks, all browser asset tests, and rendered isolated-archive QA pass.
+
 - 2026-08-08 (JSON-only export surface)
   - Removed the standalone HTML archive exporter, the `export html` CLI command, package exports,
     tests, and active documentation; JSON remains the sole file-export format.

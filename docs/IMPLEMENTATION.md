@@ -39,6 +39,28 @@ Definition of done: passes `uv run ruff format --check`, `uv run ruff check`, an
 - [x] Update CLI documentation and add interactive, non-TTY, conditional-step, and regression tests.
 - [x] Pass focused and full repository validation.
 
+## Shared CLI/Web statistics (2026-08-09)
+
+- [x] Define typed, presentation-neutral statistic values, tables, sections, and reports.
+- [x] Move overview, collections, archive status, storage, and tagging collection into one ordered
+  section registry outside the CLI and Web layers.
+- [x] Build a responsive Rich bento grid for `tweetxvault stats`, pairing archive/timeline and
+  health/work tiles on wide terminals while stacking tiles on narrow terminals and keeping dense
+  collection/storage tables full-width.
+- [x] Pack unequal paired tiles into independent masonry columns instead of rigid rows, with clean
+  edge-aligned metric labels and values inside each tile.
+- [x] Add `stats --detailed` to swap simplified storage for all component segments and reveal
+  zero-count maintenance queues and unavailable reasons, matching the Web controls' information.
+- [x] Separate posters/thumbnails/supporting media from primary photo and video counts, expose the
+  supporting-file segment in detailed mode, and omit the CLI tagging section when no tags exist.
+- [x] Preserve the original Web statistics layout and per-section loading behavior exactly while
+  sourcing every legacy endpoint from the shared collectors.
+- [x] Keep a generic CLI fallback for future card/table/status sections; adding Web presentation
+  remains an explicit small adapter so new data cannot silently change the browser design.
+- [x] Retain the old Web endpoints as compatibility adapters and keep background enrichment-banner
+  polling on a dedicated inexpensive count instead of collecting the complete report.
+- [x] Add registry parity, serialization, API, CLI, storage, and browser regression coverage.
+
 ### Pipeline lifecycle follow-up (2026-08-08)
 
 - [x] Restore command and completed-step elapsed times without restoring an overall ETA.
@@ -734,5 +756,5 @@ Follow-up maintenance work after the content-expansion milestone. Land these as 
 - [x] Review item 25: add an archive stats command.
   - Current problem: there was no single command to inspect archive size/health, collection coverage, sync recency, or the high-level shape of stored content.
   - Landed approach: added `tweetxvault stats`, backed by a storage summary that reports overall post/article totals, per-collection counts with first/last/sync/backfill metadata, storage health including DB/media disk usage plus an optimize hint, and follow-up queues for pending archive enrichment, missing normalized tweet objects, and thread expansion work.
-  - Follow-up cleanup: tightened the storage scans so the command stays fast on large archives, simplified the optimize hint to `ok` / `run optimize`, and added an in-command legend that explains the backfill labels plus the difference between archive enrich, local rehydrate gaps, and the two thread-expansion target buckets.
+  - Follow-up cleanup: tightened the storage scans so the command stays fast on large archives and added an in-command legend that explains the backfill labels plus the difference between archive enrich, local rehydrate gaps, and the two thread-expansion target buckets. The obsolete LanceDB version/optimize fields were later removed after the SQLite migration.
   - Validation: `uv run pytest -q tests/test_storage.py::test_archive_stats_summarizes_collections_and_bounds tests/test_cli.py::test_stats_archive_renders_summary_tables`.

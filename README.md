@@ -552,6 +552,9 @@ uv run tweetxvault articles refresh --all
 # Show archive totals, per-collection coverage, sync recency, and storage health
 uv run tweetxvault stats
 
+# Replace the summary with full storage segments, zero-count queues, and hidden availability rows
+uv run tweetxvault stats --detailed
+
 # Vacuum and optimize the SQLite database
 uv run tweetxvault optimize
 
@@ -574,7 +577,17 @@ uv run tweetxvault repair legacy-tombstones --scan-timeline-captures
 uv run tweetxvault auth refresh-ids
 ```
 
-`tweetxvault stats` reports overall post/article totals, per-collection counts plus first/last tweet timestamps, storage health details such as DB/media size, and follow-up queues for archive enrichment, thread expansion, and dead-tweet resurrection. 
+`tweetxvault stats` and the Web statistics modal collect their values through the same typed
+statistics service. Both expose overview and collection counts, archive/enrichment status,
+detailed storage usage, tagging coverage, and frequent topics. The CLI presents those metrics as
+a responsive Rich bento grid that pairs related tiles on wide terminals and stacks them on narrow
+ones, while the Web modal retains its purpose-built browser layout. Pass `--detailed` to swap the
+CLI's simplified storage categories for the full component breakdown and include zero-count
+maintenance and unavailable-reason rows—the terminal equivalent of the Web modal's Detailed and
+Show empty controls. Detailed storage lists posters, thumbnails, and similar supporting files
+separately so they do not inflate photo/video counts. The tagging tile is omitted when the archive
+has no generated tags. Legacy Web endpoints are thin adapters over the same collectors, so the two
+surfaces share metric definitions without forcing them into the same visual design.
 
 **Tombstones & Resurrection:** TweetDetail tombstones retain their original type, message, entities, and raw response while also receiving a stable reason such as `protected_account`, `suspended_account`, `account_missing`, `deleted_by_author`, or `unavailable_unknown`. A tombstone changes availability only when it can be positively associated with the requested tweet. X also sometimes returns an exact focal `TimelineTweet` entry with an empty `tweet_results` object; tweetxvault records that narrow sentinel as retryable `unavailable_unknown`. Missing focal entries and malformed nonempty result objects remain response-shape ambiguities, and three consecutive absences stop the worker before a broken parser or API shape can mass-classify rows. Confirmed archive deletions and deleted-by-author posts are never retried automatically. Each normal sync checks at most 200 due, retryable unavailable tweets with reason-weighted scheduling. A successful account-level recovery persists a few same-author probes as immediately due and can prioritize a small same-account burst, always inside the same 200-request budget. `tweetxvault stats` reports initial-enrichment completeness and resurrection eligibility separately.
 

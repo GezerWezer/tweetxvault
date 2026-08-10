@@ -94,7 +94,7 @@ def _storage_store(tmp_path: Path) -> SimpleNamespace:
                 None,
                 None,
                 "remote/core.jpg",
-                None,
+                "remote/core-poster.jpg",
                 "photo",
                 None,
                 None,
@@ -175,6 +175,7 @@ def _storage_store(tmp_path: Path) -> SimpleNamespace:
     media_dir = tmp_path / "media"
     (media_dir / "avatars").mkdir(parents=True)
     (media_dir / "core.jpg").write_bytes(b"c" * 11)
+    (media_dir / "core-poster.jpg").write_bytes(b"p" * 5)
     (media_dir / "context.mp4").write_bytes(b"v" * 13)
     (media_dir / "avatars" / "a1.jpg").write_bytes(b"a" * 7)
     return SimpleNamespace(conn=conn, db_path=db_path)
@@ -191,7 +192,7 @@ def test_storage_breakdown_accounts_for_database_media_and_avatars(
 
     assert response.status_code == 200
     data = response.json()
-    assert data["total_bytes"] == db_bytes + 11 + 13 + 7
+    assert data["total_bytes"] == db_bytes + 11 + 5 + 13 + 7
     assert data["formatted_total"] == storage_stats.format_bytes(data["total_bytes"])
     by_id = {segment["id"]: segment for segment in data["segments"]}
     assert by_id["core_media"]["bytes"] == 11
@@ -199,6 +200,9 @@ def test_storage_breakdown_accounts_for_database_media_and_avatars(
     assert by_id["core_media"]["formatted_count"] == "1 photos · 0 videos/gifs"
     assert by_id["context_media"]["bytes"] == 13
     assert by_id["context_media"]["count"] == 1
+    assert by_id["supplementary_media"]["bytes"] == 5
+    assert by_id["supplementary_media"]["count"] == 1
+    assert by_id["supplementary_media"]["formatted_count"] == "1 supporting files"
     assert by_id["avatars"]["bytes"] == 7
     assert by_id["avatars"]["count"] == 1
     assert by_id["core_db"]["count"] == 1
@@ -214,9 +218,11 @@ def test_storage_breakdown_accounts_for_database_media_and_avatars(
 
     simplified = {segment["id"]: segment for segment in data["simplified_segments"]}
     assert simplified["database"]["bytes"] == db_bytes
-    assert simplified["media"]["bytes"] == 31
-    assert simplified["media"]["count"] == 3
-    assert simplified["media"]["formatted_count"] == "1 photos · 1 videos · 1 avatars"
+    assert simplified["media"]["bytes"] == 36
+    assert simplified["media"]["count"] == 4
+    assert simplified["media"]["formatted_count"] == (
+        "1 photos · 1 videos · 1 supplementary · 1 avatars"
+    )
 
 
 def test_storage_breakdown_falls_back_to_database_media_counts(
@@ -235,9 +241,11 @@ def test_storage_breakdown_falls_back_to_database_media_counts(
     assert by_id["core_media"]["count"] == 1
     assert by_id["context_media"]["bytes"] == 0
     assert by_id["context_media"]["count"] == 1
+    assert by_id["supplementary_media"]["bytes"] == 0
+    assert by_id["supplementary_media"]["count"] == 1
     simplified = {segment["id"]: segment for segment in data["simplified_segments"]}
     assert simplified["media"]["bytes"] == 0
-    assert simplified["media"]["count"] == 2
+    assert simplified["media"]["count"] == 3
     assert simplified["media"]["percent"] == 0.0
 
 
@@ -251,9 +259,7 @@ def test_storage_breakdown_includes_wal_and_shm_sizes(make_web_client, tmp_path:
 
     data = client.get("/api/storage/breakdown").json()
 
-    expected_db_bytes = (
-        store.db_path.stat().st_size + wal.stat().st_size + shm.stat().st_size
-    )
+    expected_db_bytes = store.db_path.stat().st_size + wal.stat().st_size + shm.stat().st_size
     simplified = {segment["id"]: segment for segment in data["simplified_segments"]}
     assert simplified["database"]["bytes"] == expected_db_bytes
 
