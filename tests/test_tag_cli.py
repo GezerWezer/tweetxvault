@@ -125,7 +125,7 @@ def test_root_help_exposes_installed_non_sync_additions() -> None:
 
     assert result.exit_code == 0
     assert "tag" in result.stdout
-    assert "Use Gemini to generate search tags and descriptions" in result.stdout
+    assert "Use Gemini to generate search tags" in result.stdout
     assert "migrate" in result.stdout
     assert "Migrate data from older LanceDB storage" in result.stdout
     assert "web" in result.stdout
@@ -142,7 +142,7 @@ def test_tag_help_documents_target_and_all_options() -> None:
     assert "--limit" in help_text
     assert "Maximum number of batches to tag in this run" in help_text
     assert "--test" in help_text
-    assert "without saving media tags" in help_text
+    assert "without saving them" in help_text
     assert "--batch" in help_text
     assert "Number of tweets to include in each batch" in help_text
     assert "--model" in help_text
@@ -358,7 +358,7 @@ def test_tag_command_reports_no_eligible_rows_and_still_closes_job(
     assert direct_calls == []
     assert len(pending_calls) == 1
     assert lifecycle == ["enter", "pending", "exit:clean"]
-    assert "No eligible untagged media tweets found." in output.getvalue()
+    assert "No eligible untagged tweets found." in output.getvalue()
 
 
 def test_tag_command_maps_config_error_to_exit_one(

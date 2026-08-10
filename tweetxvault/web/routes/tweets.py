@@ -317,6 +317,7 @@ def api_tweet_thread(
                 media_by_tweet_id.setdefault(row["tweet_id"], []).append(row)
 
         qt_media_by_id = {}
+        qt_tags_by_id = {}
         if qt_ids:
             qt_media_rows = store._rows_for_values(
                 "media",
@@ -336,6 +337,23 @@ def api_tweet_thread(
                 tid = m.get("tweet_id")
                 if tid:
                     qt_media_by_id.setdefault(tid, []).append(m)
+            qt_tag_rows = store._rows_for_values(
+                "media_tag",
+                "tweet_id",
+                list(qt_ids),
+                columns=["tweet_id", "raw_json"],
+            )
+            for row in qt_tag_rows:
+                tid = row.get("tweet_id")
+                raw_tags = row.get("raw_json")
+                if not tid or not raw_tags:
+                    continue
+                try:
+                    tag_payload = json.loads(raw_tags)
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                if isinstance(tag_payload, dict):
+                    qt_tags_by_id[tid] = tag_payload
 
         formatted = {}
         for obj in objs:
@@ -344,12 +362,15 @@ def api_tweet_thread(
             raw_json = raw_by_tweet_id.get(tid)
 
             qt_media_formatted = []
+            qt_media_tags = None
             if raw_json and isinstance(raw_json, dict):
                 quote = raw_json.get("quoted_status_result", {}).get("result")
                 if isinstance(quote, dict):
                     if quote.get("__typename") == "TweetWithVisibilityResults":
                         quote = quote.get("tweet", {})
                     qt_id = quote.get("rest_id")
+                    if qt_id:
+                        qt_media_tags = qt_tags_by_id.get(qt_id)
                     if qt_id and qt_id in qt_media_by_id:
                         qt_media_formatted = [
                             {
@@ -391,6 +412,7 @@ def api_tweet_thread(
                 ],
                 "raw_json": raw_json,
                 "qt_media": qt_media_formatted,
+                "qt_media_tags": qt_media_tags,
                 "media_tags": tags_dict.get(tid),
             }
 

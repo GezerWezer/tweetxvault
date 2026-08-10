@@ -258,6 +258,11 @@
                                                 <span class="text-[var(--text-secondary)] truncate" x-text="'@' + getQuoteAuthor(getQuoteTweet(tweet)).screen_name"></span>
                                                 <span class="text-[var(--text-secondary)]">·</span>
                                                 <span class="text-[var(--text-secondary)]" x-text="formatDate(getQuoteTweet(tweet)?.legacy?.created_at || getQuoteTweet(tweet)?.created_at)"></span>
+                                                <template x-if="tweet.qt_media_tags">
+                                                    <button class="ml-auto text-[var(--text-secondary)] hover:text-[var(--text-primary)]" @click.stop="openTagModal(getQuoteTweet(tweet).rest_id || getQuoteTweet(tweet).id_str, tweet.qt_media_tags)" title="View quoted tweet tags">
+                                                        <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current"><path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10-4.477 10-10 10zm-1-11v6h2v-6h-2zm0-4v2h2V7h-2z"></path></svg>
+                                                    </button>
+                                                </template>
                                             </div>
                                             
                                             <template x-if="getReplyTo({raw_json: getQuoteTweet(tweet)})">
@@ -384,6 +389,11 @@
                                             <span class="text-[var(--text-secondary)] truncate" x-text="'@' + getQuoteAuthor(getQuoteTweet(threadData?.main)).screen_name"></span>
                                             <span class="text-[var(--text-secondary)]">·</span>
                                             <span class="text-[var(--text-secondary)]" x-text="formatDate(getQuoteTweet(threadData?.main)?.legacy?.created_at || getQuoteTweet(threadData?.main)?.created_at)"></span>
+                                            <template x-if="threadData?.main?.qt_media_tags">
+                                                <button class="ml-auto text-[var(--text-secondary)] hover:text-[var(--text-primary)]" @click.stop="openTagModal(getQuoteTweet(threadData.main).rest_id || getQuoteTweet(threadData.main).id_str, threadData.main.qt_media_tags)" title="View quoted tweet tags">
+                                                    <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current"><path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10-4.477 10-10 10zm-1-11v6h2v-6h-2zm0-4v2h2V7h-2z"></path></svg>
+                                                </button>
+                                            </template>
                                         </div>
                                         
                                         <template x-if="getReplyTo({raw_json: getQuoteTweet(threadData?.main)})">
@@ -687,6 +697,11 @@
                                             <span class="text-[var(--text-secondary)] truncate" x-text="'@' + getQuoteAuthor(getQuoteTweet(panelThreadData?.main)).screen_name"></span>
                                             <span class="text-[var(--text-secondary)]">·</span>
                                             <span class="text-[var(--text-secondary)]" x-text="formatDate(getQuoteTweet(panelThreadData?.main)?.legacy?.created_at || getQuoteTweet(panelThreadData?.main)?.created_at)"></span>
+                                            <template x-if="panelThreadData?.main?.qt_media_tags">
+                                                <button class="ml-auto text-[var(--text-secondary)] hover:text-[var(--text-primary)]" @click.stop="openTagModal(getQuoteTweet(panelThreadData.main).rest_id || getQuoteTweet(panelThreadData.main).id_str, panelThreadData.main.qt_media_tags)" title="View quoted tweet tags">
+                                                    <svg viewBox="0 0 24 24" class="w-4 h-4 fill-current"><path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10-4.477 10-10 10zm-1-11v6h2v-6h-2zm0-4v2h2V7h-2z"></path></svg>
+                                                </button>
+                                            </template>
                                         </div>
                                         <template x-if="getReplyTo({raw_json: getQuoteTweet(panelThreadData?.main)})">
                                             <div class="text-[15px] text-[var(--text-secondary)] mb-1">
@@ -923,10 +938,12 @@
                 <div class="p-4 overflow-y-auto max-h-[60vh] text-[var(--text-primary)] min-h-[150px]">
                     <template x-if="tagModalData">
                         <div>
-                            <div class="mb-4">
-                                <div class="text-sm text-[var(--text-secondary)] font-bold uppercase tracking-wider mb-2">Description</div>
-                                <div class="text-[15px] leading-relaxed" x-text="tagModalData.description"></div>
-                            </div>
+                            <template x-if="tagModalData.description">
+                                <div class="mb-4">
+                                    <div class="text-sm text-[var(--text-secondary)] font-bold uppercase tracking-wider mb-2">Description</div>
+                                    <div class="text-[15px] leading-relaxed" x-text="tagModalData.description"></div>
+                                </div>
+                            </template>
                             
                             <div>
                                 <div class="text-sm text-[var(--text-secondary)] font-bold uppercase tracking-wider mb-2">Tags</div>

@@ -314,7 +314,7 @@ def get_config_ui_schema() -> dict[str, Any]:
             "sync": "Sync & Delays",
             "web": "Web Server",
             "database": "Database",
-            "tagging": "Media Tagging",
+            "tagging": "AI Tagging",
             "auth.auth_token": "Auth Token",
             "auth.ct0": "CT0 (CSRF Token)",
             "auth.user_id": "User ID",
@@ -390,7 +390,7 @@ def get_config_ui_schema() -> dict[str, Any]:
             "web.port": "The port the Web UI runs on.",
             "tagging.enabled": "Turn automated AI tagging on or off.",
             "tagging.api_key": "Your Google Gemini API key.",
-            "tagging.model": "Which Gemini AI model to use for tagging media.",
+            "tagging.model": "Which Gemini AI model to use for tagging tweets.",
             "tagging.thinking_level": "How much reasoning effort the AI should use.",
             "tagging.batch": "Group multiple tweets together in one API call to save time.",
             "tagging.google_search": (

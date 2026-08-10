@@ -149,7 +149,7 @@ def test_sync_help_lists_subcommand_descriptions() -> None:
     assert "Sync authored tweets." in result.stdout
     assert "all" in result.stdout
     assert "media download" in result.stdout
-    assert "configured media tagging" in result.stdout
+    assert "configured AI tagging" in result.stdout
 
 
 def test_stats_help_describes_detailed_view() -> None:
@@ -171,7 +171,7 @@ def test_sync_all_help_describes_default_followups() -> None:
     assert "resurrection checks" in result.stdout
     assert "--skip-media" in result.stdout
     assert "--skip-unfurl" in result.stdout
-    assert "configured media tagging" in result.stdout
+    assert "configured AI tagging" in result.stdout
 
 
 def test_sync_likes_help_describes_flags() -> None:

@@ -2602,43 +2602,130 @@ class ArchiveStore:
     def count_dead_tweets_for_resurrection(self) -> int:
         return self.count_due_resurrection_tweets()
 
-    def get_eligible_tweets_for_tagging(self, *, limit: int = 20) -> list[str]:
-        # Eligible posts have a saved membership, enriched object, media, and no tag row.
+    def get_eligible_tagging_candidates(
+        self,
+        *,
+        limit: int = 20,
+        exclude_tweet_ids: set[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return one homogeneous batch of untagged saved or directly quoted posts."""
         state_placeholders = ", ".join("?" for _state in AVAILABLE_ENRICHMENT_STATES)
+        excluded = sorted(exclude_tweet_ids or set())
+        exclusion_sql = ""
+        if excluded:
+            exclusion_sql = (
+                "AND candidate.tweet_id NOT IN ("
+                + ", ".join("?" for _tweet_id in excluded)
+                + ")"
+            )
         query = f"""
-            SELECT DISTINCT t.tweet_id
-            FROM archive t INDEXED BY idx_archive_record_page
-            WHERE t.record_type = 'tweet'
-              AND EXISTS (
-                  SELECT 1
-                  FROM archive o INDEXED BY idx_archive_tweet_id
-                  WHERE o.tweet_id = t.tweet_id
-                    AND o.record_type = 'tweet_object'
-                    AND o.enrichment_state IN ({state_placeholders})
-              )
-              AND EXISTS (
-                  SELECT 1
-                  FROM archive m INDEXED BY idx_archive_tweet_id
-                  WHERE m.tweet_id = t.tweet_id
-                    AND m.record_type = 'media'
-              )
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM archive tg INDEXED BY idx_archive_tweet_id
-                  WHERE tg.tweet_id = t.tweet_id
-                    AND tg.record_type = 'media_tag'
-              )
-            ORDER BY t.created_at_ts DESC, t.tweet_id DESC
+            WITH saved AS (
+                SELECT t.tweet_id, MAX(COALESCE(t.created_at_ts, 0)) AS sort_ts
+                FROM archive t INDEXED BY idx_archive_record_page
+                WHERE t.record_type = 'tweet'
+                  AND EXISTS (
+                      SELECT 1
+                      FROM archive o INDEXED BY idx_archive_tweet_id
+                      WHERE o.tweet_id = t.tweet_id
+                        AND o.record_type = 'tweet_object'
+                        AND o.enrichment_state IN ({state_placeholders})
+                  )
+                GROUP BY t.tweet_id
+            ),
+            quoted AS (
+                SELECT r.target_tweet_id AS tweet_id,
+                       MAX(COALESCE(o.created_at_ts, 0)) AS sort_ts
+                FROM archive r INDEXED BY idx_archive_tweet_id
+                JOIN saved s ON s.tweet_id = r.tweet_id
+                JOIN archive o INDEXED BY idx_archive_tweet_id
+                  ON o.tweet_id = r.target_tweet_id
+                 AND o.record_type = 'tweet_object'
+                 AND o.enrichment_state IN ({state_placeholders})
+                WHERE r.record_type = 'tweet_relation'
+                  AND r.relation_type = 'quote_of'
+                GROUP BY r.target_tweet_id
+            ),
+            candidates AS (
+                SELECT tweet_id, MAX(sort_ts) AS sort_ts
+                FROM (
+                    SELECT tweet_id, sort_ts FROM saved
+                    UNION ALL
+                    SELECT tweet_id, sort_ts FROM quoted
+                )
+                GROUP BY tweet_id
+            ),
+            classified AS (
+                SELECT
+                    candidate.tweet_id,
+                    candidate.sort_ts,
+                    (
+                        SELECT relation.target_tweet_id
+                        FROM archive relation INDEXED BY idx_archive_tweet_id
+                        WHERE relation.tweet_id = candidate.tweet_id
+                          AND relation.record_type = 'tweet_relation'
+                          AND relation.relation_type = 'quote_of'
+                        ORDER BY relation.target_tweet_id
+                        LIMIT 1
+                    ) AS quoted_tweet_id,
+                    CASE WHEN
+                        EXISTS (
+                            SELECT 1
+                            FROM archive media INDEXED BY idx_archive_tweet_id
+                            WHERE media.tweet_id = candidate.tweet_id
+                              AND media.record_type = 'media'
+                        )
+                        OR EXISTS (
+                            SELECT 1
+                            FROM archive relation INDEXED BY idx_archive_tweet_id
+                            JOIN archive quoted_media INDEXED BY idx_archive_tweet_id
+                              ON quoted_media.tweet_id = relation.target_tweet_id
+                             AND quoted_media.record_type = 'media'
+                            WHERE relation.tweet_id = candidate.tweet_id
+                              AND relation.record_type = 'tweet_relation'
+                              AND relation.relation_type = 'quote_of'
+                        )
+                        THEN 'media' ELSE 'text'
+                    END AS content_type
+                FROM candidates candidate
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM archive tag INDEXED BY idx_archive_tweet_id
+                    WHERE tag.tweet_id = candidate.tweet_id
+                      AND tag.record_type = 'media_tag'
+                )
+                {exclusion_sql}
+            )
+            SELECT tweet_id, quoted_tweet_id, content_type, sort_ts
+            FROM classified
+            WHERE content_type = (
+                SELECT content_type
+                FROM classified
+                ORDER BY sort_ts DESC, tweet_id DESC
+                LIMIT 1
+            )
+            ORDER BY sort_ts DESC, tweet_id DESC
             LIMIT ?
         """
-        rows = self.conn.execute(query, (*AVAILABLE_ENRICHMENT_STATES, limit)).fetchall()
-        return [row["tweet_id"] for row in rows]
+        params = [
+            *AVAILABLE_ENRICHMENT_STATES,
+            *AVAILABLE_ENRICHMENT_STATES,
+            *excluded,
+            limit,
+        ]
+        return [dict(row) for row in self.conn.execute(query, params).fetchall()]
+
+    def get_eligible_tweets_for_tagging(self, *, limit: int = 20) -> list[str]:
+        """Compatibility wrapper returning IDs from the next homogeneous tag batch."""
+        return [
+            row["tweet_id"]
+            for row in self.get_eligible_tagging_candidates(limit=limit)
+        ]
 
     def get_tagging_coverage_counts(self) -> tuple[int, int]:
         """Return eligible and validly tagged post counts for coverage reporting."""
         state_placeholders = ", ".join("?" for _state in AVAILABLE_ENRICHMENT_STATES)
         query = f"""
-            WITH eligible_tweets AS (
+            WITH saved AS (
                 SELECT DISTINCT t.tweet_id
                 FROM archive t INDEXED BY idx_archive_record_page
                 WHERE t.record_type = 'tweet'
@@ -2649,12 +2736,25 @@ class ArchiveStore:
                         AND o.record_type = 'tweet_object'
                         AND o.enrichment_state IN ({state_placeholders})
                   )
+            ),
+            quoted AS (
+                SELECT DISTINCT relation.target_tweet_id AS tweet_id
+                FROM archive relation INDEXED BY idx_archive_tweet_id
+                JOIN saved ON saved.tweet_id = relation.tweet_id
+                WHERE relation.record_type = 'tweet_relation'
+                  AND relation.relation_type = 'quote_of'
                   AND EXISTS (
                       SELECT 1
-                      FROM archive m INDEXED BY idx_archive_tweet_id
-                      WHERE m.tweet_id = t.tweet_id
-                        AND m.record_type = 'media'
+                      FROM archive quoted_object INDEXED BY idx_archive_tweet_id
+                      WHERE quoted_object.tweet_id = relation.target_tweet_id
+                        AND quoted_object.record_type = 'tweet_object'
+                        AND quoted_object.enrichment_state IN ({state_placeholders})
                   )
+            ),
+            eligible_tweets AS (
+                SELECT tweet_id FROM saved
+                UNION
+                SELECT tweet_id FROM quoted
             )
             SELECT
                 COUNT(*) AS eligible_tweets,
@@ -2669,7 +2769,10 @@ class ArchiveStore:
                 )), 0) AS tagged_tweets
             FROM eligible_tweets
         """
-        row = self.conn.execute(query, AVAILABLE_ENRICHMENT_STATES).fetchone()
+        row = self.conn.execute(
+            query,
+            (*AVAILABLE_ENRICHMENT_STATES, *AVAILABLE_ENRICHMENT_STATES),
+        ).fetchone()
         if row is None:
             return 0, 0
         return int(row["eligible_tweets"]), int(row["tagged_tweets"])
@@ -3379,8 +3482,17 @@ class ArchiveStore:
                 }
             )
 
+        quote_relations = self.list_quote_relation_rows(set(tweet_ids))
+        quoted_tweet_by_source = {
+            row["tweet_id"]: row["target_tweet_id"]
+            for row in quote_relations
+            if row.get("tweet_id") and row.get("target_tweet_id")
+        }
+        tag_tweet_ids = list(
+            dict.fromkeys([*tweet_ids, *quoted_tweet_by_source.values()])
+        )
         media_tag_rows = self._rows_for_values(
-            "media_tag", "tweet_id", tweet_ids, columns=["tweet_id", "raw_json"]
+            "media_tag", "tweet_id", tag_tweet_ids, columns=["tweet_id", "raw_json"]
         )
         tags_by_tweet: dict[str, dict[str, Any]] = {}
         for row in media_tag_rows:
@@ -3426,6 +3538,9 @@ class ArchiveStore:
                     "urls": url_refs_by_tweet.get(row["tweet_id"], []),
                     "article": article,
                     "media_tags": tags_by_tweet.get(row["tweet_id"]),
+                    "qt_media_tags": tags_by_tweet.get(
+                        quoted_tweet_by_source.get(row["tweet_id"], "")
+                    ),
                     "raw_json": json.loads(row["raw_json"])
                     if include_raw_json and row.get("raw_json")
                     else None,

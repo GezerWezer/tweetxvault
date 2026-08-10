@@ -222,7 +222,7 @@ uv run tweetxvault sync --skip-media --skip-unfurl
 ```
 
 `--article-backfill` updates stored `raw_json` and normalized secondary rows inline, so it does not require a follow-up `tweetxvault rehydrate`.
-By default, `tweetxvault sync` and `tweetxvault sync all` both cover bookmarks + likes, then visibly run thread expansion, bounded unavailable-tweet resurrection checks, preview-only article refresh, media download, unfurl, and configured media tagging. Initial X-archive enrichment is a separate finite import job and never runs during ordinary sync. Authored tweets stay opt-in via `tweetxvault sync tweets`.
+By default, `tweetxvault sync` and `tweetxvault sync all` both cover bookmarks + likes, then visibly run thread expansion, bounded unavailable-tweet resurrection checks, preview-only article refresh, media download, unfurl, and configured AI tagging. Initial X-archive enrichment is a separate finite import job and never runs during ordinary sync. Authored tweets stay opt-in via `tweetxvault sync tweets`.
 `--head-only` is the escape hatch when an old saved backfill cursor is no longer useful: it clears that cursor for the targeted collection and runs only the normal head pass. It cannot be combined with `--full`, `--backfill`, or `--article-backfill`.
 
 Interactive long-running commands use one pipeline display for the full command lifecycle. A
@@ -480,14 +480,16 @@ uv run tweetxvault unfurl --limit 100
 uv run tweetxvault unfurl --retry-failed
 ```
 
-### Gemini media tagging
+### Gemini tagging
 
-With tagging enabled in `config.toml`, the bare command processes eligible media tweets
-using the same loop as the automatic sync follow-up. It continues until no work remains or
-the configured Gemini requests-per-day limit is reached:
+With tagging enabled in `config.toml`, the bare command processes eligible text and media tweets,
+including directly quoted originals, using the same loop as the automatic sync follow-up. Text and
+media candidates are sent in separate homogeneous requests. A text tweet that quotes media uses the
+media prompt and quoted attachment, while the quoted original is tagged independently. Processing
+continues until no work remains or the configured Gemini requests-per-day limit is reached:
 
 ```bash
-# Tag all eligible media tweets, respecting configured batching and RPD
+# Tag all eligible tweets, respecting configured batching and RPD
 uv run tweetxvault tag
 
 # Process at most 5 batches using the configured batch size
@@ -512,9 +514,9 @@ limits the number of batches, so `--batch 20 --limit 5` selects at most 100 twee
 five batches. Without `--batch`, the command uses `tagging.limit` when `tagging.batch` is
 enabled and otherwise processes one tweet per batch.
 
-`--test` is limited to one tweet and prints the archived tweet context, generated
-description, and normalized tags rather than the raw model response. It does not create,
-replace, or mark a media-tag row, but it does count real Gemini generation attempts toward
+`--test` is limited to one tweet and prints the archived tweet context and normalized tags rather
+than the raw model response. Media results also include a generated description; text-only results
+do not. Test mode does not create, replace, or mark a tag row, but it does count real Gemini generation attempts toward
 the local RPD counter. RPD usage is stored per model in the archive, resets at Pacific
 midnight, and counts failed requests and retries as well as successful generations.
 
@@ -596,10 +598,12 @@ separately so they do not inflate photo/video counts. The tagging tile is omitte
 has no generated tags. Legacy Web endpoints are thin adapters over the same collectors, so the two
 surfaces share metric definitions without forcing them into the same visual design.
 
-Tagging coverage uses the same base population as automatic tagging: directly saved posts with an
-available enriched tweet object and at least one media record. Thread-only related posts, incomplete
-enrichment, and text-only posts do not inflate the eligible total; already-tagged posts remain in
-the denominator and count toward coverage when they contain a valid nonempty tag list.
+Tagging coverage uses the same base population as automatic tagging: directly saved text or media
+posts with an available enriched tweet object, plus their directly quoted originals when those
+objects are available. Quoted originals are counted once even when several saved posts quote them.
+Other thread-only related posts and incomplete enrichment do not inflate the eligible total;
+already-tagged posts remain in the denominator and count toward coverage when they contain a valid
+nonempty tag list.
 
 **Tombstones & Resurrection:** TweetDetail tombstones retain their original type, message, entities, and raw response while also receiving a stable reason such as `protected_account`, `suspended_account`, `account_missing`, `deleted_by_author`, or `unavailable_unknown`. A tombstone changes availability only when it can be positively associated with the requested tweet. X also sometimes returns an exact focal `TimelineTweet` entry with an empty `tweet_results` object; tweetxvault records that narrow sentinel as retryable `unavailable_unknown`. Missing focal entries and malformed nonempty result objects remain response-shape ambiguities, and three consecutive absences stop the worker before a broken parser or API shape can mass-classify rows. Confirmed archive deletions and deleted-by-author posts are never retried automatically. Each normal sync checks at most 200 due, retryable unavailable tweets with reason-weighted scheduling. A successful account-level recovery persists a few same-author probes as immediately due and can prioritize a small same-account burst, always inside the same 200-request budget. `tweetxvault stats` reports initial-enrichment completeness and resurrection eligibility separately.
 

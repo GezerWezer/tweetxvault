@@ -279,3 +279,47 @@ def test_real_store_keeps_grouped_search_semantics(tmp_path) -> None:
     assert required_authors.rows == []
     assert {row["tweet_id"] for row in alternative_authors.rows} == {"1", "2"}
     store.close()
+
+
+def test_tag_search_matches_tags_on_a_quoted_original(tmp_path) -> None:
+    store = ArchiveStore(tmp_path / "archive.db", create=True)
+    store._merge_records(
+        [
+            store._record(
+                row_key="tweet:like::quote",
+                record_type="tweet",
+                tweet_id="quote",
+                collection_type="like",
+                text="Commentary around a quoted post",
+                author_id="alice",
+                author_username="alice",
+                author_display_name="Alice",
+                created_at_ts=2,
+                sort_index="2",
+                raw_json=json.dumps({"legacy": {}}),
+            ),
+            store._record(
+                row_key="tweet_relation:quote:quote_of:original",
+                record_type="tweet_relation",
+                tweet_id="quote",
+                relation_type="quote_of",
+                target_tweet_id="original",
+            ),
+            store._record(
+                row_key="media_tag:original",
+                record_type="media_tag",
+                tweet_id="original",
+                raw_json=json.dumps({"tags": ["Quoted Topic", "Specific Subject"]}),
+            ),
+        ]
+    )
+
+    direct = search_posts(store, 'tag:"Quoted Topic"')
+    grouped = search_posts(store, 'tag:"Quoted Topic" OR from:nobody')
+
+    assert [row["tweet_id"] for row in direct.rows] == ["quote"]
+    assert direct.rows[0]["qt_media_tags"] == {
+        "tags": ["Quoted Topic", "Specific Subject"]
+    }
+    assert [row["tweet_id"] for row in grouped.rows] == ["quote"]
+    store.close()

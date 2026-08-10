@@ -73,11 +73,11 @@ repair_app = typer.Typer(no_args_is_help=True, help="Repair recoverable legacy a
 SYNC_GROUP_HELP = (
     "Run the normal sync pass. Without a subcommand, this syncs bookmarks and likes, "
     "then runs thread expansion, resurrection checks, article refresh, media download, "
-    "URL unfurl, and configured media tagging unless skipped or inapplicable."
+    "URL unfurl, and configured AI tagging unless skipped or inapplicable."
 )
 SYNC_ALL_HELP = (
     "Sync bookmarks and likes, then run thread expansion, resurrection checks, article "
-    "refresh, media download, URL unfurl, and configured media tagging unless skipped "
+    "refresh, media download, URL unfurl, and configured AI tagging unless skipped "
     "or inapplicable."
 )
 sync_app = typer.Typer(
@@ -1807,7 +1807,7 @@ def unfurl_archive(
         raise typer.Exit(2) from exc
 
 
-@app.command("tag", help="Use Gemini to generate search tags and descriptions for media tweets.")
+@app.command("tag", help="Use Gemini to generate search tags for archived and quoted tweets.")
 def tag_archive(
     target: Annotated[
         str | None,
@@ -1818,7 +1818,7 @@ def tag_archive(
         bool,
         typer.Option(
             "--test",
-            help="Generate and display tags for one tweet without saving media tags.",
+            help="Generate and display tags for one tweet without saving them.",
         ),
     ] = False,
     batch: Annotated[
@@ -1867,7 +1867,7 @@ def tag_archive(
                         )
                         pipeline.start_step(
                             "tagging",
-                            activity=f"Generating media tags for tweet {tweet_id}",
+                            activity=f"Generating tags for tweet {tweet_id}",
                             counters="0 processed · 0 tagged",
                         )
                     tagged = await tag_media_tweets(
@@ -1910,15 +1910,15 @@ def tag_archive(
                 detail=(
                     f"explicit target · {model or config.tagging.model}"
                     if tweet_id is not None
-                    else f"{model or config.tagging.model} · eligible archived media tweets"
+                    else f"{model or config.tagging.model} · eligible archived and quoted tweets"
                 ),
                 show_rate=False,
                 show_eta=False,
             )
             result = asyncio.run(run_tagging())
             if result.processed == 0:
-                pipeline.skip_step("tagging", "no eligible untagged media tweets")
-                pipeline.final_note("No eligible untagged media tweets found.")
+                pipeline.skip_step("tagging", "no eligible untagged tweets")
+                pipeline.final_note("No eligible untagged tweets found.")
             elif not test:
                 pipeline.final_note(f"tag: {result.processed} processed, {result.tagged} tagged")
     except ConfigError as exc:

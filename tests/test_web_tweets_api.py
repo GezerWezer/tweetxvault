@@ -604,7 +604,16 @@ class ThreadStore:
         *,
         columns: list[str] | None = None,
     ) -> list[dict[str, Any]]:
-        assert (record_type, field, values) == ("media", "tweet_id", ["quoted"])
+        assert (field, values) == ("tweet_id", ["quoted"])
+        if record_type == "media_tag":
+            assert columns == ["tweet_id", "raw_json"]
+            return [
+                {
+                    "tweet_id": "quoted",
+                    "raw_json": '{"tags":["Quoted Topic"]}',
+                }
+            ]
+        assert record_type == "media"
         assert columns == [
             "tweet_id",
             "media_type",
@@ -632,6 +641,7 @@ def test_api_tweet_thread_builds_parents_children_op_replies_quotes_media_and_ta
     assert result["main"]["collections"] == ["bookmark", "like"]
     assert result["main"]["local_quote_count"] == 2
     assert result["main"]["media_tags"] == {"tags": ["Night"]}
+    assert result["main"]["qt_media_tags"] == {"tags": ["Quoted Topic"]}
     assert result["main"]["qt_media"][0]["download"]["local_path"] == "media/quote.mp4"
     assert [tweet["tweet_id"] for tweet in result["parents"]] == ["parent"]
     assert [tweet["tweet_id"] for tweet in result["children"]] == ["child", "popular"]

@@ -402,12 +402,12 @@ def test_tag_stats_reports_case_insensitive_usage_and_coverage(tmp_path, make_we
     assert response.status_code == 200
     data = response.json()
     assert data == {
-        "eligible_tweets": 3,
+        "eligible_tweets": 4,
         "tagged_tweets": 2,
-        "untagged_eligible": 1,
+        "untagged_eligible": 2,
         "unique_tags": 3,
         "total_tag_instances": 4,
-        "coverage_pct": 66.7,
+        "coverage_pct": 50.0,
         "avg_tags_per_tweet": 2.0,
         "top_tags": data["top_tags"],
     }

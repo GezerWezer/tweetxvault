@@ -71,32 +71,85 @@ def test_tagging_eligibility_filters_dedupes_orders_and_limits(paths) -> None:
     statements: list[str] = []
     store.conn.set_trace_callback(statements.append)
 
-    assert store.get_eligible_tweets_for_tagging(limit=1) == ["newest"]
-    assert store.get_eligible_tweets_for_tagging(limit=20) == [
+    text_candidates = store.get_eligible_tagging_candidates(limit=20)
+    assert [candidate["tweet_id"] for candidate in text_candidates] == ["no-media"]
+    assert {candidate["content_type"] for candidate in text_candidates} == {"text"}
+    assert store.get_tagging_coverage_counts() == (5, 1)
+
+    store.update_media_tags("no-media", ["Text Topic"])
+    media_candidates = store.get_eligible_tagging_candidates(limit=20)
+    assert [candidate["tweet_id"] for candidate in media_candidates] == [
         "newest",
         "resurrected",
         "older",
     ]
-    assert store.get_tagging_coverage_counts() == (4, 1)
-    eligibility_queries = [
-        statement
-        for statement in statements
-        if statement.lstrip().startswith("SELECT DISTINCT t.tweet_id")
-    ]
+    assert {candidate["content_type"] for candidate in media_candidates} == {"media"}
+    assert store.get_tagging_coverage_counts() == (5, 2)
+    eligibility_queries = [statement for statement in statements if "classified AS" in statement]
     assert len(eligibility_queries) == 2
     assert all(
         "FROM archive t INDEXED BY idx_archive_record_page" in statement
         for statement in eligibility_queries
     )
-    assert all(
-        statement.count("INDEXED BY idx_archive_tweet_id") == 3 for statement in eligibility_queries
-    )
+    assert all("classified AS" in statement for statement in eligibility_queries)
     coverage_queries = [
-        statement for statement in statements if "WITH eligible_tweets AS" in statement
+        statement for statement in statements if "eligible_tweets AS" in statement
     ]
-    assert len(coverage_queries) == 1
+    assert len(coverage_queries) == 2
     assert "FROM archive t INDEXED BY idx_archive_record_page" in coverage_queries[0]
-    assert coverage_queries[0].count("INDEXED BY idx_archive_tweet_id") == 3
+    assert "quoted AS" in coverage_queries[0]
+    store.close()
+
+
+def test_tagging_candidates_include_and_dedupe_direct_quoted_originals(paths) -> None:
+    store = open_archive_store(paths, create=True)
+    assert store is not None
+    _seed_tag_candidate(store, "quote-a", created_at_ts=70, with_media=False)
+    _seed_tag_candidate(store, "quote-b", created_at_ts=60, with_media=False)
+    store._merge_records(
+        [
+            store._record(
+                row_key="tweet_object:original",
+                record_type="tweet_object",
+                tweet_id="original",
+                created_at_ts=50,
+                enrichment_state="done",
+            ),
+            store._record(
+                row_key="media:original:first",
+                record_type="media",
+                tweet_id="original",
+                media_key="first",
+            ),
+            store._record(
+                row_key="tweet_relation:quote-a:quote_of:original",
+                record_type="tweet_relation",
+                tweet_id="quote-a",
+                relation_type="quote_of",
+                target_tweet_id="original",
+            ),
+            store._record(
+                row_key="tweet_relation:quote-b:quote_of:original",
+                record_type="tweet_relation",
+                tweet_id="quote-b",
+                relation_type="quote_of",
+                target_tweet_id="original",
+            ),
+        ]
+    )
+
+    candidates = store.get_eligible_tagging_candidates(limit=20)
+
+    assert [candidate["tweet_id"] for candidate in candidates] == [
+        "quote-a",
+        "quote-b",
+        "original",
+    ]
+    assert all(candidate["content_type"] == "media" for candidate in candidates)
+    assert candidates[0]["quoted_tweet_id"] == "original"
+    assert candidates[1]["quoted_tweet_id"] == "original"
+    assert candidates[2]["quoted_tweet_id"] is None
+    assert store.get_tagging_coverage_counts() == (3, 0)
     store.close()
 
 

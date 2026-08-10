@@ -379,7 +379,10 @@ def _filter_matches(row: dict[str, Any], key: str, value: str) -> bool:
     if key == "card_name":
         return raw.get("card", {}).get("name") == value
     if key == "tag":
-        tags = (row.get("media_tags") or {}).get("tags", [])
+        tags = [
+            *(row.get("media_tags") or {}).get("tags", []),
+            *(row.get("qt_media_tags") or {}).get("tags", []),
+        ]
         return any(value == tag.lower() for tag in tags)
     if key == "hashtag":
         hashtags = [
@@ -688,9 +691,16 @@ def search_posts(
             for value in values:
                 escaped_value = value.replace("'", "''")
                 pushable_exprs.append(
-                    "tweet_id IN (SELECT tweet_id FROM archive "
-                    "WHERE record_type = 'media_tag' "
-                    f"AND LOWER(raw_json) LIKE LOWER('%\"{escaped_value}\"%'))"
+                    "tweet_id IN ("
+                    "SELECT direct_tag.tweet_id FROM archive direct_tag "
+                    "WHERE direct_tag.record_type = 'media_tag' "
+                    f"AND LOWER(direct_tag.raw_json) LIKE LOWER('%\"{escaped_value}\"%') "
+                    "UNION SELECT relation.tweet_id FROM archive relation "
+                    "JOIN archive quoted_tag ON quoted_tag.tweet_id = relation.target_tweet_id "
+                    "AND quoted_tag.record_type = 'media_tag' "
+                    "WHERE relation.record_type = 'tweet_relation' "
+                    "AND relation.relation_type = 'quote_of' "
+                    f"AND LOWER(quoted_tag.raw_json) LIKE LOWER('%\"{escaped_value}\"%'))"
                 )
         elif key in {"since", "since_time", "until", "until_time"}:
             for value in values:

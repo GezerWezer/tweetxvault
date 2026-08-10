@@ -35,6 +35,8 @@ class FakeStore:
                 author_display_name TEXT,
                 author_username TEXT,
                 text TEXT,
+                relation_type TEXT,
+                target_tweet_id TEXT,
                 enrichment_state TEXT,
                 updated_at TEXT,
                 key TEXT,
@@ -69,6 +71,17 @@ class FakeStore:
                 author_username,
                 text,
             ),
+        )
+        self.conn.commit()
+
+    def add_quote(self, tweet_id: str, target_tweet_id: str) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO archive (
+                row_key, record_type, tweet_id, relation_type, target_tweet_id
+            ) VALUES (?, 'tweet_relation', ?, 'quote_of', ?)
+            """,
+            (f"tweet_relation:{tweet_id}:quote_of:{target_tweet_id}", tweet_id, target_tweet_id),
         )
         self.conn.commit()
 
@@ -117,6 +130,37 @@ class PendingTagStore:
         selected = self.remaining[:limit]
         del self.remaining[: len(selected)]
         return selected
+
+
+class RichPendingTagStore:
+    def __init__(self) -> None:
+        self.candidates = [
+            {
+                "tweet_id": "media-1",
+                "content_type": "media",
+                "quoted_tweet_id": "original",
+            },
+            {"tweet_id": "media-2", "content_type": "media", "quoted_tweet_id": None},
+            {"tweet_id": "text-1", "content_type": "text", "quoted_tweet_id": None},
+        ]
+
+    def get_eligible_tagging_candidates(
+        self,
+        *,
+        limit: int,
+        exclude_tweet_ids: set[str],
+    ) -> list[dict[str, Any]]:
+        available = [
+            candidate
+            for candidate in self.candidates
+            if candidate["tweet_id"] not in exclude_tweet_ids
+        ]
+        if not available:
+            return []
+        content_type = available[0]["content_type"]
+        return [
+            candidate for candidate in available if candidate["content_type"] == content_type
+        ][:limit]
 
 
 class FakeFiles:
@@ -317,7 +361,7 @@ async def test_tagging_step_is_active_while_the_first_batch_is_selected(paths) -
         def get_eligible_tweets_for_tagging(self, *, limit: int) -> list[str]:
             assert reporter.active_step is not None
             assert reporter.active_step.key == "tagging"
-            assert "Preparing the first media batch" in reporter.active_step.activity
+            assert "Preparing the first tag batch" in reporter.active_step.activity
             return super().get_eligible_tweets_for_tagging(limit=limit)
 
     with reporter:
@@ -428,6 +472,35 @@ async def test_pending_tagging_loops_through_full_and_short_batches(
     assert result == tagging.TaggingRunResult(processed=5, tagged=5, batches=3)
     assert store.selection_limits == [2, 2, 2]
     assert [call["tweet_ids"] for call in calls] == [["1", "2"], ["3", "4"], ["5"]]
+
+
+@pytest.mark.asyncio
+async def test_pending_tagging_keeps_rich_text_and_media_batches_homogeneous(
+    monkeypatch: pytest.MonkeyPatch,
+    paths,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    async def fake_tag_media_tweets(**kwargs: Any) -> int:
+        calls.append(kwargs)
+        return len(kwargs["tweet_ids"])
+
+    monkeypatch.setattr(tagging, "tag_media_tweets", fake_tag_media_tweets)
+    console, _ = make_console()
+
+    result = await tagging.tag_pending_media_tweets(
+        RichPendingTagStore(),
+        make_config(batch=True, limit=20),
+        paths,
+        console,
+    )
+
+    assert result == tagging.TaggingRunResult(processed=3, tagged=3, batches=2)
+    assert [(call["content_type"], call["tweet_ids"]) for call in calls] == [
+        ("media", ["media-1", "media-2"]),
+        ("text", ["text-1"]),
+    ]
+    assert calls[0]["quoted_tweet_ids"] == {"media-1": "original"}
 
 
 @pytest.mark.asyncio
@@ -671,8 +744,7 @@ async def test_remote_files_are_cleared_and_cleanup_warning_is_nonfatal(
 @pytest.mark.parametrize(
     ("seed_kind", "expected_message"),
     [
-        ("no_tweet", "No loadable media found"),
-        ("no_media", "No loadable media found"),
+        ("no_tweet", "No stored tweet objects found"),
         ("no_local_path", "No loadable media found"),
         ("missing_file", "No loadable media found"),
         ("corrupt_image", "Failed to load image"),
@@ -708,6 +780,73 @@ async def test_unusable_media_is_skipped_without_model_request(
     assert await tagging.tag_media_tweets(store, config, paths, console, ["1"]) == 0
     assert client.models.calls == []
     assert expected_message in output.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_text_only_tweet_uses_text_schema_and_omits_description(
+    monkeypatch: pytest.MonkeyPatch,
+    paths,
+) -> None:
+    store = FakeStore()
+    store.add_tweet("1", text="A detailed post about Project Gemini")
+    client = FakeClient(
+        [response([{"id": "1", "tags": ["Project Gemini", "Machine Learning"]}])]
+    )
+    monkeypatch.setattr(tagging.genai, "Client", lambda **kwargs: client)
+    console, _ = make_console()
+
+    assert await tagging.tag_media_tweets(store, make_config(), paths, console, ["1"]) == 1
+
+    request = client.models.calls[0]
+    assert request["config"].response_schema == list[tagging.TextTagResult]
+    prompt = "".join(part for part in request["contents"] if isinstance(part, str))
+    assert "Do not create descriptions or summaries" in prompt
+    payload = json.loads(store.media_tag("1")["raw_json"])
+    assert payload == {"tags": ["Project Gemini", "Machine Learning"]}
+
+
+@pytest.mark.asyncio
+async def test_quote_tweet_and_media_original_are_tagged_as_separate_media_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+    paths,
+) -> None:
+    store = FakeStore()
+    store.add_tweet("quote", text="My commentary")
+    store.add_tweet("original", text="Original caption", author_username="original-author")
+    store.add_quote("quote", "original")
+    store.add_media("original", local_path="media/original.png")
+    write_image(paths.data_dir / "media" / "original.png")
+    client = FakeClient(
+        [
+            response(
+                [
+                    *successful_result("quote"),
+                    *successful_result("original"),
+                ]
+            )
+        ]
+    )
+    monkeypatch.setattr(tagging.genai, "Client", lambda **kwargs: client)
+    console, _ = make_console()
+
+    assert (
+        await tagging.tag_media_tweets(
+            store,
+            make_config(),
+            paths,
+            console,
+            ["quote", "original"],
+        )
+        == 2
+    )
+
+    prompt = "".join(
+        part for part in client.models.calls[0]["contents"] if isinstance(part, str)
+    )
+    assert "Quoted Tweet Context" in prompt
+    assert "Quoted Tweet Media" in prompt
+    assert store.media_tag("quote") is not None
+    assert store.media_tag("original") is not None
 
 
 @pytest.mark.asyncio
@@ -772,11 +911,12 @@ async def test_prompt_uses_data_dir_tweet_context_existing_tags_and_model_overri
     assert "Author: Display Name (@handle)" in string_parts
     assert 'Text: "A quoted \\"caption\\""' in string_parts
     assert "[Attached Image: media-1]" in string_parts
+    assert "Do not tag a website, app, social network" in string_parts
     assert any(isinstance(part, Image.Image) for part in call["contents"])
 
 
 @pytest.mark.asyncio
-async def test_tagging_hydrates_a_batch_with_two_id_indexed_queries(
+async def test_tagging_hydrates_and_classifies_a_batch_with_id_indexed_queries(
     monkeypatch: pytest.MonkeyPatch,
     paths,
 ) -> None:
@@ -805,7 +945,7 @@ async def test_tagging_hydrates_a_batch_with_two_id_indexed_queries(
         for statement in statements
         if "FROM archive INDEXED BY idx_archive_tweet_id" in statement
     ]
-    assert len(indexed_reads) == 2
+    assert len(indexed_reads) == 4
     assert any("record_type = 'media'" in statement for statement in indexed_reads)
     assert any("record_type = 'tweet_object'" in statement for statement in indexed_reads)
     assert all("tweet_id IN ('1', '2')" in statement for statement in indexed_reads)
