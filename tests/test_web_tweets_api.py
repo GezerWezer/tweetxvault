@@ -378,7 +378,7 @@ def test_api_tweets_fts_path_sorts_and_paginates_hydrated_results():
     }
 
 
-def test_api_tweets_post_filter_path_preserves_relevance_order():
+def test_api_tweets_post_filter_path_preserves_relevance_order_without_export():
     rows = [_row(tweet_id="1"), _row(tweet_id="2", author={"username": "bob"})]
     search_rows = [{"tweet_id": "2"}, {"tweet_id": "1"}]
     store = ListingStore(rows, search_rows=search_rows)
@@ -386,7 +386,21 @@ def test_api_tweets_post_filter_path_preserves_relevance_order():
     result = _list_tweets(store, q="needle -from:nobody", sort="relevance")
 
     assert [tweet["tweet_id"] for tweet in result["tweets"]] == ["2", "1"]
-    assert any(name == "export" for name, _ in store.calls)
+    assert not any(name == "export" for name, _ in store.calls)
+    fetch = next(data for name, data in store.calls if name == "fetch")
+    assert fetch["ids"] == ["2", "1"]
+
+
+def test_api_tweets_has_media_uses_sql_pagination_without_export():
+    store = ListingStore([_row(tweet_id="1"), _row(tweet_id="2")])
+
+    result = _list_tweets(store, q="has:media", limit=1)
+
+    assert len(result["tweets"]) == 1
+    assert not any(name == "export" for name, _ in store.calls)
+    count = next(data for name, data in store.calls if name == "count_distinct")
+    assert "EXISTS (SELECT 1 FROM archive AS related" in count["expr"]
+    assert "related.record_type = 'media'" in count["expr"]
 
 
 def test_api_tweets_filters_unavailable_tombstones_from_response():

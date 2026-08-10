@@ -430,6 +430,52 @@ def _collection_expr(collections: set[str] | None) -> str:
     return f"collection_type IN ({values})"
 
 
+def _normalized_filter_expr(key: str, value: str, *, negated: bool = False) -> str | None:
+    """Translate filters backed by normalized archive rows into correlated SQL."""
+    condition = None
+    if (key, value) in {("has", "media"), ("filter", "media")}:
+        condition = "related.record_type = 'media'"
+    elif (key, value) in {("has", "image"), ("filter", "images")}:
+        condition = "related.record_type = 'media' AND related.media_type = 'photo'"
+    elif (key, value) in {
+        ("has", "video"),
+        ("filter", "videos"),
+        ("filter", "native_video"),
+    }:
+        condition = (
+            "related.record_type = 'media' AND related.media_type IN ('video', 'animated_gif')"
+        )
+    elif (key, value) in {("has", "links"), ("filter", "links")}:
+        condition = "related.record_type = 'url_ref'"
+    elif (key, value) == ("filter", "articles"):
+        condition = "related.record_type = 'article'"
+    if condition is None:
+        return None
+
+    expression = (
+        "EXISTS (SELECT 1 FROM archive AS related "
+        "WHERE related.tweet_id = archive.tweet_id "
+        f"AND {condition})"
+    )
+    return f"NOT ({expression})" if negated else expression
+
+
+def _filter_candidate_ids(store: Any, tweet_ids: list[str], expressions: list[str]) -> set[str]:
+    """Apply SQL predicates to a bounded list of post candidate IDs."""
+    if not expressions:
+        return set(tweet_ids)
+    matched: set[str] = set()
+    for chunk_start in range(0, len(tweet_ids), 100):
+        chunk = tweet_ids[chunk_start : chunk_start + 100]
+        ids = ", ".join(_sql_quote(tweet_id) for tweet_id in chunk)
+        expr = f"record_type = 'tweet' AND tweet_id IN ({ids})"
+        for expression in expressions:
+            expr += f" AND {expression}"
+        rows = store._query(expr=expr, cols=["DISTINCT tweet_id"])
+        matched.update(row["tweet_id"] for row in rows if row.get("tweet_id"))
+    return matched
+
+
 def _effective_sort(sort: str, *, has_positive_text: bool) -> str:
     if sort == "oldest":
         return "oldest"
@@ -613,8 +659,15 @@ def search_posts(
     pushable_exprs: list[str] = []
     post_filters: dict[str, list[str]] = {}
     for raw_key, values in filters.items():
-        key = raw_key[1:] if raw_key.startswith("-") else raw_key
-        if raw_key.startswith("-") or key not in {
+        negated = raw_key.startswith("-")
+        key = raw_key[1:] if negated else raw_key
+        normalized_exprs = [
+            _normalized_filter_expr(key, value, negated=negated) for value in values
+        ]
+        if all(expression is not None for expression in normalized_exprs):
+            pushable_exprs.extend(str(expression) for expression in normalized_exprs)
+            continue
+        if negated or key not in {
             "from",
             "conversation_id",
             "since",
@@ -702,7 +755,6 @@ def search_posts(
             truncated=truncated,
         )
 
-    rows = _export_candidates(store, collections)
     hits: list[dict[str, Any]] = []
     truncated = False
     if text_query:
@@ -712,10 +764,30 @@ def search_posts(
             types={"post"},
             collections=collections,
         )
+        hits = [hit for hit in hits if _is_available_tweet(hit)]
         truncated = len(hits) >= candidate_limit
-        matched_ids = {hit["tweet_id"] for hit in hits if hit.get("tweet_id")}
-        rows = [row for row in rows if row.get("tweet_id") in matched_ids]
-    rows = _apply_advanced_filters(rows, filters)
+        candidate_ids = [hit["tweet_id"] for hit in hits if hit.get("tweet_id")]
+        matched_ids = _filter_candidate_ids(store, candidate_ids, pushable_exprs)
+        hits = [hit for hit in hits if hit.get("tweet_id") in matched_ids]
+        if not post_filters:
+            if effective_sort != "relevance":
+                _sort_rows(hits, effective_sort)
+            total = len(hits)
+            page_hits = hits[start : start + limit]
+            ids = [hit["tweet_id"] for hit in page_hits if hit.get("tweet_id")]
+            hydrated = _hydrate_metadata(store.fetch_tweets_by_ids(ids), page_hits)
+            return SearchPage(
+                rows=hydrated,
+                total=total,
+                page=page,
+                pages=math.ceil(total / limit) if total else 1,
+                truncated=truncated,
+            )
+        rows = store.fetch_tweets_by_ids([hit["tweet_id"] for hit in hits])
+        rows = [row for row in rows if _is_available_tweet(row)]
+    else:
+        rows = _export_candidates(store, collections)
+    rows = _apply_advanced_filters(rows, post_filters if text_query else filters)
     if effective_sort == "relevance" and hits:
         order = {hit["tweet_id"]: index for index, hit in enumerate(hits)}
         rows.sort(key=lambda row: order.get(row.get("tweet_id"), candidate_limit + 1))
