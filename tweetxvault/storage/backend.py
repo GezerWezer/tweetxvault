@@ -920,9 +920,22 @@ class ArchiveStore:
         query: str | None = None,
         order_by: str | None = None,
         offset: int | None = None,
+        indexed_by: str | None = None,
     ) -> list[dict[str, Any]]:
+        allowed_indexes = {
+            "idx_archive_tweet_id",
+            "idx_archive_target_tweet_id",
+        }
+        if indexed_by is not None and indexed_by not in allowed_indexes:
+            raise ValueError(f"Unsupported archive query index: {indexed_by}")
+        if indexed_by is not None and is_fts:
+            raise ValueError("Archive index hints cannot be combined with FTS queries")
+
         c = ", ".join(cols) if cols else "*"
-        q = f"SELECT {c} FROM archive"
+        archive_source = "archive"
+        if indexed_by is not None:
+            archive_source += f" INDEXED BY {indexed_by}"
+        q = f"SELECT {c} FROM {archive_source}"
         params = []
         if is_fts and query:
             if c != "*":
@@ -1080,7 +1093,11 @@ class ArchiveStore:
             chunk = unique_values[start : start + chunk_size]
             joined = " OR ".join(f"{field_name} = {_expr_quote(value)}" for value in chunk)
             expr = f"record_type = {_expr_quote(record_type)} AND ({joined})"
-            rows.extend(self._query(expr=expr, cols=columns))
+            value_index = {
+                "tweet_id": "idx_archive_tweet_id",
+                "target_tweet_id": "idx_archive_target_tweet_id",
+            }.get(field_name)
+            rows.extend(self._query(expr=expr, cols=columns, indexed_by=value_index))
         return rows
 
     def _lookup_row(

@@ -31,16 +31,24 @@
     0.273 ms median. Because that first run is too slow for blocking Web startup, the recommended
     detail-specific follow-up is deterministic SQL using the existing ID indexes; planner-statistics
     maintenance should be added separately to the explicit optimize/write lifecycle.
+  - Implemented that detail follow-up without a schema change: relation `OR` lookups are split into
+    source/target branches, all detail hydration and value-batch reads force the matching existing ID
+    index, and quote listings/counts force the target-ID index. `_query` accepts only the two approved
+    index names and rejects hints for FTS, keeping the dynamic SQL surface constrained.
+  - Full read-only detail-route medians on the same statistic-free local archive are now 0.176 ms for
+    a simple tweet, 1.06 ms for a moderate thread, 5.40 ms for the deepest sampled thread, and 12.82
+    ms for the busiest sampled thread (seven runs each). The pre-fix simple route exceeded 90 seconds,
+    so the fix removes the observed planner failure without a blocking startup `ANALYZE`.
   - Local search measurements without statistics were 27.9 seconds for `has:media` and more than
     150 seconds for `has:image` before the run was stopped. With approximate statistics on a clone:
     `has:media` was 4.71 seconds, `has:image` 0.90 seconds, `has:video` 0.67 seconds, `has:links`
     1.75 seconds, `filter:articles` 0.18 seconds, selected text `fortnite` 28.16 seconds, and combined
     `fortnite has:media` 32.79 seconds. Search therefore has separate FTS/count work remaining after
     the full-archive hydration fix.
-  - Validation passed 85 focused search/Web tests before the final detail regression, all 75 Web API
-    tests after it, 22 browser asset tests, all 780 repository tests, repository-wide Ruff lint,
-    task-file formatting, and `git diff --check`. Repository-wide format check still reports only
-    pre-existing unrelated `tests/test_auth.py` and `tweetxvault/resurrection.py`.
+  - Validation passed 123 focused storage/Web tests after the deterministic-index follow-up, 22
+    browser asset tests before that backend-only change, all 781 repository tests, repository-wide
+    Ruff lint, task-file formatting, and `git diff --check`. Repository-wide format check still
+    reports only pre-existing unrelated `tests/test_auth.py` and `tweetxvault/resurrection.py`.
 
 - 2026-08-09 (Quoted-post thread expansion)
   - Added stored `quote_of` relations to the existing membership-rooted BFS so quoted originals

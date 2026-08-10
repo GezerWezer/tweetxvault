@@ -511,6 +511,7 @@ class ThreadStore:
         self.relation_call = 0
         self.expressions: list[str] = []
         self.query_columns: list[tuple[str, list[str] | None]] = []
+        self.query_indexes: list[tuple[str, str | None]] = []
         self.quote_count_call: tuple[str, tuple[str, ...]] | None = None
         self.conn = self
 
@@ -520,22 +521,24 @@ class ThreadStore:
         expr: str,
         cols: list[str] | None = None,
         limit: int | None = None,
+        indexed_by: str | None = None,
         **_: Any,
     ) -> list[dict[str, Any]]:
         self.expressions.append(expr)
         self.query_columns.append((expr, cols))
+        self.query_indexes.append((expr, indexed_by))
         if "record_type = 'tweet_relation'" in expr and "quote_of" not in expr:
             self.relation_call += 1
-            relation_responses = {
-                1: [
+            if " AND tweet_id = 'main'" in expr and "'reply_to'" in expr:
+                return [
                     {
                         "tweet_id": "main",
                         "target_tweet_id": "parent",
                         "relation_type": "reply_to",
                     }
-                ],
-                2: [],
-                3: [
+                ]
+            if " AND target_tweet_id = 'main'" in expr and "'reply_to'" in expr:
+                return [
                     {
                         "tweet_id": "child",
                         "target_tweet_id": "main",
@@ -546,16 +549,16 @@ class ThreadStore:
                         "target_tweet_id": "main",
                         "relation_type": "reply_to",
                     },
-                ],
-                4: [
+                ]
+            if " AND target_tweet_id IN (" in expr:
+                return [
                     {
                         "tweet_id": "grandchild",
                         "target_tweet_id": "child",
                         "relation_type": "reply_to",
                     }
-                ],
-            }
-            return relation_responses.get(self.relation_call, [])
+                ]
+            return []
         if "record_type = 'tweet_object'" in expr:
             return [
                 _thread_object("main", quote_id="quoted"),
@@ -635,12 +638,27 @@ def test_api_tweet_thread_builds_parents_children_op_replies_quotes_media_and_ta
     assert [reply["tweet_id"] for reply in result["children"][0]["op_replies"]] == ["grandchild"]
     assert store.quote_count_call is not None
     assert store.quote_count_call[1] == ("main",)
+    assert "INDEXED BY idx_archive_target_tweet_id" in store.quote_count_call[0]
     relation_columns = {
         tuple(columns or [])
         for expr, columns in store.query_columns
         if "record_type = 'tweet_relation'" in expr
     }
     assert relation_columns == {("tweet_id", "target_tweet_id", "relation_type")}
+    relation_queries = [
+        (expr, index)
+        for expr, index in store.query_indexes
+        if "record_type = 'tweet_relation'" in expr
+    ]
+    assert relation_queries
+    assert all(" OR " not in expr for expr, _ in relation_queries)
+    for expr, index in relation_queries:
+        expected = (
+            "idx_archive_target_tweet_id"
+            if " AND target_tweet_id" in expr
+            else "idx_archive_tweet_id"
+        )
+        assert index == expected
     expected_columns = {
         "tweet_object": {
             "tweet_id",
@@ -670,6 +688,9 @@ def test_api_tweet_thread_builds_parents_children_op_replies_quotes_media_and_ta
             if f"record_type = '{record_type}'" in expr
         )
         assert set(actual or []) == columns
+    for expr, index in store.query_indexes:
+        if any(f"record_type = '{record_type}'" in expr for record_type in expected_columns):
+            assert index == "idx_archive_tweet_id"
 
 
 def test_api_tweet_thread_parses_each_tweet_json_once_and_tolerates_malformed(monkeypatch):
@@ -786,10 +807,12 @@ def test_api_tweet_quotes_parameterizes_count_and_paginates_distinct_ids():
     sql, params = store.conn.call
     assert payload not in sql
     assert params == (payload,)
+    assert "INDEXED BY idx_archive_target_tweet_id" in sql
     assert store.query is not None
     assert "target'' OR 1=1 --" in store.query["expr"]
     assert store.query["cols"] == ["DISTINCT tweet_id"]
     assert store.query["offset"] == 2
+    assert store.query["indexed_by"] == "idx_archive_target_tweet_id"
 
 
 def _api_client(store: object) -> TestClient:

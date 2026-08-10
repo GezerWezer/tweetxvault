@@ -132,6 +132,42 @@ def test_schema_creates_fts_triggers_and_page_indexes(paths) -> None:
     store.close()
 
 
+def test_archive_queries_can_force_safe_id_indexes(paths) -> None:
+    store = open_archive_store(paths, create=True)
+    assert store is not None
+    store._merge_records(
+        [
+            _membership(
+                store,
+                "1",
+                collection="bookmark",
+                text="indexed lookup",
+                created_at=CREATED_2012,
+                created_at_ts=1,
+                sort_index="1",
+            )
+        ]
+    )
+    statements: list[str] = []
+    store.conn.set_trace_callback(statements.append)
+
+    rows = store._rows_for_values("tweet", "tweet_id", ["1"], columns=["tweet_id"])
+
+    store.conn.set_trace_callback(None)
+    assert rows == [{"tweet_id": "1"}]
+    assert any("INDEXED BY idx_archive_tweet_id" in statement for statement in statements)
+    with pytest.raises(ValueError, match="Unsupported archive query index"):
+        store._query("tweet_id = '1'", indexed_by="idx_archive_record_page")
+    with pytest.raises(ValueError, match="cannot be combined with FTS"):
+        store._query(
+            "record_type = 'tweet'",
+            is_fts=True,
+            query="indexed",
+            indexed_by="idx_archive_tweet_id",
+        )
+    store.close()
+
+
 def test_fts_triggers_follow_insert_update_and_delete(paths) -> None:
     store = open_archive_store(paths, create=True)
     assert store is not None

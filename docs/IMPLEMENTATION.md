@@ -15,6 +15,8 @@ Definition of done: passes `uv run ruff format --check`, `uv run ruff check`, an
 
 - [x] Push normalized media, link, and article filters into SQLite and bound mixed-text hydration.
 - [x] Reduce tweet-detail query columns, JSON parsing, media scans, and quote-count work.
+- [x] Split relation branches and force existing tweet/target ID indexes for detail hydration.
+- [x] Benchmark the complete detail route read-only against the statistic-free local archive.
 - [x] Share a bounded successful thread-response cache across normal and split-panel views.
 - [x] Add search, detail, and browser regressions; pass focused and full local validation.
 - [ ] Capture production before/after timings and query plans when `192.168.1.52` is reachable.
