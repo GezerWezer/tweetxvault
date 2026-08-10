@@ -285,6 +285,7 @@ def test_search_help_describes_flags() -> None:
     assert "Maximum number of results to" in result.stdout
     assert "--mode" not in result.stdout
     assert "Comma-delimited search result" in result.stdout
+    assert "post (default)" in " ".join(result.stdout.split())
     assert "Comma-delimited collections:" in result.stdout
 
 
@@ -363,39 +364,43 @@ def test_search_uses_shared_tweet_list_rendering(monkeypatch) -> None:
     monkeypatch.setattr(cli, "_with_auto_optimize", lambda store, paths, console, fn: fn(store))
 
     class _FakeStore:
-        def search_fts(self, query: str, *, limit: int, types=None, collections=None):
-            assert query == "bookmark"
-            assert limit == 5
-            assert types == {"post", "article"}
-            assert collections == {"bookmark"}
-            return [
+        def close(self) -> None:
+            return None
+
+    def fake_search_posts(store, query, *, collections, sort, limit):
+        assert isinstance(store, _FakeStore)
+        assert query == "bookmark"
+        assert limit == 5
+        assert sort == "relevance"
+        assert collections == {"bookmark"}
+        return SimpleNamespace(
+            rows=[
                 {
                     "tweet_id": "1",
                     "type": "post",
                     "collections": ["bookmark"],
-                    "author_username": "user1",
-                    "author_id": "1",
+                    "author": {"username": "user1", "id": "1"},
                     "created_at": "Sat Mar 14 00:00:00 +0000 2026",
                     "text": "bookmark tweet",
                     "match_score": 0.75,
                 }
-            ]
-
-        def close(self) -> None:
-            return None
+            ],
+            total=1,
+            truncated=False,
+        )
 
     monkeypatch.setattr(cli, "_open_store_for_read", lambda console: (_FakeStore(), object()))
+    monkeypatch.setattr(cli, "search_posts", fake_search_posts)
 
     cli.search_archive(
         "bookmark",
         limit=5,
-        type_filter="post,article",
         collection_filter="bookmarks",
     )
 
     output = buffer.getvalue()
     assert "search: bookmark" in output
-    assert "showing 1 search results" in output
+    assert "showing 1 of 1 search results" in output
     assert "LOCAL-TIME" in output
     assert "/status/1" in output
     assert "0.750" in output

@@ -273,6 +273,17 @@ test('autocomplete highlighting escapes API-provided labels', () => {
     assert.equal(component.highlightMatch('<script>', ''), '&lt;script&gt;');
 });
 
+test('autocomplete offers the attached-article filter', () => {
+    const context = browserContext();
+    const { searchAutocomplete } = loadScripts(
+        context,
+        ['autocomplete.js'],
+        '({searchAutocomplete})',
+    );
+    const component = searchAutocomplete();
+    assert.ok(component.filterOptions.some(option => option.value === 'articles'));
+});
+
 test('autocomplete keyboard navigation wraps and scrolls selected option', () => {
     const context = browserContext();
     const { searchAutocomplete } = loadScripts(

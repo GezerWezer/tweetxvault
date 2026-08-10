@@ -1,3 +1,24 @@
+- 2026-08-09 (Shared CLI/Web search engine)
+  - Extracted the Web post-search parser, structured filters, execution paths, availability rules,
+    sorting, and pagination into a presentation-neutral `tweetxvault.search` module used by both
+    `/api/tweets` and the default CLI search path.
+  - Made ordinary clauses implicit AND requirements, accepted optional uppercase `AND`, grouped
+    only adjacent alternatives with uppercase `OR`, retained lowercase conjunction words as text,
+    and implemented text/filter negation with strict malformed/unknown/value validation.
+  - Added `filter:articles` for posts with attached archived articles and exposed it through the
+    existing Web filter autocomplete; kept explicit CLI article-title/body search under
+    `--type article` while making post search the shared default.
+  - Kept Web rendering unchanged: its route hydrates shared page results and adds quote media,
+    while no AND/OR capsules, highlighting, or operator autocomplete were added.
+  - Fixed Web FTS calls to request post hits explicitly, preventing attached article hits from
+    inflating post totals or producing duplicate hydration IDs; repeated filters now require every
+    value unless joined with explicit `OR`.
+  - Added parser, real-SQLite engine, article-filter, route validation, CLI-adapter, and browser
+    regressions. Full pytest, repository-wide Ruff, compilation, diff checks, scoped formatting,
+    and all 21 browser asset tests pass. The repository-wide format check still reports unrelated
+    pre-existing formatting in `tests/test_auth.py` and `tweetxvault/resurrection.py`; neither was
+    modified for search.
+
 - 2026-08-08 (JSON-only export surface)
   - Removed the standalone HTML archive exporter, the `export html` CLI command, package exports,
     tests, and active documentation; JSON remains the sole file-export format.

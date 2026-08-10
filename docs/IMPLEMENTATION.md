@@ -11,6 +11,21 @@ Hard constraints:
 
 Definition of done: passes `uv run ruff format --check`, `uv run ruff check`, and `uv run pytest`.
 
+## Shared CLI/Web search (2026-08-09)
+
+- [x] Extract the Web query parser, filters, search planning, sorting, availability rules, and
+  pagination into one presentation-neutral `tweetxvault.search` module.
+- [x] Make ordinary clauses implicit AND requirements; accept standalone uppercase `AND`, group
+  only adjacent alternatives with uppercase `OR`, and retain quoted and negated clauses.
+- [x] Keep lowercase `and` / `or` searchable and reject malformed queries, unknown filters, and
+  invalid structured values with a useful client/CLI error.
+- [x] Make `/api/tweets` a thin adapter over shared post search while preserving Web-only quote
+  media hydration and leaving AND/OR rendering and autocomplete unchanged.
+- [x] Route default CLI post search through the same engine, retain explicit article-body search,
+  and add `filter:articles` for posts with attached archived articles.
+- [x] Add shared parser/engine, CLI/Web parity, route, article-filter, and browser regressions; pass
+  focused and complete validation.
+
 ## Unified pipeline CLI (2026-08-02)
 
 - [x] Audit sync, archive import/enrichment, follow-up workers, terminal output, and

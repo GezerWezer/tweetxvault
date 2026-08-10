@@ -153,6 +153,13 @@ def test_apply_advanced_filters_distinguishes_image_and_video_media():
     assert _apply_advanced_filters([photo, video], {"has": ["video"]}) == [video]
 
 
+def test_apply_advanced_filters_supports_attached_articles():
+    article = _row(article={"title": "Long read"})
+    ordinary = _row(tweet_id="201", article=None)
+
+    assert _apply_advanced_filters([article, ordinary], {"filter": ["articles"]}) == [article]
+
+
 def test_apply_advanced_filters_rejects_invalid_values_without_crashing():
     row = _row(created_at="invalid", tweet_id="not-numeric")
     filters = {
@@ -222,9 +229,24 @@ class ListingStore:
         return [by_id[tweet_id] for tweet_id in ids if tweet_id in by_id]
 
     def search_fts(
-        self, query: str, *, limit: int, collections: set[str] | None
+        self,
+        query: str,
+        *,
+        limit: int,
+        types: set[str] | None = None,
+        collections: set[str] | None,
     ) -> list[dict[str, Any]]:
-        self.calls.append(("search", {"query": query, "limit": limit, "collections": collections}))
+        self.calls.append(
+            (
+                "search",
+                {
+                    "query": query,
+                    "limit": limit,
+                    "types": types,
+                    "collections": collections,
+                },
+            )
+        )
         return [dict(row) for row in self.search_rows]
 
     def export_rows(
@@ -307,6 +329,16 @@ def test_api_tweets_invalid_collection_falls_back_to_all():
     assert "collection_type" not in count["expr"]
 
 
+def test_api_tweets_rejects_unknown_search_filters():
+    store = ListingStore([_row()])
+
+    with pytest.raises(fastapi.HTTPException) as exc:
+        _list_tweets(store, q="unknown:value")
+
+    assert exc.value.status_code == 400
+    assert "Unsupported search filter" in exc.value.detail
+
+
 def test_api_tweets_pushdown_quotes_untrusted_author_and_conversation():
     store = ListingStore([])
     payload = "alice' or 1=1 --"
@@ -338,7 +370,12 @@ def test_api_tweets_fts_path_sorts_and_paginates_hydrated_results():
     assert [tweet["tweet_id"] for tweet in result["tweets"]] == ["old"]
     assert result["total"] == 2
     search = next(data for name, data in store.calls if name == "search")
-    assert search == {"query": "needle", "limit": 1000, "collections": None}
+    assert search == {
+        "query": "needle",
+        "limit": 1000,
+        "types": {"post"},
+        "collections": None,
+    }
 
 
 def test_api_tweets_post_filter_path_preserves_relevance_order():

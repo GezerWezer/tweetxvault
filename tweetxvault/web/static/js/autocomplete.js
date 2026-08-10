@@ -48,6 +48,7 @@ function searchAutocomplete() {
         ],
         
         filterOptions: [
+            { prefix: 'filter:', value: 'articles', desc: 'Posts with an attached article' },
             { prefix: 'filter:', value: 'media', desc: 'Any media' },
             { prefix: 'filter:', value: 'images', desc: 'Only images' },
             { prefix: 'filter:', value: 'videos', desc: 'Videos or GIFs' },

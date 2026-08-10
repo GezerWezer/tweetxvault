@@ -48,6 +48,7 @@ from tweetxvault.media import download_media
 from tweetxvault.pipeline import PipelineReporter, current_pipeline
 from tweetxvault.query_ids import QueryIdStore, refresh_query_ids
 from tweetxvault.reminders import print_pending_archive_enrichment_reminder
+from tweetxvault.search import SearchQueryError, parse_search_query, search_posts
 from tweetxvault.storage import open_archive_store
 from tweetxvault.sync import (
     ProcessLock,
@@ -179,7 +180,7 @@ DEBUG_AUTH_OPTION = Annotated[
 ]
 
 
-SEARCH_TYPE_HELP = "Comma-delimited search result types: post, article."
+SEARCH_TYPE_HELP = "Comma-delimited search result types: post (default), article."
 SEARCH_COLLECTION_HELP = "Comma-delimited collections: bookmark, like, tweet."
 SEARCH_SORT_HELP = "Search result sort: relevance, newest, oldest."
 ARTICLE_LIMIT_HELP = "Maximum number of archived article rows or explicit targets to process."
@@ -2230,21 +2231,59 @@ def search_archive(
     console = _configure_logging()
     store, paths = _open_store_for_read(console)
     try:
-        search_types = _parse_search_types(type_filter, console)
+        search_types = _parse_search_types(type_filter, console) or {"post"}
         search_collections = _parse_search_collections(collection_filter, console)
-        results = _with_auto_optimize(
-            store,
-            paths,
-            console,
-            lambda s: s.search_fts(
-                query,
-                limit=limit,
-                types=search_types,
-                collections=search_collections,
-            ),
-        )
+        parsed_query = parse_search_query(query)
 
-        results = _sort_search_results(results, sort=sort)
+        def run_search(search_store):
+            combined: list[dict[str, Any]] = []
+            post_page = None
+            if "post" in search_types:
+                post_page = search_posts(
+                    search_store,
+                    query,
+                    collections=search_collections,
+                    sort=sort,
+                    limit=limit,
+                )
+                for row in post_page.rows:
+                    author = row.get("author") or {}
+                    collections = row.get("collections") or []
+                    if not collections:
+                        collection = (row.get("collection") or {}).get("type")
+                        collections = [collection] if collection else []
+                    combined.append(
+                        {
+                            "tweet_id": row.get("tweet_id"),
+                            "type": "post",
+                            "collections": collections,
+                            "author_id": author.get("id"),
+                            "author_username": author.get("username"),
+                            "created_at": row.get("created_at"),
+                            "text": row.get("text"),
+                            "match_score": row.get("match_score"),
+                        }
+                    )
+            if "article" in search_types:
+                if any(
+                    clause.kind == "filter" for group in parsed_query.groups for clause in group
+                ):
+                    raise SearchQueryError(
+                        "Structured filters apply to posts; use filter:articles to find posts "
+                        "with attached articles."
+                    )
+                combined.extend(
+                    search_store.search_fts(
+                        query,
+                        limit=limit,
+                        types={"article"},
+                        collections=search_collections,
+                    )
+                )
+            return combined, post_page
+
+        results, post_page = _with_auto_optimize(store, paths, console, run_search)
+        results = _sort_search_results(results, sort=sort)[:limit]
         if not results:
             console.print("[yellow]No results found.[/yellow]")
             return
@@ -2267,7 +2306,10 @@ def search_archive(
                     created_at=row.get("created_at"),
                     author_username=row.get("author_username"),
                     author_id=row.get("author_id"),
-                    text=_format_tweet_text(row.get("text"), highlight_query=query),
+                    text=_format_tweet_text(
+                        row.get("text"),
+                        highlight_query=" ".join(parsed_query.positive_text_terms()),
+                    ),
                     match=match_label,
                     score=str(score) if score not in (None, "") else None,
                 )
@@ -2276,8 +2318,20 @@ def search_archive(
             console,
             title=f"search: {query}",
             rows=display_rows,
-            count_line=f"showing {len(display_rows)} search results",
+            count_line=(
+                f"showing {len(display_rows)} of {post_page.total} search results"
+                if post_page is not None and search_types == {"post"}
+                else f"showing {len(display_rows)} search results"
+            ),
         )
+        if post_page is not None and post_page.truncated:
+            console.print(
+                "[yellow]Search reached the 1,000-candidate limit; "
+                "results may be incomplete.[/yellow]"
+            )
+    except SearchQueryError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
     finally:
         store.close()
 

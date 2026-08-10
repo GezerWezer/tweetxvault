@@ -397,12 +397,16 @@ fetch_avatars = true
 ### Searching
 
 ```bash
-# Search posts and articles together
+# Search posts with the same query language used by the Web UI
 uv run tweetxvault search "machine learning"
 
-# Limit search to result types and/or collections
+# Search article titles and bodies explicitly, or narrow post collections
 uv run tweetxvault search "machine learning" --type article
 uv run tweetxvault search "machine learning" --type post --collection bookmark,like
+
+# Combine Twitter-style filters; ordinary clauses are ANDed by default
+uv run tweetxvault search 'from:alice "machine learning" filter:articles'
+uv run tweetxvault search 'from:alice OR from:bob has:image'
 
 # Sort search results chronologically instead of by relevance
 uv run tweetxvault search "machine learning" --sort newest
@@ -412,11 +416,16 @@ uv run tweetxvault search "machine learning" --sort oldest
 uv run tweetxvault search "transformer architecture" --limit 50
 ```
 
-The database utilizes SQLite's native `FTS5` engine and maps standard Twitter Advanced Search operators directly. The Web UI provides a Discord-style dropdown to help autocomplete these.
+The CLI and Web UI use the same SQLite FTS5-backed post search engine and Twitter-style filters.
+Spaces are an implicit `AND`; standalone uppercase `AND` is accepted when useful, and uppercase
+`OR` groups the clauses immediately around it while surrounding clauses remain required. Lowercase
+`and` and `or` remain ordinary search words. The Web UI continues to provide its existing dropdown
+for filter autocomplete.
 
 **Supported Search Operators:**
 - `"exact phrase"` — wrap words in quotes to find an exact match
-- `OR` — `cats OR dogs` matches tweets containing either
+- `AND` — optional explicit form of the default all-clauses-required behavior
+- `OR` — `cats OR dogs` matches posts containing either adjacent clause
 - `*` — prefix wildcard (e.g., `py*` matches `python`)
 - `-` — exclusion (e.g., `cats -dogs`)
 - `#hashtag` and `$cashtag` support
@@ -424,9 +433,10 @@ The database utilizes SQLite's native `FTS5` engine and maps standard Twitter Ad
 - `since:YYYY-MM-DD` / `until:YYYY-MM-DD` — filter by date range
 - `min_faves:N` / `min_retweets:N` / `min_replies:N` — filter by engagement thresholds
 - `filter:images` / `filter:videos` / `filter:media` / `filter:links` — filter by attached media
+- `filter:articles` — match posts with an attached archived article
 
 Filters:
-- `--type` — comma-delimited result types: `post`, `article`
+- `--type` — comma-delimited result types: `post` (default), `article`
 - `--collection` — comma-delimited archive collections: `bookmark`, `like`, `tweet`
 - `--sort` — `relevance` (default), `newest`, or `oldest`
 
