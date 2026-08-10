@@ -1,3 +1,12 @@
+- 2026-08-09 (Numeric tagging batches)
+  - Changed `tweetxvault tag --batch` from a boolean override to a required positive batch size.
+  - Redefined the command's `--limit` as a top-level batch count; for example,
+    `--batch 20 --limit 5` selects at most 100 tweets across five batches.
+  - Preserved configured batch behavior for bare tagging and automatic sync follow-ups.
+  - Focused tagging tests, the full pytest suite, repository-wide Ruff lint, scoped formatting,
+    compilation, and diff checks pass. The repository-wide format check still reports the
+    pre-existing `tests/test_auth.py` and unrelated modified `tweetxvault/resurrection.py`.
+
 - 2026-08-09 (Shared CLI/Web search engine)
   - Extracted the Web post-search parser, structured filters, execution paths, availability rules,
     sorting, and pagination into a presentation-neutral `tweetxvault.search` module used by both

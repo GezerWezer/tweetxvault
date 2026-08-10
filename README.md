@@ -488,11 +488,11 @@ the configured Gemini requests-per-day limit is reached:
 # Tag all eligible media tweets, respecting configured batching and RPD
 uv run tweetxvault tag
 
-# Stop after selecting at most 100 tweets
-uv run tweetxvault tag --limit 100
+# Process at most 5 batches using the configured batch size
+uv run tweetxvault tag --limit 5
 
-# Enable configured-size batches even when tagging.batch is false
-uv run tweetxvault tag --batch
+# Process at most 5 batches of up to 20 tweets each
+uv run tweetxvault tag --batch 20 --limit 5
 
 # Tag or re-tag one archived tweet by ID or status URL
 uv run tweetxvault tag 2026531440414925307
@@ -504,6 +504,11 @@ uv run tweetxvault tag 2026531440414925307 --test
 # Override the configured Gemini model for this run
 uv run tweetxvault tag --model gemini-3.6-flash
 ```
+
+`--batch N` sets the number of tweets in each batch for this invocation. `--limit N`
+limits the number of batches, so `--batch 20 --limit 5` selects at most 100 tweets across
+five batches. Without `--batch`, the command uses `tagging.limit` when `tagging.batch` is
+enabled and otherwise processes one tweet per batch.
 
 `--test` is limited to one tweet and prints the archived tweet context, generated
 description, and normalized tags rather than the raw model response. It does not create,

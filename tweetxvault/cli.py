@@ -194,7 +194,8 @@ MEDIA_LIMIT_HELP = "Maximum number of pending media rows to process."
 MEDIA_PHOTOS_ONLY_HELP = "Only download photo rows and skip video or animated GIF media."
 RETRY_FAILED_HELP = "Retry rows that previously failed instead of only untouched pending rows."
 UNFURL_LIMIT_HELP = "Maximum number of saved URL rows to fetch metadata for."
-TAG_LIMIT_HELP = "Maximum number of tweets to tag in this run."
+TAG_LIMIT_HELP = "Maximum number of batches to tag in this run."
+TAG_BATCH_HELP = "Number of tweets to include in each batch."
 SEARCH_QUERY_HELP = "Search query text."
 SEARCH_LIMIT_HELP = "Maximum number of results to return."
 # Keep the user-facing flag as --type, but map it onto internal search-result kinds so
@@ -1821,12 +1822,13 @@ def tag_archive(
         ),
     ] = False,
     batch: Annotated[
-        bool,
+        int | None,
         typer.Option(
             "--batch",
-            help="Batch tweets even when batching is disabled in config.toml.",
+            min=1,
+            help=TAG_BATCH_HELP,
         ),
-    ] = False,
+    ] = None,
     model: Annotated[
         str | None,
         typer.Option("--model", help="Override the Gemini model specified in config.toml"),
@@ -1893,8 +1895,8 @@ def tag_archive(
                     config=config,
                     paths=paths,
                     console=console,
-                    limit=limit,
-                    batch_override=batch,
+                    batch_limit=limit,
+                    batch_size=batch,
                     model_override=model,
                     dry_run=test,
                 )

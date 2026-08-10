@@ -140,11 +140,11 @@ def test_tag_help_documents_target_and_all_options() -> None:
     assert result.exit_code == 0
     assert "Tweet ID or x.com status URL to tag" in help_text
     assert "--limit" in help_text
-    assert "Maximum number of tweets to tag in this run" in help_text
+    assert "Maximum number of batches to tag in this run" in help_text
     assert "--test" in help_text
     assert "without saving media tags" in help_text
     assert "--batch" in help_text
-    assert "Batch tweets even when batching is disabled" in help_text
+    assert "Number of tweets to include in each batch" in help_text
     assert "--model" in help_text
     assert "Override the Gemini model specified in config.toml" in help_text
 
@@ -171,8 +171,8 @@ def test_tag_command_delegates_default_run_to_pending_runner_inside_locked_job(
             "config": config,
             "paths": paths,
             "console": ANY,
-            "limit": None,
-            "batch_override": False,
+            "batch_limit": None,
+            "batch_size": None,
             "model_override": None,
             "dry_run": False,
         }
@@ -196,6 +196,7 @@ def test_tag_command_forwards_limit_batch_test_and_model_to_pending_runner(
             "--limit",
             "7",
             "--batch",
+            "20",
             "--test",
             "--model",
             "gemini-explicit",
@@ -214,8 +215,8 @@ def test_tag_command_forwards_limit_batch_test_and_model_to_pending_runner(
             "config": config,
             "paths": paths,
             "console": ANY,
-            "limit": 7,
-            "batch_override": True,
+            "batch_limit": 7,
+            "batch_size": 20,
             "model_override": "gemini-explicit",
             "dry_run": True,
         }
@@ -322,6 +323,21 @@ def test_tag_command_rejects_nonpositive_limit(
 
     assert result.exit_code == 2
     assert "Invalid value for '--limit'" in result.output
+
+
+@pytest.mark.parametrize("raw_batch", ["0", "-1"])
+def test_tag_command_rejects_nonpositive_batch_size(raw_batch: str) -> None:
+    result = runner.invoke(cli.app, ["tag", "--batch", raw_batch])
+
+    assert result.exit_code == 2
+    assert "Invalid value for '--batch'" in result.output
+
+
+def test_tag_command_requires_batch_size() -> None:
+    result = runner.invoke(cli.app, ["tag", "--batch"])
+
+    assert result.exit_code == 2
+    assert "Option '--batch' requires an argument" in result.output
 
 
 def test_tag_command_reports_no_eligible_rows_and_still_closes_job(

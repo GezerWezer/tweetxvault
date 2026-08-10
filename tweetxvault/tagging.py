@@ -657,14 +657,16 @@ async def tag_pending_media_tweets(
     paths: XDGPaths,
     console: Console,
     *,
-    limit: int | None = None,
-    batch_override: bool = False,
+    batch_limit: int | None = None,
+    batch_size: int | None = None,
     model_override: str | None = None,
     dry_run: bool = False,
 ) -> TaggingRunResult:
-    """Tag pending media tweets until work, quota, or the run limit is exhausted."""
-    if limit is not None and limit < 1:
-        raise ValueError("Tagging limit must be a positive integer")
+    """Tag pending media tweets until work, quota, or the batch limit is exhausted."""
+    if batch_limit is not None and batch_limit < 1:
+        raise ValueError("Tagging batch limit must be a positive integer")
+    if batch_size is not None and batch_size < 1:
+        raise ValueError("Tagging batch size must be a positive integer")
 
     pipeline = current_pipeline()
     if not config.tagging.enabled or not config.tagging.api_key:
@@ -678,7 +680,13 @@ async def tag_pending_media_tweets(
         return TaggingRunResult()
 
     model_name = model_override or config.tagging.model
-    batch_size = config.tagging.limit if config.tagging.batch or batch_override else 1
+    effective_batch_size = (
+        batch_size
+        if batch_size is not None
+        else config.tagging.limit
+        if config.tagging.batch
+        else 1
+    )
     step_key = "tagging"
     if pipeline is not None:
         pipeline.add_step(
@@ -733,15 +741,25 @@ async def tag_pending_media_tweets(
 
     if pipeline is not None:
         eligible_count = store.count_eligible_tweets_for_tagging()
-        effective_total = min(eligible_count, limit) if limit is not None else eligible_count
+        effective_batch_limit = 1 if dry_run else batch_limit
         if rpd_status is not None:
-            effective_total = min(effective_total, rpd_status.remaining * batch_size)
+            effective_batch_limit = (
+                min(effective_batch_limit, rpd_status.remaining)
+                if effective_batch_limit is not None
+                else rpd_status.remaining
+            )
+        effective_total = eligible_count
+        if effective_batch_limit is not None:
+            effective_total = min(
+                effective_total,
+                effective_batch_limit * effective_batch_size,
+            )
         if dry_run:
             effective_total = min(effective_total, 1)
         if effective_total <= 0:
             pipeline.skip_step(step_key, "no eligible untagged media tweets")
             return TaggingRunResult()
-        detail = f"{model_name} · configured batch size {config.tagging.limit}"
+        detail = f"{model_name} · batch size {effective_batch_size}"
         if rpd_status is not None:
             detail += f" · {rpd_status.remaining}/{rpd_status.limit} daily requests available"
         pipeline.add_step(
@@ -759,22 +777,19 @@ async def tag_pending_media_tweets(
             counters="0 processed · 0 tagged · 0 batches",
         )
 
-    effective_limit = 1 if dry_run else limit
+    effective_batch_limit = 1 if dry_run else batch_limit
     if pipeline is not None and rpd_status is not None:
-        quota_limit = rpd_status.remaining * batch_size
-        effective_limit = (
-            min(effective_limit, quota_limit) if effective_limit is not None else quota_limit
+        effective_batch_limit = (
+            min(effective_batch_limit, rpd_status.remaining)
+            if effective_batch_limit is not None
+            else rpd_status.remaining
         )
     processed = 0
     tagged = 0
     batches = 0
 
-    while effective_limit is None or processed < effective_limit:
-        selection_limit = batch_size
-        if effective_limit is not None:
-            selection_limit = min(selection_limit, effective_limit - processed)
-        if dry_run:
-            selection_limit = 1
+    while effective_batch_limit is None or batches < effective_batch_limit:
+        selection_limit = 1 if dry_run else effective_batch_size
 
         tweet_ids = store.get_eligible_tweets_for_tagging(limit=selection_limit)
         if not tweet_ids:

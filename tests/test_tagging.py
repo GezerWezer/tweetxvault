@@ -402,7 +402,7 @@ async def test_pending_tagging_loops_through_full_and_short_batches(
 
 
 @pytest.mark.asyncio
-async def test_pending_tagging_total_limit_clamps_the_final_batch(
+async def test_pending_tagging_limit_counts_complete_batches(
     monkeypatch: pytest.MonkeyPatch,
     paths,
 ) -> None:
@@ -421,17 +421,17 @@ async def test_pending_tagging_total_limit_clamps_the_final_batch(
         make_config(batch=True, limit=3),
         paths,
         console,
-        limit=5,
+        batch_limit=2,
     )
 
-    assert result == tagging.TaggingRunResult(processed=5, tagged=5, batches=2)
-    assert store.selection_limits == [3, 2]
-    assert selected_batches == [["1", "2", "3"], ["4", "5"]]
-    assert store.remaining == ["6", "7", "8"]
+    assert result == tagging.TaggingRunResult(processed=6, tagged=6, batches=2)
+    assert store.selection_limits == [3, 3]
+    assert selected_batches == [["1", "2", "3"], ["4", "5", "6"]]
+    assert store.remaining == ["7", "8"]
 
 
 @pytest.mark.asyncio
-async def test_pending_tagging_batch_override_enables_configured_batch_size(
+async def test_pending_tagging_batch_size_overrides_disabled_config_batching(
     monkeypatch: pytest.MonkeyPatch,
     paths,
 ) -> None:
@@ -450,7 +450,7 @@ async def test_pending_tagging_batch_override_enables_configured_batch_size(
         make_config(batch=False, limit=3),
         paths,
         console,
-        batch_override=True,
+        batch_size=3,
     )
 
     assert result == tagging.TaggingRunResult(processed=5, tagged=5, batches=2)
@@ -535,8 +535,8 @@ async def test_pending_tagging_dry_run_forces_one_tweet_and_one_batch(
         make_config(batch=True, limit=20),
         paths,
         console,
-        limit=10,
-        batch_override=True,
+        batch_limit=10,
+        batch_size=7,
         model_override="gemini-test",
         dry_run=True,
     )

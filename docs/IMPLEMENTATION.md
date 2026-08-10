@@ -11,6 +11,13 @@ Hard constraints:
 
 Definition of done: passes `uv run ruff format --check`, `uv run ruff check`, and `uv run pytest`.
 
+## Numeric tagging batches (2026-08-09)
+
+- [x] Require a positive size for `tweetxvault tag --batch N`.
+- [x] Interpret `tweetxvault tag --limit N` as a limit on top-level batches rather than tweets.
+- [x] Preserve configured batching for bare tagging and the automatic sync follow-up.
+- [x] Update CLI/runner regressions and user-facing documentation; pass focused and full validation.
+
 ## Shared CLI/Web search (2026-08-09)
 
 - [x] Extract the Web query parser, filters, search planning, sorting, availability rules, and
@@ -184,8 +191,8 @@ Planning note (2026-03-15):
   only retry layer.
 - [x] Create quota state lazily without migrating historical tag rows; existing installations
   intentionally start with fresh local usage state after upgrading.
-- [x] Make bare `tweetxvault tag` share the sync tagging loop, with total-run `--limit`,
-  batching override, model override, and explicit tweet ID/status-URL targeting.
+- [x] Make bare `tweetxvault tag` share the sync tagging loop, with a batch-count `--limit`,
+  numeric batch-size override, model override, and explicit tweet ID/status-URL targeting.
 - [x] Add one-tweet `tag --test` generation that prints validated tweet context, description,
   and normalized tags without changing media-tag state while still accounting for RPD usage.
 - [x] Remove obsolete embedding/vector surfaces and their redundant tests.
