@@ -1068,11 +1068,15 @@ test('config and stats requests update their matching UI state', async () => {
             }
             if (url === '/api/config') {
                 return {
-                    auth: { auth_token: 'masked' },
-                    sync: { page_delay: 2 },
-                    web: { host: '127.0.0.1', port: 8000 },
+                    values: {
+                        auth: { auth_token: 'masked' },
+                        sync: { page_delay: 2 },
+                        web: { host: '127.0.0.1', port: 8000 },
+                    },
+                    explicit: ['web.host'],
                 };
             }
+            if (url === '/api/config/defaults') return { web: { port: 8000 } };
             if (url === '/api/stats/latest-sync') return { latest_sync: '2026-07-30T00:00:00Z' };
             return {};
         },
@@ -1086,6 +1090,9 @@ test('config and stats requests update their matching UI state', async () => {
 
     await app.fetchConfig();
     assert.equal(app.configData.web.port, 8000);
+    assert.equal(app.configOriginal.web.port, 8000);
+    assert.equal(app.configDefaults.web.port, 8000);
+    assert.deepEqual(Array.from(app.configExplicit), ['web.host']);
     assert.equal(app.isFieldVisible('web', 'host'), true);
     assert.equal(app.isFieldVisible('auth', 'auth_token'), false);
     assert.equal(app.isFieldVisible('sync', 'page_delay'), false);
@@ -1094,9 +1101,93 @@ test('config and stats requests update their matching UI state', async () => {
     assert.equal(app.isFieldVisible('auth', 'auth_token'), false);
     assert.equal(app.getFieldType('web', 'port'), 'number');
     assert.equal(app.isFieldFullWidth('web', 'host'), true);
+    assert.equal(app.isConfigExplicit('web', 'host'), true);
 
     await app.fetchStats();
     assert.equal(app.lastSyncFormatted, '2026-07-30T00:00:00Z');
+});
+
+test('config saves only diffs and resets only eligible explicit fields', async () => {
+    const context = browserContext();
+    const requests = [];
+    const plain = value => JSON.parse(JSON.stringify(value));
+    let failNext = false;
+    const effective = {
+        auth: { auth_token: '********', ct0: null, user_id: '123' },
+        sync: { page_delay: 2 },
+        web: { host: '127.0.0.1', port: 8000, fetch_avatars: true },
+        database: { cache_size_kb: 524288, mmap_size_bytes: 1073741824 },
+        tagging: { api_key: '********', enabled: false },
+    };
+    let explicit = ['auth.auth_token', 'sync.page_delay', 'database.cache_size_kb', 'tagging.api_key'];
+    context.fetch = async (url, options = {}) => {
+        if (url === '/api/config/schema') return { ok: true, async json() { return { whitelist: [], blacklist: [], full_width: [], types: {} }; } };
+        if (url === '/api/config/defaults') return { ok: true, async json() { return JSON.parse(JSON.stringify(effective)); } };
+        if (url === '/api/config' && !options.method) {
+            return { ok: true, async json() { return { values: effective, explicit }; } };
+        }
+        requests.push(JSON.parse(options.body));
+        if (failNext) {
+            failNext = false;
+            return { ok: false, async text() { return 'invalid'; } };
+        }
+        const changes = requests.at(-1).changes;
+        for (const [field, value] of Object.entries(changes)) {
+            const [section, key] = field.split('.');
+            if (value === null) {
+                explicit = explicit.filter(item => item !== field);
+            } else {
+                effective[section][key] = value;
+                if (!explicit.includes(field)) explicit.push(field);
+            }
+        }
+        return { ok: true, async json() { return { values: effective, explicit }; } };
+    };
+    const { tweetApp } = loadScripts(context, ['themes.js', 'app.js'], '({tweetApp})');
+    const app = immediateComponent(tweetApp());
+
+    await app.fetchConfig();
+    app.showAdvancedConfig = true;
+    assert.deepEqual(plain(app.changedConfigValues()), {});
+    await app.saveConfig();
+    assert.equal(requests.length, 0);
+
+    app.configData.web.port = 9000;
+    await app.saveConfig();
+    assert.deepEqual(plain(requests.at(-1)), { changes: { 'web.port': 9000 } });
+    assert.equal(app.configOriginal.web.port, 9000);
+
+    app.configData.database.mmap_size_bytes = 536870912;
+    await app.saveConfig();
+    assert.deepEqual(plain(requests.at(-1)), { changes: { 'database.mmap_size_bytes': 536870912 } });
+    assert.equal('database.cache_size_kb' in requests.at(-1).changes, false);
+
+    await app.resetConfigField('database', 'cache_size_kb');
+    assert.deepEqual(plain(requests.at(-1)), { changes: { 'database.cache_size_kb': null } });
+
+    await app.restoreConfigDefaults();
+    assert.deepEqual(plain(requests.at(-1)), {
+        changes: {
+            'sync.page_delay': null,
+            'database.mmap_size_bytes': null,
+            'web.port': null,
+        },
+    });
+    assert.equal('auth.auth_token' in requests.at(-1).changes, false);
+    assert.equal('tagging.api_key' in requests.at(-1).changes, false);
+
+    app.configData.web.port = 7000;
+    failNext = true;
+    await app.saveConfig();
+    assert.equal(app.configData.web.port, 7000);
+    assert.notEqual(app.configOriginal.web.port, 7000);
+});
+
+test('config boolean controls bind actual booleans', () => {
+    const html = fs.readFileSync(path.join(ROOT, 'tweetxvault', 'web', 'index.html'), 'utf8');
+    assert.match(html, /<option :value="true">On<\/option>/);
+    assert.match(html, /<option :value="false">Off<\/option>/);
+    assert.doesNotMatch(html, /<option value="(?:true|false)">/);
 });
 
 test('text and card renderers escape HTML and reject active URL schemes', () => {

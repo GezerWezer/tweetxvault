@@ -214,8 +214,8 @@ def test_update_config_values_writes_only_changed_fields_and_escapes_strings(
     }
     assert get_explicit_config_fields(paths) == [
         "auth.auth_token",
-        "web.port",
         "database.cache_size_kb",
+        "web.port",
     ]
 
 

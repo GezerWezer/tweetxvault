@@ -119,14 +119,18 @@ export TWEETXVAULT_USER_ID="your_numeric_user_id"  # required for likes and own-
 
 ### 2. Config file
 
-Create `~/.config/tweetxvault/config.toml`:
+tweetxvault creates `~/.config/tweetxvault/config.toml` during normal initialization with this
+permanent authentication skeleton:
 
 ```toml
 [auth]
-auth_token = "your_auth_token"
-ct0 = "your_ct0_token"
-user_id = "your_numeric_user_id"
+auth_token = ""
+ct0 = ""
+user_id = ""
 ```
+
+Replace the empty strings to store credentials in the file. Empty values remain unset and do not
+interfere with environment variables or browser-cookie extraction.
 
 ### 3. Browser auto-extraction
 
@@ -651,7 +655,14 @@ contains the same information.
 
 ## Configuration
 
-All configuration is optional. Defaults work out of the box with browser cookie extraction.
+Only the permanent `[auth]` skeleton is created automatically. Every other configuration section
+and value is optional; missing values use built-in application defaults. The Web UI writes only
+settings that you actually change. Resetting a setting removes its explicit override, and Advanced
+settings remain absent from `config.toml` until customized. Environment-derived values affect only
+the running process and are never copied into the file as a side effect.
+
+The fixed SQLite defaults are a 512 MiB page-cache target per database connection and a 1 GiB mmap
+request. Both can be explicitly overridden in `[database]` or through Advanced settings.
 
 ### Sync tuning (config.toml or env vars)
 

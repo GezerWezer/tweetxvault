@@ -1297,8 +1297,8 @@
                                                     <!-- Boolean -->
                                                     <template x-if="getFieldType(sectionName, key) === 'boolean'">
                                                         <select x-model="configData[sectionName][key]" class="w-full bg-[var(--bg-primary)] border border-[var(--input-border)] text-[var(--text-primary)] rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[var(--accent-color)] transition">
-                                                            <option value="true">On</option>
-                                                            <option value="false">Off</option>
+                                                            <option :value="true">On</option>
+                                                            <option :value="false">Off</option>
                                                         </select>
                                                     </template>
 
@@ -1334,6 +1334,10 @@
                                                     <template x-if="configSchema.descriptions[sectionName + '.' + key]">
                                                         <span class="text-xs text-[var(--text-secondary)] mt-1" x-text="configSchema.descriptions[sectionName + '.' + key]"></span>
                                                     </template>
+                                                    <div class="flex items-center gap-2 mt-1" x-show="isConfigExplicit(sectionName, key)">
+                                                        <span class="text-xs text-[var(--text-secondary)]">Configured</span>
+                                                        <button type="button" @click="resetConfigField(sectionName, key)" class="text-xs text-[var(--accent-color)] hover:underline" :disabled="configSaving">Use Default</button>
+                                                    </div>
                                                 </div>
                                             </template>
                                         </div>

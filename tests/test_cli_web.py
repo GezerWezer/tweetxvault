@@ -4,6 +4,7 @@ import hashlib
 import signal
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -267,14 +268,12 @@ def test_start_creates_default_password_spawns_detached_process_and_writes_pid(
     config, paths = _configured(tmp_path, archive=True)
     _stub_start_prerequisites(monkeypatch, config, paths)
     monkeypatch.setattr(cli_web, "_is_running", lambda _pid: False)
-    saved: list[tuple[XDGPaths, AppConfig]] = []
+    saved: list[tuple[XDGPaths, dict[str, str]]] = []
     popen_calls: list[tuple[list[str], dict]] = []
     monkeypatch.setattr(
         cli_web,
-        "save_app_config",
-        lambda actual_paths, actual_config: saved.append(
-            (actual_paths, actual_config.model_copy(deep=True))
-        ),
+        "update_config_values",
+        lambda actual_paths, changes: saved.append((actual_paths, changes)),
     )
 
     def popen(command, **kwargs):
@@ -290,7 +289,7 @@ def test_start_creates_default_password_spawns_detached_process_and_writes_pid(
     assert config.web.password_hash == default_hash
     assert len(saved) == 1
     assert saved[0][0] is paths
-    assert saved[0][1].web.password_hash == default_hash
+    assert saved[0][1] == {"web.password_hash": default_hash}
     assert "WARNING: Starting with default password 'password'." in result.stdout
     assert "tweetxvault web set-password" in result.stdout
     assert "http://127.0.0.1:8000" in result.stdout
@@ -309,6 +308,43 @@ def test_start_creates_default_password_spawns_detached_process_and_writes_pid(
     assert "Started background server (PID: 2468)" in result.stdout
 
 
+def test_start_default_password_write_stays_sparse(monkeypatch, tmp_path: Path) -> None:
+    config, paths = _configured(tmp_path, archive=True)
+    paths.config_dir.mkdir(parents=True)
+    paths.config_file.write_text(
+        """
+[auth]
+auth_token = ""
+ct0 = ""
+user_id = ""
+
+[sync]
+page_delay = 1
+
+[tagging]
+enabled = true
+""".lstrip(),
+        encoding="utf-8",
+    )
+    config.sync.max_retries = 9  # Simulates an environment-derived effective value.
+    _stub_start_prerequisites(monkeypatch, config, paths)
+    monkeypatch.setattr(
+        cli_web.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: SimpleNamespace(pid=2469),
+    )
+
+    result = runner.invoke(cli_web.web_app, ["start"])
+
+    assert result.exit_code == 0
+    raw = tomllib.loads(paths.config_file.read_text(encoding="utf-8"))
+    assert raw["web"] == {"password_hash": hashlib.sha256(b"password").hexdigest()}
+    assert raw["sync"] == {"page_delay": 1}
+    assert raw["tagging"] == {"enabled": True}
+    assert "database" not in raw
+    assert "max_retries" not in raw["sync"]
+
+
 def test_start_warns_for_existing_default_password_without_resaving(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -317,7 +353,7 @@ def test_start_warns_for_existing_default_password_without_resaving(
     _stub_start_prerequisites(monkeypatch, config, paths)
     monkeypatch.setattr(
         cli_web,
-        "save_app_config",
+        "update_config_values",
         lambda *_args: pytest.fail("existing password should not be resaved"),
     )
     monkeypatch.setattr(
@@ -338,7 +374,7 @@ def test_start_with_secure_password_does_not_warn_or_save(monkeypatch, tmp_path:
     _stub_start_prerequisites(monkeypatch, config, paths)
     monkeypatch.setattr(
         cli_web,
-        "save_app_config",
+        "update_config_values",
         lambda *_args: pytest.fail("secure password should not be resaved"),
     )
     monkeypatch.setattr(
@@ -664,22 +700,52 @@ def test_restart_does_not_stop_when_archive_is_missing(monkeypatch, tmp_path: Pa
 
 def test_set_password_hashes_and_persists_value(monkeypatch, tmp_path: Path) -> None:
     config, paths = _configured(tmp_path)
-    saved: list[tuple[XDGPaths, AppConfig]] = []
+    saved: list[tuple[XDGPaths, dict[str, str]]] = []
     monkeypatch.setattr(cli_web, "load_config", lambda: (config, paths))
     monkeypatch.setattr(cli_web.typer, "prompt", lambda *_args, **_kwargs: "correct horse")
     monkeypatch.setattr(
         cli_web,
-        "save_app_config",
-        lambda actual_paths, actual_config: saved.append((actual_paths, actual_config)),
+        "update_config_values",
+        lambda actual_paths, changes: saved.append((actual_paths, changes)),
     )
 
     result = runner.invoke(cli_web.web_app, ["set-password"])
 
     assert result.exit_code == 0
-    assert config.web.password_hash == hashlib.sha256(b"correct horse").hexdigest()
-    assert saved == [(paths, config)]
+    expected_hash = hashlib.sha256(b"correct horse").hexdigest()
+    assert saved == [(paths, {"web.password_hash": expected_hash})]
     assert "Password updated in config.toml." in result.stdout
     assert "must restart" in result.stdout
+
+
+def test_set_password_updates_only_hash_and_preserves_sparse_values(
+    monkeypatch, tmp_path: Path
+) -> None:
+    config, paths = _configured(tmp_path)
+    paths.config_dir.mkdir(parents=True)
+    paths.config_file.write_text(
+        """
+[auth]
+auth_token = ""
+ct0 = ""
+user_id = ""
+
+[database]
+cache_size_kb = 64
+""".lstrip(),
+        encoding="utf-8",
+    )
+    config.sync.page_delay = 7  # Effective-only value must not be persisted.
+    monkeypatch.setattr(cli_web, "load_config", lambda: (config, paths))
+    monkeypatch.setattr(cli_web.typer, "prompt", lambda *_args, **_kwargs: "new secret")
+
+    result = runner.invoke(cli_web.web_app, ["set-password"])
+
+    assert result.exit_code == 0
+    raw = tomllib.loads(paths.config_file.read_text(encoding="utf-8"))
+    assert raw["database"] == {"cache_size_kb": 64}
+    assert raw["web"] == {"password_hash": hashlib.sha256(b"new secret").hexdigest()}
+    assert "sync" not in raw
 
 
 def test_set_password_rejects_empty_value(monkeypatch, tmp_path: Path) -> None:
@@ -688,7 +754,7 @@ def test_set_password_rejects_empty_value(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(cli_web.typer, "prompt", lambda *_args, **_kwargs: "")
     monkeypatch.setattr(
         cli_web,
-        "save_app_config",
+        "update_config_values",
         lambda *_args: pytest.fail("empty password must not save"),
     )
 
@@ -708,7 +774,7 @@ def test_set_password_uses_hidden_confirmation_prompt(monkeypatch, tmp_path: Pat
         return "secret"
 
     monkeypatch.setattr(cli_web.typer, "prompt", prompt)
-    monkeypatch.setattr(cli_web, "save_app_config", lambda *_args: None)
+    monkeypatch.setattr(cli_web, "update_config_values", lambda *_args: None)
 
     result = runner.invoke(cli_web.web_app, ["set-password"])
 
@@ -727,7 +793,7 @@ def test_set_password_reports_save_failure(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(cli_web.typer, "prompt", lambda *_args, **_kwargs: "secret")
     monkeypatch.setattr(
         cli_web,
-        "save_app_config",
+        "update_config_values",
         lambda *_args: (_ for _ in ()).throw(OSError("read only")),
     )
 

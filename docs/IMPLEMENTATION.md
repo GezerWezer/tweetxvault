@@ -17,10 +17,10 @@ Definition of done: passes `uv run ruff format --check`, `uv run ruff check`, an
 - [x] Make fresh and repaired configuration files contain the permanent auth skeleton only.
 - [x] Normalize blank auth placeholders without changing the raw file representation.
 - [x] Add validated sparse targeted writes, default removal, and explicit-field discovery.
-- [ ] Convert Web password CLI writes to targeted configuration updates.
-- [ ] Change the Web configuration API to `values`/`explicit` reads and `changes` writes.
-- [ ] Save only changed Web form fields and reset only eligible explicit overrides.
-- [ ] Update user documentation and pass focused plus complete validation.
+- [x] Convert Web password CLI writes to targeted configuration updates.
+- [x] Change the Web configuration API to `values`/`explicit` reads and `changes` writes.
+- [x] Save only changed Web form fields and reset only eligible explicit overrides.
+- [x] Update user documentation and pass focused plus complete validation.
 
 ## Search vocabulary and resurrection state follow-up (2026-08-10)
 

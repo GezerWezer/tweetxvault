@@ -16,7 +16,7 @@ function tweetApp() {
         searchQuery: '',
         error: null,
         showScrollTop: false,
-        
+
         threadData: null,
         loadingThread: false,
         threadCache: new Map(),
@@ -180,6 +180,9 @@ function tweetApp() {
         
         configSchema: null,
         configData: null,
+        configOriginal: null,
+        configDefaults: null,
+        configExplicit: [],
         configSaving: false,
         showAdvancedConfig: false,
         
@@ -1284,13 +1287,18 @@ function tweetApp() {
         
         async fetchConfig() {
             try {
-                const [resSchema, resConfig] = await Promise.all([
+                const [resSchema, resConfig, resDefaults] = await Promise.all([
                     fetch('/api/config/schema'),
-                    fetch('/api/config')
+                    fetch('/api/config'),
+                    fetch('/api/config/defaults')
                 ]);
-                if (resSchema.ok && resConfig.ok) {
+                if (resSchema.ok && resConfig.ok && resDefaults.ok) {
                     this.configSchema = await resSchema.json();
-                    this.configData = await resConfig.json();
+                    const config = await resConfig.json();
+                    this.configDefaults = await resDefaults.json();
+                    this.configData = JSON.parse(JSON.stringify(config.values));
+                    this.configOriginal = JSON.parse(JSON.stringify(config.values));
+                    this.configExplicit = config.explicit;
                 }
             } catch (e) {
                 console.error("Error fetching config", e);
@@ -1326,62 +1334,81 @@ function tweetApp() {
             if (this.configSchema && this.configSchema.full_width && this.configSchema.full_width.includes(fullKey)) return true;
             return false;
         },
-        
-        async saveConfig() {
+
+        isConfigExplicit(section, key) {
+            return this.configExplicit.includes(`${section}.${key}`);
+        },
+
+        changedConfigValues() {
+            const changes = {};
+            if (!this.configData || !this.configOriginal) return changes;
+            Object.entries(this.configData).forEach(([section, fields]) => {
+                Object.entries(fields).forEach(([key, value]) => {
+                    const original = this.configOriginal[section][key];
+                    if (JSON.stringify(value) !== JSON.stringify(original)) {
+                        changes[`${section}.${key}`] = value;
+                    }
+                });
+            });
+            return changes;
+        },
+
+        async submitConfigChanges(changes) {
+            if (Object.keys(changes).length === 0) return true;
             this.configSaving = true;
             try {
                 const res = await fetch('/api/config', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(this.configData)
+                    body: JSON.stringify({ changes })
                 });
-                if (res.ok) {
-                    const btn = document.getElementById('save-config-btn');
-                    if (btn) {
-                        const old = btn.innerHTML;
-                        btn.innerHTML = "Saved!";
-                        btn.classList.replace('bg-[var(--accent-color)]', 'bg-green-600');
-                        setTimeout(() => {
-                            btn.innerHTML = old;
-                            btn.classList.replace('bg-green-600', 'bg-[var(--accent-color)]');
-                        }, 2000);
-                    }
-                } else {
+                if (!res.ok) {
                     alert("Failed to save config: " + await res.text());
+                    return false;
                 }
+                const config = await res.json();
+                this.configData = JSON.parse(JSON.stringify(config.values));
+                this.configOriginal = JSON.parse(JSON.stringify(config.values));
+                this.configExplicit = config.explicit;
+                return true;
             } catch (e) {
                 console.error("Error saving config", e);
                 alert("Error saving config.");
+                return false;
             } finally {
                 this.configSaving = false;
             }
         },
         
-        async restoreConfigDefaults() {
-            if(!confirm("Are you sure you want to restore default configuration settings? This will overwrite your current settings, but your passwords and keys will be preserved.")) return;
-            
-            try {
-                const res = await fetch('/api/config/defaults');
-                if (res.ok) {
-                    const defaults = await res.json();
-                    if (this.configData.auth) {
-                        defaults.auth.auth_token = this.configData.auth.auth_token;
-                        defaults.auth.ct0 = this.configData.auth.ct0;
-                        defaults.auth.user_id = this.configData.auth.user_id;
-                    }
-                    if (this.configData.tagging) {
-                        defaults.tagging.api_key = this.configData.tagging.api_key;
-                    }
-                    if (this.configData.web) {
-                        defaults.web.host = this.configData.web.host;
-                        defaults.web.port = this.configData.web.port;
-                    }
-                    this.configData = defaults;
+        async saveConfig() {
+            const changes = this.changedConfigValues();
+            if (Object.keys(changes).length === 0) return;
+            if (await this.submitConfigChanges(changes)) {
+                const btn = document.getElementById('save-config-btn');
+                if (btn) {
+                    const old = btn.innerHTML;
+                    btn.innerHTML = "Saved!";
+                    btn.classList.replace('bg-[var(--accent-color)]', 'bg-green-600');
+                    setTimeout(() => {
+                        btn.innerHTML = old;
+                        btn.classList.replace('bg-green-600', 'bg-[var(--accent-color)]');
+                    }, 2000);
                 }
-            } catch (e) {
-                console.error("Error fetching defaults", e);
-                alert("Error fetching default config.");
             }
+        },
+
+        async resetConfigField(section, key) {
+            await this.submitConfigChanges({ [`${section}.${key}`]: null });
+        },
+
+        async restoreConfigDefaults() {
+            if(!confirm("Are you sure you want to restore default configuration settings? Your credentials and keys will be preserved.")) return;
+            const preserved = new Set(['tagging.api_key', 'web.password_hash']);
+            const resettable = this.configExplicit.filter(path => (
+                !path.startsWith('auth.') && !preserved.has(path)
+            ));
+            const changes = Object.fromEntries(resettable.map(path => [path, null]));
+            await this.submitConfigChanges(changes);
         },
 
         formatSyncDate(tweet) {

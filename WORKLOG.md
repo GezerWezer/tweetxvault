@@ -1,3 +1,19 @@
+- 2026-08-10 (Sparse configuration — CLI, API, and Web UI)
+  - Converted default-password creation and `web set-password` to write only
+    `web.password_hash`; removed the full-model save path and its application callers.
+  - Changed the authenticated config API to return masked effective `values` plus sorted explicit
+    file fields, and to accept validated dotted-path `changes` while blocking password-hash and
+    masked-placeholder persistence.
+  - Made the settings form retain an original snapshot, post only changed fields, avoid no-op
+    requests, reset individual overrides with `null`, and restore defaults by clearing eligible
+    explicit fields while preserving auth, API keys, and the hidden Web password.
+  - Updated boolean bindings to preserve real boolean values and documented sparse configuration
+    behavior plus the fixed 512 MiB cache / 1 GiB mmap defaults.
+  - Required focused commands pass (28 config, 50 SQLite, 58 Web CLI, and 16 route tests), as do
+    all 32 deterministic browser asset tests, all 826 Python tests, repository-wide Ruff lint,
+    scoped formatting, and `git diff --check`. The repository-wide format check reports six
+    pre-existing unrelated files.
+
 - 2026-08-10 (Sparse configuration and SQLite defaults — core)
   - Centralized SQLite defaults in `DatabaseConfig` at a fixed 524,288 KiB page cache and
     1,073,741,824-byte mmap request; storage now uses the same model defaults with or without an

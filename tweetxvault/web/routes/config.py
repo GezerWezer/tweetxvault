@@ -1,6 +1,6 @@
 """Configuration management endpoints."""
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -18,11 +18,7 @@ SECRET_FIELDS = (
 
 
 class ConfigUpdateRequest(BaseModel):
-    auth: dict
-    sync: dict
-    web: dict
-    database: dict
-    tagging: dict
+    changes: dict[str, Any]
 
 
 def _mask_secrets(data: dict) -> dict:
@@ -33,22 +29,16 @@ def _mask_secrets(data: dict) -> dict:
     return data
 
 
-def _restore_masked_secrets(data: dict, current_config) -> dict:
-    for section, field in SECRET_FIELDS:
-        section_data = data.get(section)
-        if not isinstance(section_data, dict) or section_data.get(field) != MASKED_SECRET:
-            continue
-        section_data[field] = getattr(getattr(current_config, section), field)
-    return data
-
-
 @router.get("/api/config")
 def api_get_config(_auth: Annotated[bool, Depends(verify_credentials)]):
     try:
-        from tweetxvault.config import load_config
+        from tweetxvault.config import get_explicit_config_fields, load_config
 
-        config, _ = load_config()
-        return _mask_secrets(config.model_dump())
+        config, paths = load_config()
+        return {
+            "values": _mask_secrets(config.model_dump()),
+            "explicit": get_explicit_config_fields(paths),
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
 
@@ -79,14 +69,27 @@ def api_post_config(
     _auth: Annotated[bool, Depends(verify_credentials)],
 ):
     try:
-        from tweetxvault.config import AppConfig, load_config, save_app_config
+        from tweetxvault.config import (
+            get_explicit_config_fields,
+            load_config,
+            update_config_values,
+        )
 
-        config, paths = load_config()
-        req_data = _restore_masked_secrets(req.model_dump(), config)
+        _, paths = load_config()
+        if "web.password_hash" in req.changes:
+            raise ValueError("web.password_hash cannot be changed through this endpoint")
+        secret_paths = {f"{section}.{field}" for section, field in SECRET_FIELDS}
+        if any(
+            path in secret_paths and value == MASKED_SECRET for path, value in req.changes.items()
+        ):
+            raise ValueError("Masked secret placeholders cannot be saved")
 
-        new_config = AppConfig.model_validate(req_data)
-        save_app_config(paths, new_config)
-        return {"status": "ok"}
+        update_config_values(paths, req.changes)
+        config, refreshed_paths = load_config()
+        return {
+            "values": _mask_secrets(config.model_dump()),
+            "explicit": get_explicit_config_fields(refreshed_paths),
+        }
     except Exception as e:
         import traceback
 

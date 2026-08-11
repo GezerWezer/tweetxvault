@@ -12,7 +12,7 @@ from pathlib import Path
 import typer
 from rich.console import Console
 
-from tweetxvault.config import load_config, save_app_config
+from tweetxvault.config import load_config, update_config_values
 from tweetxvault.web.address import display_web_url
 
 web_app = typer.Typer(no_args_is_help=True, help="Manage the background web UI server.")
@@ -124,8 +124,7 @@ def start_web() -> None:
 
     if not web_config.password_hash:
         web_config.password_hash = default_password_hash
-        config.web = web_config
-        save_app_config(paths, config)
+        update_config_values(paths, {"web.password_hash": default_password_hash})
         console.print(f"[red]WARNING: Starting with default password '{default_password}'.[/red]")
         console.print("[yellow]Please change it using: tweetxvault web set-password[/yellow]")
     elif web_config.password_hash == default_password_hash:
@@ -235,11 +234,9 @@ def set_password() -> None:
         console.print("[red]Password cannot be empty.[/red]")
         raise typer.Exit(1)
 
-    web_config = config.web
-    web_config.password_hash = hashlib.sha256(password.encode("utf-8")).hexdigest()
-    config.web = web_config
+    password_hash = hashlib.sha256(password.encode("utf-8")).hexdigest()
     try:
-        save_app_config(paths, config)
+        update_config_values(paths, {"web.password_hash": password_hash})
     except OSError as exc:
         console.print(f"[red]Failed to save password: {exc}[/red]")
         raise typer.Exit(1) from exc

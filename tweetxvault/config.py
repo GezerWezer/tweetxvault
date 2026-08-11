@@ -343,7 +343,7 @@ def get_explicit_config_fields(paths: XDGPaths) -> list[str]:
             if section == "auth" and field in AUTH_PLACEHOLDER_FIELDS and value == "":
                 continue
             explicit.append(path)
-    return explicit
+    return sorted(explicit)
 
 
 def get_config_ui_schema() -> dict[str, Any]:
@@ -411,7 +411,7 @@ def get_config_ui_schema() -> dict[str, Any]:
             "web.host": "Host",
             "web.port": "Port",
             "web.fetch_avatars": "Fetch Avatars locally",
-            "database.cache_size_kb": "Cache Size (KB)",
+            "database.cache_size_kb": "Cache Size (KiB)",
             "database.mmap_size_bytes": "MMap Size (Bytes)",
             "tagging.enabled": "Enable Tagging",
             "tagging.api_key": "Gemini API Key",
@@ -431,9 +431,13 @@ def get_config_ui_schema() -> dict[str, Any]:
             "auth.browser_profile": "Name of the browser profile to extract cookies from.",
             "auth.browser_profile_path": "Absolute path to a specific browser profile.",
             "auth.firefox_profile_path": "Absolute path to a Firefox profile.",
-            "database.cache_size_kb": "How much RAM to allocate for faster database queries.",
+            "database.cache_size_kb": (
+                "Maximum SQLite page-cache target per database connection. "
+                "Default: 524288 KiB (512 MiB)."
+            ),
             "database.mmap_size_bytes": (
-                "How much of the database file to map directly into memory for faster searching."
+                "Maximum portion of the database SQLite may access through memory-mapped I/O. "
+                "Default: 1073741824 bytes (1 GiB)."
             ),
             "sync.page_delay": "How many seconds to wait between fetching pages of tweets.",
             "sync.detail_delay": (
