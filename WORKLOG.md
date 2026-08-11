@@ -69,6 +69,12 @@
     adjacent, or trailing operators remain ordinary text, matching the shared parser contract.
   - Added deterministic browser coverage for valid, lowercase, and trailing operator rendering.
 
+- 2026-08-10 (Quoted autocomplete tokens)
+  - Kept an unfinished double-quoted operator value as one active autocomplete token across spaces,
+    stripped its quote delimiters from lookup text, and replaced the complete token on selection.
+  - Made rich search formatting retain unfinished quoted values as one operator expression and
+    added deterministic lookup, selection, and rendering coverage.
+
 - 2026-08-10 (Cached Web statistics)
   - Added a five-minute process-local Web cache for complete statistics reports. Initial collection
     and background refreshes are deduplicated; stale data remains available during refresh and

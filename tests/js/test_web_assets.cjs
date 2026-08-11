@@ -363,6 +363,46 @@ test('autocomplete quotes selected multi-word values and keeps caret position', 
     assert.deepEqual(selection, [23, 23]);
 });
 
+test('autocomplete keeps unfinished quoted values together across spaces', async () => {
+    const context = browserContext();
+    const calls = [];
+    context.fetch = async url => {
+        calls.push(url);
+        return {
+            ok: true,
+            async json() {
+                return { tags: [{ tag: 'Word 1', count: 2 }] };
+            },
+        };
+    };
+    const { searchAutocomplete } = loadScripts(
+        context,
+        ['autocomplete.js'],
+        '({searchAutocomplete})',
+    );
+    const component = immediateComponent(searchAutocomplete());
+    component.searchQuery = 'before tag:"word 1';
+    component.$refs.searchInput = {
+        isContentEditable: false,
+        selectionStart: component.searchQuery.length,
+        focus() {},
+        setSelectionRange() {},
+    };
+
+    component.handleInput();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    assert.equal(calls[0], '/api/tags/autocomplete?q=word%201');
+    assert.equal(component.options[0].value, 'Word 1');
+
+    component.selectOption();
+    assert.equal(component.searchQuery, 'before tag:"Word 1" ');
+
+    component.formatRichText('tag:"word 1');
+    assert.equal((component.$refs.searchInput.innerHTML.match(/capsule-key/g) || []).length, 1);
+    assert.match(component.$refs.searchInput.innerHTML, /&quot;word 1/);
+});
+
 test('autocomplete fetches author and tag suggestions with encoded queries', async () => {
     const context = browserContext();
     const calls = [];

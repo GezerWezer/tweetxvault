@@ -17,7 +17,7 @@ Definition of done: passes `uv run ruff format --check`, `uv run ruff check`, an
 - [x] Replace visible catch-all filter suggestions with distinct `has:` and `is:` groups.
 - [x] Add `is:resurrected` search support backed by canonical tweet-object state.
 - [x] Render valid uppercase `AND` / `OR` search operators as neutral capsules.
-- [ ] Keep autocomplete functional while entering quoted multi-word values.
+- [x] Keep autocomplete functional while entering quoted multi-word values.
 - [ ] Pass focused and complete validation.
 
 ## Web unavailable-post placeholders (2026-08-10)

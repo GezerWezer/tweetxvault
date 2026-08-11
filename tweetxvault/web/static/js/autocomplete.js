@@ -56,6 +56,19 @@ function searchAutocomplete() {
             { prefix: 'is:', value: 'verified', desc: 'From verified users' },
             { prefix: 'is:', value: 'resurrected', desc: 'Previously unavailable and recovered' }
         ],
+
+        currentSearchTokenStart(text) {
+            let tokenStart = 0;
+            let inQuotes = false;
+            for (let index = 0; index < text.length; index += 1) {
+                if (text[index] === '"') {
+                    inQuotes = !inQuotes;
+                } else if (/\s/.test(text[index]) && !inQuotes) {
+                    tokenStart = index + 1;
+                }
+            }
+            return tokenStart;
+        },
         
         handleInput() {
             const input = this.$refs.searchInput;
@@ -86,8 +99,8 @@ function searchAutocomplete() {
             }
             
             const textToCursor = this.searchQuery.substring(0, this.cursorPos);
-            const words = textToCursor.split(/\s+/);
-            const currentWord = words[words.length - 1] || '';
+            const tokenStart = this.currentSearchTokenStart(textToCursor);
+            const currentWord = textToCursor.substring(tokenStart);
             
             this.showDropdown = true;
             this.selectedIndex = 0;
@@ -96,7 +109,7 @@ function searchAutocomplete() {
                 const parts = currentWord.split(':');
                 const rawPrefix = parts[0] + ':';
                 const basePrefix = rawPrefix.startsWith('-') ? rawPrefix.substring(1) : rawPrefix;
-                const val = parts.slice(1).join(':').toLowerCase();
+                const val = parts.slice(1).join(':').replace(/^"/, '').replace(/"$/, '').toLowerCase();
                 
                 if (basePrefix === 'has:') {
                     this.options = this.hasOptions.filter(o => o.value.startsWith(val)).map(o => ({...o, prefix: rawPrefix}));
@@ -211,9 +224,7 @@ function searchAutocomplete() {
             
             const textToCursor = this.searchQuery.substring(0, this.cursorPos);
             const textAfterCursor = this.searchQuery.substring(this.cursorPos);
-            
-            const words = textToCursor.split(/\s+/);
-            words.pop();
+            const tokenStart = this.currentSearchTokenStart(textToCursor);
             
             let valueToInsert = opt.value;
             if (valueToInsert && valueToInsert.includes(' ')) {
@@ -222,7 +233,7 @@ function searchAutocomplete() {
             
             let insertion = opt.prefix + (valueToInsert ? valueToInsert + ' ' : '');
             
-            const newTextToCursor = (words.length > 0 ? words.join(' ') + ' ' : '') + insertion;
+            const newTextToCursor = textToCursor.substring(0, tokenStart) + insertion;
             this.searchQuery = newTextToCursor + textAfterCursor;
             
             this.showDropdown = false;
@@ -324,7 +335,7 @@ function searchAutocomplete() {
             const validBooleanOffsets = this.validBooleanOperatorOffsets(text);
             
             // Regex to parse operators vs normal text, preserving quotes and whitespace
-            const regex = /(\s+)|(?:(-?(?:from|to|has|is|filter|since|until|url|tag):)(".*?"|[^\s]*))|([^\s]+)/gi;
+            const regex = /(\s+)|(?:(-?(?:from|to|has|is|filter|since|until|url|tag):)("[^"]*(?:"|$)|[^\s]*))|([^\s]+)/gi;
             let match;
             
             while ((match = regex.exec(text)) !== null) {
