@@ -46,6 +46,14 @@
     pass. Repository-wide Ruff format check reports the same seven pre-existing files, including
     `tests/test_media_tags.py` and `tweetxvault/storage/backend.py` outside the task hunks.
 
+- 2026-08-10 (Search has/is vocabulary)
+  - Replaced the Web autocomplete's visible catch-all `filter:` group with `has:` for attached
+    content and `is:` for post types/states, while retaining every legacy `filter:` spelling in
+    the shared backend for existing queries.
+  - Added `has:article` plus `is:reply`, `is:quote`, `is:retweet`, `is:thread`, `is:verified`, and
+    `is:resurrected`; resurrection queries use canonical tweet-object state in conjunctive and OR
+    searches. Updated CLI/Web search documentation and parser/SQL/browser regressions.
+
 - 2026-08-10 (Cached Web statistics)
   - Added a five-minute process-local Web cache for complete statistics reports. Initial collection
     and background refreshes are deduplicated; stale data remains available during refresh and

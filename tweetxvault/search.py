@@ -38,8 +38,8 @@ _FILTER_KEYS = frozenset(
     }
 )
 _FILTER_VALUES = {
-    "has": frozenset({"media", "image", "video", "links"}),
-    "is": frozenset({"reply"}),
+    "has": frozenset({"article", "media", "image", "video", "links"}),
+    "is": frozenset({"quote", "reply", "resurrected", "retweet", "thread", "verified"}),
     "filter": frozenset(
         {
             "articles",
@@ -307,6 +307,8 @@ def _filter_matches(row: dict[str, Any], key: str, value: str) -> bool:
     if key == "max_id":
         return int(row.get("tweet_id", 0)) <= int(value)
     if key == "has":
+        if value == "article":
+            return bool(row.get("article"))
         if value == "media":
             return bool(row.get("media"))
         if value == "image":
@@ -318,7 +320,23 @@ def _filter_matches(row: dict[str, Any], key: str, value: str) -> bool:
         if value == "links":
             return bool(row.get("urls"))
     if key == "is":
-        return value == "reply" and bool(legacy.get("in_reply_to_status_id_str"))
+        if value == "reply":
+            return bool(legacy.get("in_reply_to_status_id_str"))
+        if value == "quote":
+            return bool(legacy.get("is_quote_status"))
+        if value == "retweet":
+            return bool(legacy.get("retweeted_status_id_str"))
+        if value == "thread":
+            return (legacy.get("in_reply_to_screen_name") or "").lower() == author.get(
+                "username", ""
+            ).lower()
+        if value == "verified":
+            user_result = raw.get("core", {}).get("user_results", {}).get("result", {})
+            return bool(
+                user_result.get("is_blue_verified") or user_result.get("legacy", {}).get("verified")
+            )
+        if value == "resurrected":
+            return row.get("enrichment_state") == "resurrected"
     if key == "filter":
         if value == "articles":
             return bool(row.get("article"))
@@ -439,8 +457,12 @@ def _normalized_filter_expr(key: str, value: str, *, negated: bool = False) -> s
         )
     elif (key, value) in {("has", "links"), ("filter", "links")}:
         condition = "related.record_type = 'url_ref'"
-    elif (key, value) == ("filter", "articles"):
+    elif (key, value) in {("has", "article"), ("filter", "articles")}:
         condition = "related.record_type = 'article'"
+    elif (key, value) == ("is", "resurrected"):
+        condition = (
+            "related.record_type = 'tweet_object' AND related.enrichment_state = 'resurrected'"
+        )
     if condition is None:
         return None
 
@@ -551,6 +573,20 @@ def _search_grouped(
     candidate_limit: int,
 ) -> SearchPage:
     rows = _export_candidates(store, collections)
+    needs_resurrected = any(
+        clause.kind == "filter" and clause.key == "is" and clause.value == "resurrected"
+        for group in parsed.groups
+        for clause in group
+    )
+    resurrected_ids: set[str] = set()
+    if needs_resurrected:
+        state_rows = store._query(
+            expr="record_type = 'tweet_object' AND enrichment_state = 'resurrected'",
+            cols=["tweet_id"],
+        )
+        resurrected_ids = {
+            row["tweet_id"] for row in state_rows if isinstance(row.get("tweet_id"), str)
+        }
     text_matches: dict[SearchClause, dict[str, float]] = {}
     truncated = False
     for group in parsed.groups:
@@ -587,7 +623,10 @@ def _search_grouped(
                     elif matched:
                         group_score = max(group_score, text_matches[clause][str(tweet_id)])
                 else:
-                    matched = _filter_matches(row, str(clause.key), clause.value)
+                    if clause.key == "is" and clause.value == "resurrected":
+                        matched = tweet_id in resurrected_ids
+                    else:
+                        matched = _filter_matches(row, str(clause.key), clause.value)
                     if clause.negated:
                         matched = not matched
                 group_match = group_match or matched

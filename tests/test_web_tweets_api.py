@@ -44,6 +44,7 @@ def _row(**overrides: Any) -> dict[str, Any]:
             }
         ],
         "media_tags": {"tags": ["Landscape", "Night"]},
+        "enrichment_state": "resurrected",
         "raw_json": {
             "source": '<a href="https://example.test">Twitter Web App</a>',
             "card": {"name": "summary"},
@@ -117,6 +118,11 @@ def test_parse_twitter_date(value: str, expected: float | None):
         ("has", "video"),
         ("has", "links"),
         ("is", "reply"),
+        ("is", "quote"),
+        ("is", "retweet"),
+        ("is", "thread"),
+        ("is", "verified"),
+        ("is", "resurrected"),
         ("filter", "replies"),
         ("filter", "quote"),
         ("filter", "nativeretweets"),

@@ -410,7 +410,7 @@ uv run tweetxvault search "machine learning" --type article
 uv run tweetxvault search "machine learning" --type post --collection bookmark,like
 
 # Combine Twitter-style filters; ordinary clauses are ANDed by default
-uv run tweetxvault search 'from:alice "machine learning" filter:articles'
+uv run tweetxvault search 'from:alice "machine learning" has:article'
 uv run tweetxvault search 'from:alice OR from:bob has:image'
 
 # Sort search results chronologically instead of by relevance
@@ -437,8 +437,14 @@ for filter autocomplete.
 - `from:username` / `to:username` — filter by author or recipient
 - `since:YYYY-MM-DD` / `until:YYYY-MM-DD` — filter by date range
 - `min_faves:N` / `min_retweets:N` / `min_replies:N` — filter by engagement thresholds
-- `filter:images` / `filter:videos` / `filter:media` / `filter:links` — filter by attached media
-- `filter:articles` — match posts with an attached archived article
+- `has:image` / `has:video` / `has:media` / `has:links` — filter by attached content
+- `has:article` — match posts with an attached archived article
+- `is:reply` / `is:quote` / `is:retweet` / `is:thread` — filter by post type
+- `is:verified` — match posts from verified users
+- `is:resurrected` — match previously unavailable posts that became accessible again
+
+Legacy `filter:` spellings remain accepted for compatibility but are no longer suggested by the
+Web autocomplete.
 
 Filters:
 - `--type` — comma-delimited result types: `post` (default), `article`

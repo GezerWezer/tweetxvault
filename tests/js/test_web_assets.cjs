@@ -273,7 +273,7 @@ test('autocomplete highlighting escapes API-provided labels', () => {
     assert.equal(component.highlightMatch('<script>', ''), '&lt;script&gt;');
 });
 
-test('autocomplete offers the attached-article filter', () => {
+test('autocomplete separates attached content from post types and states', () => {
     const context = browserContext();
     const { searchAutocomplete } = loadScripts(
         context,
@@ -281,7 +281,10 @@ test('autocomplete offers the attached-article filter', () => {
         '({searchAutocomplete})',
     );
     const component = searchAutocomplete();
-    assert.ok(component.filterOptions.some(option => option.value === 'articles'));
+    assert.ok(component.hasOptions.some(option => option.value === 'article'));
+    assert.ok(component.isOptions.some(option => option.value === 'resurrected'));
+    assert.ok(component.allFilters.some(option => option.prefix === 'is:'));
+    assert.ok(!component.allFilters.some(option => option.prefix === 'filter:'));
 });
 
 test('autocomplete keyboard navigation wraps and scrolls selected option', () => {

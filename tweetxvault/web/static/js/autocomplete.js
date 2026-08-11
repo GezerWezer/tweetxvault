@@ -32,8 +32,8 @@ function searchAutocomplete() {
         allFilters: [
             { prefix: 'from:', desc: 'Sent from a specific user' },
             { prefix: 'to:', desc: 'Replying to a specific user' },
-            { prefix: 'has:', desc: 'Includes specific type of media' },
-            { prefix: 'filter:', desc: 'Filter by tweet type' },
+            { prefix: 'has:', desc: 'Includes specific attached content' },
+            { prefix: 'is:', desc: 'Matches a post type or state' },
             { prefix: 'since:', desc: 'After a specific date (YYYY-MM-DD)' },
             { prefix: 'until:', desc: 'Before a specific date (YYYY-MM-DD)' },
             { prefix: 'url:', desc: 'Contains a specific URL' },
@@ -44,19 +44,17 @@ function searchAutocomplete() {
             { prefix: 'has:', value: 'media', desc: 'Images, videos, or GIFs' },
             { prefix: 'has:', value: 'image', desc: 'Only images' },
             { prefix: 'has:', value: 'video', desc: 'Videos or GIFs' },
-            { prefix: 'has:', value: 'links', desc: 'External links' }
+            { prefix: 'has:', value: 'links', desc: 'External links' },
+            { prefix: 'has:', value: 'article', desc: 'Attached archived article' }
         ],
         
-        filterOptions: [
-            { prefix: 'filter:', value: 'articles', desc: 'Posts with an attached article' },
-            { prefix: 'filter:', value: 'media', desc: 'Any media' },
-            { prefix: 'filter:', value: 'images', desc: 'Only images' },
-            { prefix: 'filter:', value: 'videos', desc: 'Videos or GIFs' },
-            { prefix: 'filter:', value: 'links', desc: 'External links' },
-            { prefix: 'filter:', value: 'replies', desc: 'Replies to other tweets' },
-            { prefix: 'filter:', value: 'quote', desc: 'Quote tweets' },
-            { prefix: 'filter:', value: 'threads', desc: 'Self-reply threads' },
-            { prefix: 'filter:', value: 'verified', desc: 'From verified users' }
+        isOptions: [
+            { prefix: 'is:', value: 'reply', desc: 'Replies to other posts' },
+            { prefix: 'is:', value: 'quote', desc: 'Quote posts' },
+            { prefix: 'is:', value: 'retweet', desc: 'Native reposts' },
+            { prefix: 'is:', value: 'thread', desc: 'Self-reply threads' },
+            { prefix: 'is:', value: 'verified', desc: 'From verified users' },
+            { prefix: 'is:', value: 'resurrected', desc: 'Previously unavailable and recovered' }
         ],
         
         handleInput() {
@@ -102,8 +100,8 @@ function searchAutocomplete() {
                 
                 if (basePrefix === 'has:') {
                     this.options = this.hasOptions.filter(o => o.value.startsWith(val)).map(o => ({...o, prefix: rawPrefix}));
-                } else if (basePrefix === 'filter:') {
-                    this.options = this.filterOptions.filter(o => o.value.startsWith(val)).map(o => ({...o, prefix: rawPrefix}));
+                } else if (basePrefix === 'is:') {
+                    this.options = this.isOptions.filter(o => o.value.startsWith(val)).map(o => ({...o, prefix: rawPrefix}));
                 } else if (basePrefix === 'since:' || basePrefix === 'until:') {
                     this.initDatePicker(val);
                     this.options = [{
@@ -274,7 +272,7 @@ function searchAutocomplete() {
             let html = '';
             
             // Regex to parse operators vs normal text, preserving quotes and whitespace
-            const regex = /(\s+)|(?:(-?(?:from|to|has|filter|since|until|url|tag):)(".*?"|[^\s]*))|([^\s]+)/gi;
+            const regex = /(\s+)|(?:(-?(?:from|to|has|is|filter|since|until|url|tag):)(".*?"|[^\s]*))|([^\s]+)/gi;
             let match;
             
             while ((match = regex.exec(text)) !== null) {
@@ -293,9 +291,11 @@ function searchAutocomplete() {
                         }
 
                         if (prefix.toLowerCase().endsWith('has:')) {
-                            isValid = ['media', 'image', 'video', 'links'].includes(cleanValue.toLowerCase());
+                            isValid = ['media', 'image', 'video', 'links', 'article'].includes(cleanValue.toLowerCase());
+                        } else if (prefix.toLowerCase().endsWith('is:')) {
+                            isValid = ['reply', 'quote', 'retweet', 'thread', 'verified', 'resurrected'].includes(cleanValue.toLowerCase());
                         } else if (prefix.toLowerCase().endsWith('filter:')) {
-                            isValid = ['media', 'images', 'videos', 'links', 'replies', 'quote', 'threads', 'verified'].includes(cleanValue.toLowerCase());
+                            isValid = ['articles', 'media', 'images', 'videos', 'native_video', 'links', 'replies', 'quote', 'nativeretweets', 'self_threads', 'threads', 'verified'].includes(cleanValue.toLowerCase());
                         } else if (prefix.toLowerCase().endsWith('tag:')) {
                             if (Array.isArray(this.globalTags)) {
                                 isValid = this.globalTags.some(t => t.tag.toLowerCase() === cleanValue.toLowerCase());
