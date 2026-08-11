@@ -11,6 +11,11 @@
   - Confirmed the configured live vault currently has no `media_tag` rows. An immutable 220 MB
     backup has 365 tag records (top tag `deadlock`, 47 posts), so the 700-post symptom was modeled
     on the production-sized clone. Removed all temporary database clones and benchmark scripts.
+  - Implemented schema v5 with an additive, backup-free covering partial index for media tags.
+    Exact `json_each` tag matching now drives quote traversal through target-ID probes with fixed
+    loop order, eliminating the full relation-index scan while preserving direct and quoted tags.
+  - Added fresh-schema, v4-to-v5 migration, exact-match, quoted-tag, and query-plan regressions.
+    Repository-wide Ruff lint, scoped format checks, and all 833 Python tests pass.
 
 - 2026-08-11 (Search query planning and FTS performance)
   - Reproduced production-sized search latency read-only on the 7.8 GB local vault: an empty page

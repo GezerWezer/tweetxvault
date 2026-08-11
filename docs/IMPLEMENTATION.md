@@ -11,6 +11,13 @@ Hard constraints:
 
 Definition of done: passes `uv run ruff format --check`, `uv run ruff check`, and `uv run pytest`.
 
+## High-cardinality tag search performance (2026-08-11)
+
+- [x] Reproduce count and page latency on a production-sized clone with 700 tagged posts.
+- [x] Replace the global quote-relation scan with target-index probes driven by matching tags.
+- [x] Add a covering partial media-tag index through an additive schema migration.
+- [x] Add migration, exact-match, and query-plan regressions and pass complete validation.
+
 ## Search performance follow-up (2026-08-11)
 
 - [x] Force selective partial or tweet-ID indexes for correlated attachment/state filters.

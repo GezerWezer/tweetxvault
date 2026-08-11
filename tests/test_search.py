@@ -426,13 +426,45 @@ def test_tag_search_matches_tags_on_a_quoted_original(tmp_path) -> None:
                 tweet_id="original",
                 raw_json=json.dumps({"tags": ["Quoted Topic", "Specific Subject"]}),
             ),
+            store._record(
+                row_key="tweet:like::near-match",
+                record_type="tweet",
+                tweet_id="near-match",
+                collection_type="like",
+                text="Similar but differently tagged post",
+                author_id="bob",
+                author_username="bob",
+                author_display_name="Bob",
+                created_at_ts=1,
+                sort_index="1",
+                raw_json=json.dumps({"legacy": {}}),
+            ),
+            store._record(
+                row_key="media_tag:near-match",
+                record_type="media_tag",
+                tweet_id="near-match",
+                raw_json=json.dumps({"tags": ["Quoted Topic Extended"]}),
+            ),
         ]
     )
 
+    statements: list[str] = []
+    store.conn.set_trace_callback(statements.append)
     direct = search_posts(store, 'tag:"Quoted Topic"')
+    store.conn.set_trace_callback(None)
     grouped = search_posts(store, 'tag:"Quoted Topic" OR from:nobody')
 
     assert [row["tweet_id"] for row in direct.rows] == ["quote"]
     assert direct.rows[0]["qt_media_tags"] == {"tags": ["Quoted Topic", "Specific Subject"]}
     assert [row["tweet_id"] for row in grouped.rows] == ["quote"]
+    count_sql = next(
+        statement
+        for statement in statements
+        if "COUNT(DISTINCT tweet_id)" in statement and "matching_tags" in statement
+    )
+    plan = " ".join(row["detail"] for row in store.conn.execute(f"EXPLAIN QUERY PLAN {count_sql}"))
+    assert "idx_archive_media_tag_lookup" in count_sql
+    assert "CROSS JOIN archive relation INDEXED BY idx_archive_target_tweet_id" in count_sql
+    assert "SEARCH relation USING INDEX idx_archive_target_tweet_id (target_tweet_id=?)" in plan
+    assert "SCAN relation USING INDEX idx_archive_tweet_id" not in plan
     store.close()

@@ -275,7 +275,7 @@ ARCHIVE_COLUMNS = [
     "value",
 ]
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 COLUMN_TYPES = {
     field: (
         "TEXT PRIMARY KEY"
@@ -362,6 +362,10 @@ class ArchiveStore:
             self._migrate_search_index(current_version)
             return
 
+        if current_version == 4:
+            self._migrate_search_support_indexes(current_version)
+            return
+
         self._migrate_legacy_database(current_version)
 
     def _create_latest_schema(self) -> None:
@@ -423,6 +427,18 @@ class ArchiveStore:
             to_version=SCHEMA_VERSION,
             backup_path=None,
             search_index_rebuilt=True,
+        )
+
+    def _migrate_search_support_indexes(self, current_version: int) -> None:
+        """Add derived search indexes without copying canonical archive data."""
+        with self.conn:
+            self._create_archive_indexes()
+            self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+        self.migration_report = MigrationReport(
+            from_version=current_version,
+            to_version=SCHEMA_VERSION,
+            backup_path=None,
         )
 
     def _archive_table_exists(self) -> bool:
@@ -606,6 +622,11 @@ class ArchiveStore:
             CREATE INDEX IF NOT EXISTS idx_archive_search_attachment
             ON archive(record_type, tweet_id, media_type)
             WHERE record_type IN ('media', 'url_ref')
+        """)
+        self.conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_archive_media_tag_lookup
+            ON archive(tweet_id, raw_json)
+            WHERE record_type = 'media_tag'
         """)
 
     def _backfill_enrichment_scheduler(self) -> None:

@@ -132,8 +132,15 @@ def test_schema_creates_fts_triggers_and_page_indexes(paths) -> None:
         ("index", "idx_archive_record_page"),
         ("index", "idx_archive_record_collection_page"),
         ("index", "idx_archive_tweet_id"),
+        ("index", "idx_archive_media_tag_lookup"),
         ("index", "idx_archive_search_attachment"),
     } <= objects
+    tag_index_sql = store.conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'index' "
+        "AND name = 'idx_archive_media_tag_lookup'"
+    ).fetchone()[0]
+    assert "ON archive(tweet_id, raw_json)" in tag_index_sql
+    assert "WHERE record_type = 'media_tag'" in tag_index_sql
     store.close()
 
 
@@ -320,6 +327,53 @@ def test_schema_v3_rebuilds_only_derived_search_index_without_backup(tmp_path: P
     assert [row["tweet_id"] for row in migrated.search_fts("membership")] == ["1"]
     assert migrated.search_fts("secondary") == []
     assert migrated.conn.execute("SELECT COUNT(*) FROM archive_fts").fetchone()[0] == 1
+    assert list(tmp_path.glob("*.bak")) == []
+    migrated.close()
+
+
+def test_schema_v4_adds_only_tag_search_index_without_backup(tmp_path: Path) -> None:
+    db_path = tmp_path / "archive.db"
+    initial = ArchiveStore(db_path, create=True)
+    initial._merge_records(
+        [
+            _membership(
+                initial,
+                "1",
+                collection="bookmark",
+                text="search index sentinel",
+                created_at=CREATED_2012,
+                created_at_ts=1,
+                sort_index="1",
+            ),
+            initial._record(
+                row_key="media_tag:1",
+                record_type="media_tag",
+                tweet_id="1",
+                raw_json=json.dumps({"tags": ["Nature"]}),
+            ),
+        ]
+    )
+    initial.conn.execute("DROP INDEX idx_archive_media_tag_lookup")
+    initial.conn.execute("PRAGMA user_version = 4")
+    initial.conn.commit()
+    initial.close()
+
+    migrated = ArchiveStore(db_path, create=True)
+
+    assert migrated.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    assert migrated.migration_report is not None
+    assert migrated.migration_report.from_version == 4
+    assert migrated.migration_report.to_version == SCHEMA_VERSION
+    assert migrated.migration_report.backup_path is None
+    assert migrated.migration_report.search_index_rebuilt is False
+    assert [row["tweet_id"] for row in migrated.search_fts("sentinel")] == ["1"]
+    assert (
+        migrated.conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'index' "
+            "AND name = 'idx_archive_media_tag_lookup'"
+        ).fetchone()
+        is not None
+    )
     assert list(tmp_path.glob("*.bak")) == []
     migrated.close()
 

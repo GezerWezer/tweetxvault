@@ -570,20 +570,24 @@ def _normalized_filter_expr(key: str, value: str, *, negated: bool = False) -> s
     elif key == "card_name":
         expression = f"json_extract(raw_json, '$.card.name') = {_sql_quote(value)}"
     elif key == "tag":
-        escaped_value = value.replace("'", "''")
+        normalized_value = _sql_quote(value.lower())
         expression = (
             "tweet_id IN ("
-            "SELECT direct_tag.tweet_id FROM archive direct_tag "
-            "WHERE direct_tag.record_type = 'media_tag' "
-            f"AND LOWER(direct_tag.raw_json) LIKE LOWER('%\"{escaped_value}\"%') "
-            "UNION SELECT relation.tweet_id "
-            "FROM archive relation INDEXED BY idx_archive_tweet_id "
-            "JOIN archive quoted_tag INDEXED BY idx_archive_tweet_id "
-            "ON quoted_tag.tweet_id = relation.target_tweet_id "
-            "AND quoted_tag.record_type = 'media_tag' "
-            "WHERE relation.record_type = 'tweet_relation' "
+            "WITH matching_tags(tweet_id) AS MATERIALIZED ("
+            "SELECT DISTINCT tagged.tweet_id "
+            "FROM archive tagged INDEXED BY idx_archive_media_tag_lookup "
+            "JOIN json_each(CASE WHEN json_valid(tagged.raw_json) "
+            "THEN tagged.raw_json ELSE '{}' END, '$.tags') AS media_tag "
+            "WHERE tagged.record_type = 'media_tag' "
+            "AND media_tag.type = 'text' "
+            f"AND LOWER(CAST(media_tag.value AS TEXT)) = {normalized_value}) "
+            "SELECT tweet_id FROM matching_tags "
+            "UNION SELECT relation.tweet_id FROM matching_tags "
+            "CROSS JOIN archive relation INDEXED BY idx_archive_target_tweet_id "
+            "WHERE relation.target_tweet_id = matching_tags.tweet_id "
+            "AND relation.record_type = 'tweet_relation' "
             "AND relation.relation_type = 'quote_of' "
-            f"AND LOWER(quoted_tag.raw_json) LIKE LOWER('%\"{escaped_value}\"%'))"
+            ")"
         )
     elif key == "hashtag":
         expression = (
