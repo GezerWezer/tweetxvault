@@ -12,7 +12,7 @@ from rich.console import Console
 import tweetxvault.archive_import as archive_import
 from tweetxvault.archive_import import import_x_archive
 from tweetxvault.config import AppConfig
-from tweetxvault.exceptions import ConfigError
+from tweetxvault.exceptions import ArchiveOwnerMismatchError, ConfigError
 from tweetxvault.grailbird import convert_archive, parse_user_details
 from tweetxvault.storage import open_archive_store
 
@@ -189,6 +189,38 @@ def test_convert_archive_without_user_details_keeps_owner_unset(
     tweet_row = store._query(expr="row_key = 'tweet:tweet::100'", limit=1)[0]
     assert tweet_row["author_id"] is None
     assert tweet_row["author_username"] is None
+    store.close()
+
+
+def test_unknown_owner_archive_rejected_for_owned_vault(
+    paths, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    grailbird_dir = _write_grailbird_archive(tmp_path, include_user_details=False)
+    converted_dir = tmp_path / "converted"
+    convert_archive(grailbird_dir, converted_dir)
+
+    store = open_archive_store(paths, create=True)
+    assert store is not None
+    store.ensure_archive_owner_id("42")
+    store.close()
+    _disable_live_reconciliation(monkeypatch)
+
+    with pytest.raises(ArchiveOwnerMismatchError, match="owner could not be determined"):
+        asyncio.run(
+            import_x_archive(
+                converted_dir,
+                config=AppConfig(),
+                paths=paths,
+                console=_console(),
+            )
+        )
+
+    store = open_archive_store(paths, create=False)
+    assert store is not None
+    assert store.get_archive_owner_id() == "42"
+    assert store._query(expr="record_type = 'tweet'") == []
+    assert store._query(expr="record_type = 'tweet_object'") == []
+    assert store._query(expr="record_type = 'raw_capture'") == []
     store.close()
 
 

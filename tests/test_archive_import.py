@@ -422,6 +422,40 @@ def test_import_x_archive_directory_populates_archive_and_copies_media(
     store.close()
 
 
+def test_deleted_tweets_without_deleted_header_remain_deleted(
+    paths, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    archive_dir = _write_archive_dir(tmp_path)
+    (archive_dir / "data" / "deleted-tweet-headers.js").write_text(
+        _wrap_ytd("YTD.deleted_tweet_headers.part0", []),
+        encoding="utf-8",
+    )
+    _disable_live_reconciliation(monkeypatch)
+
+    result = asyncio.run(
+        import_x_archive(
+            archive_dir,
+            config=AppConfig(),
+            paths=paths,
+            console=_console(),
+        )
+    )
+
+    assert result.counts["authored_tweets"] == 1
+    assert result.counts["deleted_authored_tweets"] == 1
+
+    store = open_archive_store(paths, create=False)
+    assert store is not None
+    tweet_row = store._query(expr="row_key = 'tweet:tweet::200'", limit=1)[0]
+    assert tweet_row["deleted_at"] is None
+    tweet_object = store._query(expr="row_key = 'tweet_object:200'", limit=1)[0]
+    assert tweet_object["deleted_at"] is None
+    assert tweet_object["enrichment_state"] == "terminal_unavailable"
+    assert tweet_object["enrichment_reason"] == "archive_deleted"
+    assert tweet_object["enrichment_retry_eligible"] == 0
+    store.close()
+
+
 def test_import_x_archive_logs_progress_on_tty(
     paths, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

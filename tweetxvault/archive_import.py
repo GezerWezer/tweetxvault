@@ -34,6 +34,7 @@ from tweetxvault.client.timelines import (
 from tweetxvault.config import AppConfig, XDGPaths
 from tweetxvault.exceptions import (
     APIResponseError,
+    ArchiveOwnerMismatchError,
     AuthExpiredError,
     ConfigError,
     FeatureFlagDriftError,
@@ -556,14 +557,20 @@ def _queue_secondary_graph(
     *,
     source: str,
     deleted_at_by_tweet_id: dict[str, str] | None = None,
+    force_deleted_tweet_id: str | None = None,
 ) -> None:
     deleted_at_by_tweet_id = deleted_at_by_tweet_id or {}
     for item in graph.tweet_objects.values():
+        force_deleted = item.tweet_id == force_deleted_tweet_id
         store._queue_record(
             store._tweet_object_record(
                 item,
                 source=source,
                 deleted_at=deleted_at_by_tweet_id.get(item.tweet_id),
+                enrichment_state="terminal_unavailable" if force_deleted else None,
+                enrichment_reason="archive_deleted" if force_deleted else None,
+                enrichment_retry_count=0 if force_deleted else None,
+                enrichment_retry_eligible=False if force_deleted else None,
                 cursor=buffer,
             ),
             cursor=buffer,
@@ -651,6 +658,7 @@ def _import_authored_tweets(
     *,
     deleted_headers: dict[str, str],
     counts: dict[str, int],
+    force_deleted: bool = False,
     progress: Callable[[int, int], None] | None = None,
     item_status: Callable[[str, int, int], None] | None = None,
     write_tracker: ArchiveWriteTracker | None = None,
@@ -706,8 +714,9 @@ def _import_authored_tweets(
                 deleted_at_by_tweet_id=(
                     {timeline_tweet.tweet_id: item.deleted_at} if item.deleted_at else {}
                 ),
+                force_deleted_tweet_id=timeline_tweet.tweet_id if force_deleted else None,
             )
-            if item.deleted_at:
+            if force_deleted or item.deleted_at:
                 counts["deleted_authored_tweets"] += 1
             else:
                 counts["authored_tweets"] += 1
@@ -1900,6 +1909,12 @@ async def import_x_archive(
 
             print_archive_migration_report(console, store)
             write_tracker = ArchiveWriteTracker(store)
+            existing_owner = store.get_archive_owner_id()
+            if identity.account_id is None and existing_owner is not None:
+                raise ArchiveOwnerMismatchError(
+                    "Archive owner could not be determined, but the local archive already "
+                    f"belongs to X user {existing_owner}."
+                )
             store.ensure_archive_owner_id(identity.account_id)
             if regen:
                 regen_step_key = "archive-regen"
@@ -2310,6 +2325,7 @@ async def import_x_archive(
                         identity,
                         deleted_headers=deleted_headers,
                         counts=counts,
+                        force_deleted=False,
                         progress=authored_progress,
                         item_status=(
                             lambda tweet_id, done, total: pipeline.update_step(
@@ -2373,6 +2389,7 @@ async def import_x_archive(
                         identity,
                         deleted_headers=deleted_headers,
                         counts=counts,
+                        force_deleted=True,
                         progress=deleted_progress,
                         item_status=(
                             lambda tweet_id, done, total: pipeline.update_step(
