@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from tweetxvault import search as archive_search
 from tweetxvault.export.common import normalize_collection_name
 from tweetxvault.search import SearchQueryError, search_posts
+from tweetxvault.web.availability import annotate_web_tweets, missing_web_tweet
 from tweetxvault.web.deps import get_store, verify_credentials
 
 router = APIRouter()
@@ -90,49 +91,7 @@ def api_tweets(
             limit=limit,
         )
         paginated_tweets = result.rows
-
-        qt_ids = set()
-        for r in paginated_tweets:
-            raw = r.get("raw_json", {})
-            if isinstance(raw, dict):
-                quote = raw.get("quoted_status_result", {}).get("result")
-                if isinstance(quote, dict):
-                    if quote.get("__typename") == "TweetWithVisibilityResults":
-                        quote = quote.get("tweet", {})
-                    qt_id = quote.get("rest_id")
-                    if qt_id:
-                        qt_ids.add(qt_id)
-
-        if qt_ids:
-            qt_media_rows = store._rows_for_values("media", "tweet_id", list(qt_ids))
-            qt_media_by_id = {}
-            for m in qt_media_rows:
-                tid = m.get("tweet_id")
-                if tid:
-                    qt_media_by_id.setdefault(tid, []).append(m)
-
-            for r in paginated_tweets:
-                raw = r.get("raw_json", {})
-                if isinstance(raw, dict):
-                    quote = raw.get("quoted_status_result", {}).get("result")
-                    if isinstance(quote, dict):
-                        if quote.get("__typename") == "TweetWithVisibilityResults":
-                            quote = quote.get("tweet", {})
-                        qt_id = quote.get("rest_id")
-                        if qt_id and qt_id in qt_media_by_id:
-                            r["qt_media"] = [
-                                {
-                                    "type": m.get("media_type"),
-                                    "width": m.get("width"),
-                                    "height": m.get("height"),
-                                    "duration_millis": m.get("duration_millis"),
-                                    "download": {
-                                        "local_path": m.get("local_path"),
-                                        "thumbnail_local_path": m.get("thumbnail_local_path"),
-                                    },
-                                }
-                                for m in qt_media_by_id[qt_id][:10]
-                            ]
+        annotate_web_tweets(store, paginated_tweets)
 
         return {
             "tweets": paginated_tweets,
@@ -264,7 +223,17 @@ def api_tweet_thread(
         )
         col_rows = store._query(
             expr=f"record_type = 'tweet' AND tweet_id IN ({id_list})",
-            cols=["tweet_id", "collection_type"],
+            cols=[
+                "tweet_id",
+                "collection_type",
+                "text",
+                "author_id",
+                "author_username",
+                "author_display_name",
+                "created_at",
+                "synced_at",
+                "raw_json",
+            ],
             limit=100,
             indexed_by="idx_archive_tweet_id",
         )
@@ -276,8 +245,10 @@ def api_tweet_thread(
         )
 
         col_dict = {}
+        membership_by_id = {}
         for c in col_rows:
             col_dict.setdefault(c["tweet_id"], []).append(c["collection_type"])
+            membership_by_id.setdefault(c["tweet_id"], c)
 
         tags_dict = {}
         for row in tag_rows:
@@ -289,7 +260,6 @@ def api_tweet_thread(
                 continue
 
         raw_by_tweet_id = {}
-        qt_ids = set()
         for obj in objs:
             tid = obj.get("tweet_id")
             raw_json = None
@@ -302,89 +272,17 @@ def api_tweet_thread(
                     pass
             if tid:
                 raw_by_tweet_id[tid] = raw_json
-            if raw_json:
-                quote = raw_json.get("quoted_status_result", {}).get("result")
-                if isinstance(quote, dict):
-                    if quote.get("__typename") == "TweetWithVisibilityResults":
-                        quote = quote.get("tweet", {})
-                    qt_id = quote.get("rest_id")
-                    if qt_id:
-                        qt_ids.add(qt_id)
 
         media_by_tweet_id = {}
         for row in media:
             if row.get("tweet_id"):
                 media_by_tweet_id.setdefault(row["tweet_id"], []).append(row)
 
-        qt_media_by_id = {}
-        qt_tags_by_id = {}
-        if qt_ids:
-            qt_media_rows = store._rows_for_values(
-                "media",
-                "tweet_id",
-                list(qt_ids),
-                columns=[
-                    "tweet_id",
-                    "media_type",
-                    "width",
-                    "height",
-                    "duration_millis",
-                    "local_path",
-                    "thumbnail_local_path",
-                ],
-            )
-            for m in qt_media_rows:
-                tid = m.get("tweet_id")
-                if tid:
-                    qt_media_by_id.setdefault(tid, []).append(m)
-            qt_tag_rows = store._rows_for_values(
-                "media_tag",
-                "tweet_id",
-                list(qt_ids),
-                columns=["tweet_id", "raw_json"],
-            )
-            for row in qt_tag_rows:
-                tid = row.get("tweet_id")
-                raw_tags = row.get("raw_json")
-                if not tid or not raw_tags:
-                    continue
-                try:
-                    tag_payload = json.loads(raw_tags)
-                except (TypeError, json.JSONDecodeError):
-                    continue
-                if isinstance(tag_payload, dict):
-                    qt_tags_by_id[tid] = tag_payload
-
         formatted = {}
         for obj in objs:
             tid = obj["tweet_id"]
             t_media = media_by_tweet_id.get(tid, [])
             raw_json = raw_by_tweet_id.get(tid)
-
-            qt_media_formatted = []
-            qt_media_tags = None
-            if raw_json and isinstance(raw_json, dict):
-                quote = raw_json.get("quoted_status_result", {}).get("result")
-                if isinstance(quote, dict):
-                    if quote.get("__typename") == "TweetWithVisibilityResults":
-                        quote = quote.get("tweet", {})
-                    qt_id = quote.get("rest_id")
-                    if qt_id:
-                        qt_media_tags = qt_tags_by_id.get(qt_id)
-                    if qt_id and qt_id in qt_media_by_id:
-                        qt_media_formatted = [
-                            {
-                                "type": m.get("media_type"),
-                                "width": m.get("width"),
-                                "height": m.get("height"),
-                                "duration_millis": m.get("duration_millis"),
-                                "download": {
-                                    "local_path": m.get("local_path"),
-                                    "thumbnail_local_path": m.get("thumbnail_local_path"),
-                                },
-                            }
-                            for m in qt_media_by_id[qt_id][:10]
-                        ]
 
             formatted[tid] = {
                 "tweet_id": tid,
@@ -411,14 +309,68 @@ def api_tweet_thread(
                     for m in t_media
                 ],
                 "raw_json": raw_json,
-                "qt_media": qt_media_formatted,
-                "qt_media_tags": qt_media_tags,
+                "qt_media": [],
+                "qt_media_tags": None,
                 "media_tags": tags_dict.get(tid),
             }
 
-        main_tweet = formatted.get(tweet_id)
-        if not main_tweet:
+        for tid, membership in membership_by_id.items():
+            if tid in formatted:
+                continue
+            raw_json = None
+            if membership.get("raw_json"):
+                try:
+                    parsed_raw = json.loads(membership["raw_json"])
+                    if isinstance(parsed_raw, dict):
+                        raw_json = parsed_raw
+                except (TypeError, json.JSONDecodeError):
+                    pass
+            formatted[tid] = {
+                "tweet_id": tid,
+                "text": membership.get("text") or "",
+                "collections": col_dict.get(tid, []),
+                "author": {
+                    "id": membership.get("author_id"),
+                    "username": membership.get("author_username"),
+                    "display_name": membership.get("author_display_name"),
+                },
+                "created_at": membership.get("created_at"),
+                "synced_at": membership.get("synced_at"),
+                "media": [
+                    {
+                        "type": item.get("media_type"),
+                        "width": item.get("width"),
+                        "height": item.get("height"),
+                        "duration_millis": item.get("duration_millis"),
+                        "download": {
+                            "local_path": item.get("local_path"),
+                            "thumbnail_local_path": item.get("thumbnail_local_path"),
+                        },
+                    }
+                    for item in media_by_tweet_id.get(tid, [])
+                ],
+                "raw_json": raw_json,
+                "qt_media": [],
+                "qt_media_tags": None,
+                "media_tags": tags_dict.get(tid),
+            }
+
+        known_relation_ids = {
+            value
+            for relation in all_relations
+            for value in (relation.get("tweet_id"), relation.get("target_tweet_id"))
+            if value
+        }
+        for tid in related_ids:
+            if tid not in formatted and tid in known_relation_ids:
+                formatted[tid] = missing_web_tweet(tid)
+
+        if tweet_id not in formatted:
             raise HTTPException(status_code=404, detail="Tweet not found")
+
+        annotate_web_tweets(store, list(formatted.values()))
+
+        main_tweet = formatted.get(tweet_id)
 
         main_tweet["local_quote_count"] = store.conn.execute(
             """
@@ -478,7 +430,7 @@ def api_tweet_thread(
 
             if tgt in children_map and rel_type in ("reply_to", "thread_parent"):
                 grandchild = formatted.get(src)
-                if grandchild and grandchild["author"]["id"] == main_author_id:
+                if main_author_id and grandchild and grandchild["author"]["id"] == main_author_id:
                     if grandchild not in children_map[tgt]["op_replies"]:
                         children_map[tgt]["op_replies"].append(grandchild)
 
@@ -538,6 +490,7 @@ def api_tweet_quotes(
         )
         paginated_ids = [r.get("tweet_id") for r in rows if r.get("tweet_id")]
         paginated_tweets = store.fetch_tweets_by_ids(paginated_ids)
+        annotate_web_tweets(store, paginated_tweets)
 
         return {"tweets": paginated_tweets, "total": total, "page": page, "limit": limit}
     except Exception as e:

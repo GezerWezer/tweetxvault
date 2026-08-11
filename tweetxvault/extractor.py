@@ -110,6 +110,7 @@ def classify_tweet_unavailability(typename: str, text: str | None) -> str:
         phrase in normalized
         for phrase in (
             "protected account",
+            "private account",
             "account is protected",
             "posts are protected",
             "tweets are protected",
@@ -884,6 +885,21 @@ def _visit_tweet(
                 graph.add_media(item)
     if not expand_attached:
         return
+    legacy = tweet.get("legacy") or {}
+    for relation_type, target_id in (
+        ("retweet_of", legacy.get("retweeted_status_id_str")),
+        ("quote_of", legacy.get("quoted_status_id_str")),
+    ):
+        if not isinstance(target_id, str) or not target_id:
+            continue
+        graph.add_relation(
+            TweetRelationData(
+                source_tweet_id=tweet_object.tweet_id,
+                relation_type=relation_type,
+                target_tweet_id=target_id,
+                raw_json={"relation_type": relation_type, "target_tweet_id": target_id},
+            )
+        )
     for relation_type, attached in _attached_tweets(tweet):
         target_id = attached.get("rest_id")
         if not target_id:

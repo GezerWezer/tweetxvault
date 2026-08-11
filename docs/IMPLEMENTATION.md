@@ -11,6 +11,18 @@ Hard constraints:
 
 Definition of done: passes `uv run ruff format --check`, `uv run ruff check`, and `uv run pytest`.
 
+## Web unavailable-post placeholders (2026-08-10)
+
+- [x] Stop excluding unavailable membership rows from shared search pagination.
+- [x] Define one Web availability contract from canonical enrichment state and safe fallback data.
+- [x] Normalize direct, quoted, retweeted, and relation-only posts through that contract.
+- [x] Preserve missing ancestors, children, quote targets, and retweet targets as typed placeholders.
+- [x] Prevent stale text, raw cards, media, and action counts from leaking into placeholders.
+- [x] Keep text and raw-only media gaps visible with compact placeholders, and quote-target gaps
+  inside the quote-post frame.
+- [x] Refresh bounded thread-cache entries so newly resurrected posts become visible.
+- [x] Add search, route, extractor, presentation, and browser-state regression coverage.
+
 ## Web tweet overflow and manual tag editing (2026-08-10)
 
 - [x] Add a Twitter-style overflow menu to top-level list cards and main detail tweets.

@@ -10,6 +10,7 @@ A Python CLI tool for archiving your Twitter/X bookmarks, likes, and authored tw
 
 ### New Fork Additions
 - **Interactive Web UI** — browse your archive through a local web server with thread navigation, article cards, and theme support
+- **Unavailable-post continuity** — protected, suspended, deleted, and otherwise missing posts remain visible as reason-aware placeholders instead of disappearing from feeds or threads
 - **Advanced full-text search** — built-in native SQLite FTS5 search supporting exact phrases, exclusions, and Twitter-style operators (`from:`, `min_faves:`, `filter:images`)
 - **Tombstone tracking** — safely records deleted/suspended tweets to prevent infinite request loops, and periodically attempts to "resurrect" them
 - **Thread depth limits** — prevents infinite web-crawler-like snowballing by strictly enforcing degrees of separation from your root bookmarks and likes
@@ -360,6 +361,7 @@ If you installed the `web` extra, you can browse your archive through an interac
 
 **Key Web UI Features:**
 - **History API Integration:** Browser back/forward buttons work flawlessly when diving in and out of threads, completely preserving scroll positions with zero flashing or resets.
+- **Unavailable Post Placeholders:** Protected, suspended, deleted, withheld, and otherwise unavailable posts keep their feed position and thread topology. Quoted, retweeted, and relation-only posts use the same reason-aware placeholder contract, while transiently incomplete posts retain any captured content. Sparse rows explicitly mark text, quote targets, and media metadata that were not captured.
 - **Native Render Fidelity:** Accurate styling for quoted tweets, circular avatars, and native rendering of cyan Twitter Polls. Article cards strip redundant `t.co` links, use `summary_large_image` thumbnails, and are fully clickable.
 - **Manual Tag Editing:** Every top-level post has a three-dot menu with tag viewing and editing, including descriptions and untagged posts. Hold the button for one second to open the tag view directly.
 - **Archive Analytics:** The overview reports unavailable imported tweets and their archive percentage. Archive status separates enrichment, thread expansion, missing enrichment, and resurrection, with an availability-reason breakdown. Storage shows an inline size breakdown in simplified or detailed form.

@@ -40,6 +40,7 @@ def test_unwrap_tweet_result_preserves_terminal_shapes(typename: str) -> None:
             "protected_account",
         ),
         ("This post is unavailable because the account is protected.", "protected_account"),
+        ("This Post is from a private account. {learnmore}", "protected_account"),
         ("Account suspended", "suspended_account"),
         (
             "The account that authored this post has been suspended.",

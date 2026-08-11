@@ -1,3 +1,27 @@
+- 2026-08-10 (Web unavailable-post placeholders)
+  - Removed availability-based search suppression so unavailable saved posts retain their feed
+    position and pagination. Added one Web presentation contract backed by canonical
+    `tweet_object` enrichment state/reason, with guarded legacy tombstone fallbacks.
+  - Applied the contract to direct, quoted, retweeted, and relation-only thread posts. Terminal
+    rows now suppress stale text, raw cards, media, and action counts; `done`/`resurrected` rows
+    replace stale tombstones; pending/transient rows retain richer captured content when present.
+  - Preserved quote/retweet relation IDs even when their embedded result is a tombstone, synthesized
+    missing thread members instead of dropping topology, and bounded successful thread caching to
+    60 seconds so recovered posts become visible without a page reload.
+  - Follow-up presentation QA found whitespace inheritance inflating callouts and a local GIF whose
+    raw payload contained media while normalized media rows were absent. Compact placeholders are
+    now 39px tall; missing direct/quoted text is explicit; raw photo/video/GIF metadata supplies the
+    existing `Media not downloaded` panel without pretending a local file exists.
+  - Missing quoted-post placeholders now render in the bordered quote-post frame on list, full-detail,
+    and split-panel surfaces instead of appearing as an unframed parent-tweet callout.
+  - Added canonical-state, legacy fallback, pagination, direct/attached placeholder, missing-thread,
+    relation extraction, cache refresh, escaping, and renderer regressions. All 804 Python tests,
+    all 26 deterministic browser asset tests, repository-wide Ruff lint, scoped Ruff formatting,
+    and `git diff --check` pass. The repository-wide format check reports the same seven pre-existing
+    unrelated files.
+  - Rendered isolated-archive QA confirmed protected, missing-text, and missing-quote callouts at
+    39px, the raw-only GIF media panel, no leaked stale text/action bar, and no console errors.
+
 - 2026-08-10 (Web tweet overflow and manual tag editing)
   - Added Twitter-style three-dot menus to top-level feed cards plus full-width and split-panel
     main tweet details. The dropdown currently contains Tags, fully covers its trigger from the

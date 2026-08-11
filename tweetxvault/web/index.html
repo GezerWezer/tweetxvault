@@ -274,10 +274,10 @@
                             <template x-if="getQuoteTweet(tweet)">
                                 <div>
                                     <template x-if="isTombstone(getQuoteTweet(tweet))">
-                                        <div class="mt-3 bg-[var(--bg-secondary)] rounded-xl p-4 text-[15px] text-[var(--text-secondary)]" x-text="getQuoteText(getQuoteTweet(tweet))"></div>
+                                        <div x-html="renderQuotePlaceholder(getQuoteTweet(tweet))" @click.stop></div>
                                     </template>
                                     <template x-if="!isTombstone(getQuoteTweet(tweet))">
-                                        <div class="mt-3 border border-[var(--border-color)] rounded-xl p-3 hover-bg transition cursor-pointer" @click.stop="openThread(getQuoteTweet(tweet).rest_id || getQuoteTweet(tweet).id_str)">
+                                        <div class="mt-3 border border-[var(--border-color)] rounded-xl p-3 hover-bg transition cursor-pointer" @click.stop="openThread(getTweetId(getQuoteTweet(tweet)))">
                                             <div class="flex items-center space-x-1 text-[15px] mb-1">
                                                 <div class="w-5 h-5 rounded-full flex-shrink-0 relative bg-[var(--gray-700)] flex items-center justify-center font-bold text-[var(--white-icon)] uppercase text-xs overflow-hidden">
                                                     <span x-text="getQuoteAuthor(getQuoteTweet(tweet)).initial"></span>
@@ -295,7 +295,7 @@
                                                 </div>
                                             </template>
 
-                                            <div class="text-[15px] whitespace-pre-wrap leading-normal break-words" x-html="formatText({text: getQuoteText(getQuoteTweet(tweet)), raw_json: getQuoteTweet(tweet)})" @click="handleTextClick($event)"></div>
+                                            <div class="text-[15px] whitespace-pre-wrap leading-normal break-words" x-html="formatText(getQuoteTweet(tweet))" @click="handleTextClick($event)"></div>
                                             <div x-html="renderMediaGrid(tweet.qt_media)" @click.stop></div>
                                             <div x-html="renderCard({raw_json: getQuoteTweet(tweet)})" @click.stop></div>
                                             <div x-html="renderCommunityNote(getQuoteTweet(tweet), true)" @click.stop></div>
@@ -427,10 +427,10 @@
                         <template x-if="getQuoteTweet(threadData?.main)">
                             <div>
                                 <template x-if="isTombstone(getQuoteTweet(threadData?.main))">
-                                    <div class="mt-3 bg-[var(--bg-secondary)] rounded-xl p-4 text-[15px] text-[var(--text-secondary)]" x-text="getQuoteText(getQuoteTweet(threadData?.main))"></div>
+                                    <div x-html="renderQuotePlaceholder(getQuoteTweet(threadData?.main))" @click.stop></div>
                                 </template>
                                 <template x-if="!isTombstone(getQuoteTweet(threadData?.main))">
-                                    <div class="mt-3 border border-[var(--border-color)] rounded-xl p-3 hover-bg transition cursor-pointer" @click.stop="openThread(getQuoteTweet(threadData?.main).rest_id || getQuoteTweet(threadData?.main).id_str)">
+                                    <div class="mt-3 border border-[var(--border-color)] rounded-xl p-3 hover-bg transition cursor-pointer" @click.stop="openThread(getTweetId(getQuoteTweet(threadData?.main)))">
                                         <div class="flex items-center space-x-1 text-[15px] mb-1">
                                             <div class="w-5 h-5 rounded-full flex-shrink-0 relative bg-[var(--gray-700)] flex items-center justify-center font-bold text-[var(--white-icon)] uppercase text-xs overflow-hidden">
                                                 <span x-text="getQuoteAuthor(getQuoteTweet(threadData?.main)).initial"></span>
@@ -448,7 +448,7 @@
                                             </div>
                                         </template>
 
-                                        <div class="text-[15px] whitespace-pre-wrap leading-normal break-words" x-html="formatText({text: getQuoteText(getQuoteTweet(threadData?.main)), raw_json: getQuoteTweet(threadData?.main)})" @click="handleTextClick($event)"></div>
+                                        <div class="text-[15px] whitespace-pre-wrap leading-normal break-words" x-html="formatText(getQuoteTweet(threadData?.main))" @click="handleTextClick($event)"></div>
                                         <div x-html="renderCard({raw_json: getQuoteTweet(threadData?.main)})" @click.stop></div>
                                         <div x-html="renderMediaGrid(threadData?.main?.qt_media)" @click.stop></div>
                                         <div x-html="renderCommunityNote(getQuoteTweet(threadData?.main), true)" @click.stop></div>
@@ -757,10 +757,10 @@
                         <template x-if="getQuoteTweet(panelThreadData?.main)">
                             <div>
                                 <template x-if="isTombstone(getQuoteTweet(panelThreadData?.main))">
-                                    <div class="mt-3 bg-[var(--bg-secondary)] rounded-xl p-4 text-[15px] text-[var(--text-secondary)]" x-text="getQuoteText(getQuoteTweet(panelThreadData?.main))"></div>
+                                    <div x-html="renderQuotePlaceholder(getQuoteTweet(panelThreadData?.main))" @click.stop></div>
                                 </template>
                                 <template x-if="!isTombstone(getQuoteTweet(panelThreadData?.main))">
-                                    <div class="mt-3 border border-[var(--border-color)] rounded-xl p-3 hover-bg transition cursor-pointer" @click.stop="openThread(getQuoteTweet(panelThreadData?.main).rest_id || getQuoteTweet(panelThreadData?.main).id_str, false, true)">
+                                    <div class="mt-3 border border-[var(--border-color)] rounded-xl p-3 hover-bg transition cursor-pointer" @click.stop="openThread(getTweetId(getQuoteTweet(panelThreadData?.main)), false, true)">
                                         <div class="flex items-center space-x-1 text-[15px] mb-1">
                                             <div class="w-5 h-5 rounded-full flex-shrink-0 relative bg-[var(--gray-700)] flex items-center justify-center font-bold text-[var(--white-icon)] uppercase text-xs overflow-hidden">
                                                 <span x-text="getQuoteAuthor(getQuoteTweet(panelThreadData?.main)).initial"></span>
@@ -776,7 +776,7 @@
                                                 Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo({raw_json: getQuoteTweet(panelThreadData?.main)}))" x-text="'@' + getReplyTo({raw_json: getQuoteTweet(panelThreadData?.main)})"></span>
                                             </div>
                                         </template>
-                                        <div class="text-[15px] whitespace-pre-wrap leading-normal break-words" x-html="formatText({text: getQuoteText(getQuoteTweet(panelThreadData?.main)), raw_json: getQuoteTweet(panelThreadData?.main)})" @click="handleTextClick($event)"></div>
+                                        <div class="text-[15px] whitespace-pre-wrap leading-normal break-words" x-html="formatText(getQuoteTweet(panelThreadData?.main))" @click="handleTextClick($event)"></div>
                                         <div x-html="renderCard({raw_json: getQuoteTweet(panelThreadData?.main)})" @click.stop></div>
                                         <div x-html="renderMediaGrid(panelThreadData?.main?.qt_media)" @click.stop></div>
                                         <div x-html="renderCommunityNote(getQuoteTweet(panelThreadData?.main), true)" @click.stop></div>

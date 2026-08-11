@@ -11,13 +11,6 @@ from typing import Any, Literal
 
 from tweetxvault.export.common import normalize_collection_name
 
-_UNAVAILABLE_TWEET_TEXTS = frozenset(
-    {
-        "This Post is from a suspended account. {learnmore}",
-        "This Post is from a private account. {learnmore}",
-        "This Post is from an account that no longer exists. {learnmore}",
-    }
-)
 _FILTER_KEYS = frozenset(
     {
         "from",
@@ -278,10 +271,6 @@ def _row_created_at_timestamp(row: dict[str, Any]) -> float | None:
             return datetime.strptime(raw, "%a %b %d %H:%M:%S %z %Y").timestamp()
         except ValueError:
             return None
-
-
-def _is_available_tweet(row: dict[str, Any]) -> bool:
-    return row.get("text") not in _UNAVAILABLE_TWEET_TEXTS
 
 
 def _filter_matches(row: dict[str, Any], key: str, value: str) -> bool:
@@ -548,7 +537,7 @@ def _export_candidates(store: Any, collections: set[str] | None) -> list[dict[st
     allowed_ids = _collection_ids(store, collections)
     if allowed_ids is not None:
         rows = [row for row in rows if row.get("tweet_id") in allowed_ids]
-    return [row for row in rows if _is_available_tweet(row)]
+    return rows
 
 
 def _search_grouped(
@@ -718,8 +707,6 @@ def search_posts(
             filter_expr += f" AND {collection_expr}"
         for expression in pushable_exprs:
             filter_expr += f" AND {expression}"
-        unavailable = ", ".join(_sql_quote(text) for text in _UNAVAILABLE_TWEET_TEXTS)
-        filter_expr += f" AND (text IS NULL OR text NOT IN ({unavailable}))"
         total = store._count_distinct("tweet_id", filter_expr)
         order_by = "created_at_ts DESC, CAST(sort_index AS INTEGER) DESC, tweet_id DESC"
         if effective_sort == "oldest":
@@ -749,7 +736,6 @@ def search_posts(
             types={"post"},
             collections=collections,
         )
-        hits = [hit for hit in hits if _is_available_tweet(hit)]
         truncated = len(hits) >= candidate_limit
         if effective_sort != "relevance":
             _sort_rows(hits, effective_sort)
@@ -774,7 +760,6 @@ def search_posts(
             types={"post"},
             collections=collections,
         )
-        hits = [hit for hit in hits if _is_available_tweet(hit)]
         truncated = len(hits) >= candidate_limit
         candidate_ids = [hit["tweet_id"] for hit in hits if hit.get("tweet_id")]
         matched_ids = _filter_candidate_ids(store, candidate_ids, pushable_exprs)
@@ -794,7 +779,6 @@ def search_posts(
                 truncated=truncated,
             )
         rows = store.fetch_tweets_by_ids([hit["tweet_id"] for hit in hits])
-        rows = [row for row in rows if _is_available_tweet(row)]
     else:
         rows = _export_candidates(store, collections)
     rows = _apply_advanced_filters(rows, post_filters if text_query else filters)

@@ -184,9 +184,11 @@ class ListingStore:
         rows: list[dict[str, Any]],
         *,
         search_rows: list[dict[str, Any]] | None = None,
+        object_rows: list[dict[str, Any]] | None = None,
     ) -> None:
         self.rows = rows
         self.search_rows = search_rows if search_rows is not None else rows
+        self.object_rows = object_rows or []
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.media_rows: list[dict[str, Any]] = []
 
@@ -196,27 +198,11 @@ class ListingStore:
 
     def _count_distinct(self, field: str, expr: str) -> int:
         self.calls.append(("count_distinct", {"field": field, "expr": expr}))
-        unavailable = {
-            "This Post is from a suspended account. {learnmore}",
-            "This Post is from a private account. {learnmore}",
-            "This Post is from an account that no longer exists. {learnmore}",
-        }
-        return len({row["tweet_id"] for row in self.rows if row.get("text") not in unavailable})
+        return len({row["tweet_id"] for row in self.rows})
 
     def _query(self, **kwargs: Any) -> list[dict[str, Any]]:
         self.calls.append(("query", kwargs))
         rows = self.rows
-        if "text NOT IN" in kwargs.get("expr", ""):
-            rows = [
-                row
-                for row in rows
-                if row.get("text")
-                not in {
-                    "This Post is from a suspended account. {learnmore}",
-                    "This Post is from a private account. {learnmore}",
-                    "This Post is from an account that no longer exists. {learnmore}",
-                }
-            ]
         if kwargs.get("cols") == ["DISTINCT tweet_id"]:
             rows = list({row["tweet_id"]: row for row in rows}.values())
         offset = kwargs.get("offset", 0)
@@ -265,15 +251,29 @@ class ListingStore:
         return [dict(row) for row in self.rows]
 
     def _rows_for_values(
-        self, record_type: str, field: str, values: list[str]
+        self,
+        record_type: str,
+        field: str,
+        values: list[str],
+        *,
+        columns: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         self.calls.append(
             (
                 "rows_for_values",
-                {"record_type": record_type, "field": field, "values": values},
+                {
+                    "record_type": record_type,
+                    "field": field,
+                    "values": values,
+                    "columns": columns,
+                },
             )
         )
-        return self.media_rows
+        if record_type == "tweet_object":
+            return [row for row in self.object_rows if row.get(field) in values]
+        if record_type == "media":
+            return [row for row in self.media_rows if row.get(field) in values]
+        return []
 
 
 def _list_tweets(
@@ -403,13 +403,66 @@ def test_api_tweets_has_media_uses_sql_pagination_without_export():
     assert "related.record_type = 'media'" in count["expr"]
 
 
-def test_api_tweets_filters_unavailable_tombstones_from_response():
+def test_api_tweets_includes_unavailable_tombstones_as_placeholders():
     unavailable = _row(text="This Post is from a suspended account. {learnmore}")
     store = ListingStore([unavailable, _row(tweet_id="201")])
     result = _list_tweets(store, limit=1)
-    assert [tweet["tweet_id"] for tweet in result["tweets"]] == ["201"]
-    assert result["total"] == 1
-    assert result["pages"] == 1
+    assert [tweet["tweet_id"] for tweet in result["tweets"]] == ["200"]
+    assert result["tweets"][0]["availability"] == {
+        "state": "unavailable",
+        "enrichment_state": None,
+        "reason": "suspended_account",
+        "message": "This post is from a suspended account.",
+        "placeholder": True,
+        "confirmed": False,
+        "retryable": None,
+        "checked_at": None,
+    }
+    assert result["total"] == 2
+    assert result["pages"] == 2
+
+
+def test_api_tweets_uses_canonical_state_instead_of_membership_text():
+    terminal = _row(tweet_id="terminal", text="ordinary archived text")
+    available = _row(
+        tweet_id="available",
+        text="This Post is from a suspended account. {learnmore}",
+    )
+    store = ListingStore(
+        [terminal, available],
+        object_rows=[
+            {
+                "tweet_id": "terminal",
+                "enrichment_state": "terminal_unavailable",
+                "enrichment_reason": "protected_account",
+                "enrichment_retry_eligible": 1,
+                "enrichment_checked_at": "2026-08-10T00:00:00+00:00",
+            },
+            {
+                "tweet_id": "available",
+                "text": "canonical recovered text",
+                "author_id": "u2",
+                "author_username": "recovered",
+                "author_display_name": "Recovered",
+                "raw_json": {"rest_id": "available", "legacy": {}},
+                "enrichment_state": "resurrected",
+                "enrichment_reason": None,
+                "enrichment_retry_eligible": 0,
+                "enrichment_checked_at": "2026-08-10T01:00:00+00:00",
+            },
+        ],
+    )
+
+    result = _list_tweets(store)
+    by_id = {tweet["tweet_id"]: tweet for tweet in result["tweets"]}
+
+    assert by_id["terminal"]["availability"]["reason"] == "protected_account"
+    assert by_id["terminal"]["availability"]["confirmed"] is True
+    assert by_id["terminal"]["raw_json"] is None
+    assert by_id["terminal"]["media"] == []
+    assert by_id["available"]["availability"]["state"] == "available"
+    assert by_id["available"]["availability"]["placeholder"] is False
+    assert by_id["available"]["text"] == "canonical recovered text"
 
 
 def test_api_tweets_real_store_deduplicates_memberships_and_filters_before_paging(tmp_path):
@@ -449,9 +502,10 @@ def test_api_tweets_real_store_deduplicates_memberships_and_filters_before_pagin
     second = _list_tweets(store, page=2, limit=1)
     filtered = _list_tweets(store, q="needle -from:nobody since:2026-01-01")
 
-    assert first["total"] == first["pages"] == 2
-    assert [tweet["tweet_id"] for tweet in first["tweets"]] == ["2"]
-    assert [tweet["tweet_id"] for tweet in second["tweets"]] == ["1"]
+    assert first["total"] == first["pages"] == 3
+    assert [tweet["tweet_id"] for tweet in first["tweets"]] == ["3"]
+    assert first["tweets"][0]["availability"]["reason"] == "suspended_account"
+    assert [tweet["tweet_id"] for tweet in second["tweets"]] == ["2"]
     assert {tweet["tweet_id"] for tweet in filtered["tweets"]} == {"1", "2"}
     store.close()
 
@@ -604,7 +658,11 @@ class ThreadStore:
         *,
         columns: list[str] | None = None,
     ) -> list[dict[str, Any]]:
-        assert (field, values) == ("tweet_id", ["quoted"])
+        assert field == "tweet_id"
+        if record_type == "tweet_object":
+            return []
+        if record_type == "tweet_relation":
+            return []
         if record_type == "media_tag":
             assert columns == ["tweet_id", "raw_json"]
             return [
@@ -722,7 +780,7 @@ def test_api_tweet_thread_parses_each_tweet_json_once_and_tolerates_malformed(mo
     result = api_tweet_thread("main", store=MalformedThreadStore(), _auth=True)
 
     assert result["main"]["raw_json"] is None
-    assert len(parsed_values) == 7  # five tweet objects and two media-tag rows
+    assert len(parsed_values) == 8  # five tweet objects and three direct/quoted media-tag rows
 
 
 class CycleStore(ThreadStore):
@@ -755,6 +813,54 @@ def test_api_tweet_thread_stops_parent_cycles_before_depth_cap():
     result = api_tweet_thread("main", store=store, _auth=True)
     assert result["main"]["tweet_id"] == "main"
     assert store.relation_call < 10
+
+
+def test_api_tweet_thread_preserves_relation_only_placeholders(tmp_path):
+    store = ArchiveStore(tmp_path / "archive.db", create=True)
+    store._merge_records(
+        [
+            store._record(
+                row_key="tweet_object:main",
+                record_type="tweet_object",
+                tweet_id="main",
+                text="main post",
+                author_id="u1",
+                author_username="alice",
+                author_display_name="Alice",
+                created_at="2026-08-10T00:00:00+00:00",
+                raw_json=json.dumps({"rest_id": "main", "legacy": {}}),
+                enrichment_state="done",
+            ),
+            store._record(
+                row_key="tweet_relation:main:reply_to:missing-parent",
+                record_type="tweet_relation",
+                tweet_id="main",
+                relation_type="reply_to",
+                target_tweet_id="missing-parent",
+            ),
+        ]
+    )
+
+    result = api_tweet_thread("main", store=store, _auth=True)
+    missing_main = api_tweet_thread("missing-parent", store=store, _auth=True)
+
+    assert [parent["tweet_id"] for parent in result["parents"]] == ["missing-parent"]
+    assert result["parents"][0]["availability"] == {
+        "state": "not_archived",
+        "enrichment_state": None,
+        "reason": "not_archived",
+        "message": "This post was not captured in the local archive.",
+        "placeholder": True,
+        "confirmed": False,
+        "retryable": None,
+        "checked_at": None,
+    }
+    assert missing_main["main"]["availability"]["state"] == "not_archived"
+    assert [child["tweet_id"] for child in missing_main["children"]] == ["main"]
+    with pytest.raises(fastapi.HTTPException) as exc:
+        api_tweet_thread("unknown", store=store, _auth=True)
+    assert exc.value.status_code == 404
+    store.close()
 
 
 def test_api_tweet_thread_quotes_untrusted_path_id_in_store_expressions():
@@ -800,6 +906,16 @@ class QuotesStore:
     def fetch_tweets_by_ids(self, ids: list[str]) -> list[dict[str, Any]]:
         return [{"tweet_id": value} for value in ids]
 
+    def _rows_for_values(
+        self,
+        _record_type: str,
+        _field: str,
+        _values: list[str],
+        *,
+        columns: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        return []
+
 
 def test_api_tweet_quotes_parameterizes_count_and_paginates_distinct_ids():
     store = QuotesStore()
@@ -807,12 +923,11 @@ def test_api_tweet_quotes_parameterizes_count_and_paginates_distinct_ids():
 
     result = api_tweet_quotes(payload, page=2, limit=2, store=store, _auth=True)
 
-    assert result == {
-        "tweets": [{"tweet_id": "q3"}, {"tweet_id": "q2"}],
-        "total": 3,
-        "page": 2,
-        "limit": 2,
-    }
+    assert [tweet["tweet_id"] for tweet in result["tweets"]] == ["q3", "q2"]
+    assert all(tweet["availability"]["state"] == "incomplete" for tweet in result["tweets"])
+    assert result["total"] == 3
+    assert result["page"] == 2
+    assert result["limit"] == 2
     assert store.conn.call is not None
     sql, params = store.conn.call
     assert payload not in sql

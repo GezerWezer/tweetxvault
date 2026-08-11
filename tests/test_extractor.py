@@ -187,6 +187,26 @@ def test_extract_secondary_objects_ignores_invalid_article_and_attached_payloads
     assert not graph.articles
 
 
+def test_extract_secondary_objects_keeps_ids_for_tombstone_attachments() -> None:
+    root = make_tweet_result("100", "root", user_id="1000")
+    root["legacy"]["quoted_status_id_str"] = "200"
+    root["legacy"]["retweeted_status_id_str"] = "300"
+    root["quoted_status_result"] = {
+        "result": {
+            "__typename": "TweetTombstone",
+            "tombstone": {"text": {"text": "This account is suspended."}},
+        }
+    }
+    root["legacy"]["retweeted_status_result"] = {"result": {"__typename": "TweetUnavailable"}}
+
+    graph = extract_secondary_objects(root)
+    relations = {
+        (relation.relation_type, relation.target_tweet_id) for relation in graph.relations.values()
+    }
+
+    assert relations == {("quote_of", "200"), ("retweet_of", "300")}
+
+
 def test_extract_secondary_objects_handles_sparse_url_and_media_items() -> None:
     root = make_tweet_result("100", "root", user_id="1000")
     root["legacy"]["entities"] = {

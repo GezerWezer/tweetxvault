@@ -20,6 +20,7 @@ function tweetApp() {
         threadData: null,
         loadingThread: false,
         threadCache: new Map(),
+        threadCacheTtlMs: 60000,
         
         quotesTweetId: null,
         quotesList: [],
@@ -528,8 +529,9 @@ function tweetApp() {
         },
 
         async loadThread(tweetId) {
-            if (this.threadCache.has(tweetId)) {
-                return this.threadCache.get(tweetId);
+            const cached = this.threadCache.get(tweetId);
+            if (cached && Date.now() - cached.loadedAt < this.threadCacheTtlMs) {
+                return cached.request;
             }
 
             const request = (async () => {
@@ -537,14 +539,15 @@ function tweetApp() {
                 if (!res.ok) throw new Error('Failed to load thread');
                 return res.json();
             })();
-            this.threadCache.set(tweetId, request);
+            const cacheEntry = { request, loadedAt: Date.now() };
+            this.threadCache.set(tweetId, cacheEntry);
             if (this.threadCache.size > 25) {
                 this.threadCache.delete(this.threadCache.keys().next().value);
             }
             try {
                 return await request;
             } catch (error) {
-                if (this.threadCache.get(tweetId) === request) {
+                if (this.threadCache.get(tweetId) === cacheEntry) {
                     this.threadCache.delete(tweetId);
                 }
                 throw error;
@@ -1216,8 +1219,9 @@ function tweetApp() {
 
         getReplyTo(tweet) {
             if (!tweet || !tweet.raw_json) return null;
-            if (tweet.raw_json.legacy && tweet.raw_json.legacy.in_reply_to_screen_name) return tweet.raw_json.legacy.in_reply_to_screen_name;
-            if (tweet.raw_json.in_reply_to_screen_name) return tweet.raw_json.in_reply_to_screen_name;
+            let raw = tweet.raw_json.raw_json || tweet.raw_json;
+            if (raw.legacy && raw.legacy.in_reply_to_screen_name) return raw.legacy.in_reply_to_screen_name;
+            if (raw.in_reply_to_screen_name) return raw.in_reply_to_screen_name;
             return null;
         },
 
@@ -1372,7 +1376,9 @@ function tweetApp() {
         },
 
         getQuoteTweet(tweet) {
-            if (!tweet || !tweet.raw_json) return null;
+            if (!tweet || this.isPlaceholderTweet(tweet)) return null;
+            if (tweet.quoted_tweet) return tweet.quoted_tweet;
+            if (!tweet.raw_json) return null;
             const quote = tweet.raw_json.quoted_status_result?.result;
             if (quote?.__typename === 'TweetWithVisibilityResults') {
                 if (quote.birdwatch_pivot && quote.tweet) {
@@ -1388,10 +1394,39 @@ function tweetApp() {
 
         isTombstone(qt) {
             if (!qt) return false;
-            return qt.__typename === 'TweetTombstone' || qt.__typename === 'TweetUnavailable' || qt.__tombstone__ === true;
+            return this.isPlaceholderTweet(qt) || qt.__typename === 'TweetTombstone' || qt.__typename === 'TweetUnavailable' || qt.__tombstone__ === true;
+        },
+
+        isPlaceholderTweet(tweet) {
+            return Boolean(tweet?.availability?.placeholder);
+        },
+
+        renderContentPlaceholder(message, reason = 'details_not_archived') {
+            const safeMessage = this.escapeHTML(message || 'Post details were not captured.');
+            const safeReason = this.escapeHTML(reason);
+            return `<div class="tweet-availability-placeholder mt-2 flex items-center gap-2 rounded-lg border border-[var(--border-color)] bg-[var(--bg-secondary)] px-3 py-2 text-[15px] leading-snug text-[var(--text-secondary)] whitespace-normal" role="note" data-availability-reason="${safeReason}"><svg class="h-4 w-4 flex-shrink-0 fill-current opacity-60" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm1 15h-2v-2h2v2Zm0-4h-2V7h2v6Z"></path></svg><span>${safeMessage}</span></div>`;
+        },
+
+        renderTweetPlaceholder(tweet) {
+            return this.renderContentPlaceholder(
+                tweet?.availability?.message || 'This post is unavailable.',
+                tweet?.availability?.reason || 'unavailable_unknown',
+            );
+        },
+
+        renderQuotePlaceholder(tweet) {
+            const message = this.escapeHTML(
+                tweet?.availability?.message || 'This quoted post is unavailable.',
+            );
+            const reason = this.escapeHTML(
+                tweet?.availability?.reason || 'unavailable_unknown',
+            );
+            return `<div class="tweet-availability-placeholder tweet-quote-placeholder mt-3 flex items-center gap-2 rounded-xl border border-[var(--border-color)] px-3 py-3 text-[15px] leading-snug text-[var(--text-secondary)] whitespace-normal" role="note" data-availability-reason="${reason}"><svg class="h-4 w-4 flex-shrink-0 fill-current opacity-60" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm1 15h-2v-2h2v2Zm0-4h-2V7h2v6Z"></path></svg><span>${message}</span></div>`;
         },
 
         getRetweet(tweet) {
+            if (!tweet || this.isPlaceholderTweet(tweet)) return null;
+            if (tweet.retweeted_tweet) return tweet.retweeted_tweet;
             if (!tweet.raw_json) return null;
             const rt = tweet.raw_json.legacy?.retweeted_status_result?.result;
             if (rt?.__typename === 'TweetWithVisibilityResults') {
@@ -1404,6 +1439,15 @@ function tweetApp() {
         },
 
         formatRetweetToTweet(originalTweet, rt) {
+            if (rt.author) {
+                return {
+                    ...rt,
+                    synced_at: originalTweet.synced_at,
+                    collection: originalTweet.collection,
+                    collections: originalTweet.collections,
+                    media_tags: rt.media_tags || originalTweet.media_tags,
+                };
+            }
             const author = this.getQuoteAuthor(rt);
             return {
                 tweet_id: rt.rest_id || rt.id_str || originalTweet.tweet_id,
@@ -1420,6 +1464,15 @@ function tweetApp() {
 
         getQuoteAuthor(qt) {
             if (!qt) return { name: 'Unknown', screen_name: 'unknown', id: 'x', initial: '?' };
+            if (qt.author) {
+                const name = qt.author.display_name || 'Unknown';
+                return {
+                    name,
+                    screen_name: qt.author.username || 'unknown',
+                    id: qt.author.id || 'x',
+                    initial: name.charAt(0),
+                };
+            }
             const userResult = qt.core?.user_results?.result;
             let name = userResult?.legacy?.name || userResult?.core?.name || qt.user?.name || 'Unknown';
             let screen_name = userResult?.legacy?.screen_name || userResult?.core?.screen_name || qt.user?.screen_name || 'unknown';
@@ -1430,15 +1483,26 @@ function tweetApp() {
         getQuoteText(qt) {
             if (!qt) return '';
             if (this.isTombstone(qt)) {
-                return qt.tombstone?.text?.text || qt.text || "This post is unavailable.";
+                return qt.availability?.message || qt.tombstone?.text?.text || qt.text || "This post is unavailable.";
             }
-            return qt.legacy?.full_text || qt.full_text || qt.text || '';
+            return qt.text || qt.legacy?.full_text || qt.full_text || '';
+        },
+
+        getTweetId(tweet) {
+            return tweet?.tweet_id || tweet?.rest_id || tweet?.id_str || null;
         },
 
         formatText(tweet, forceFull = false) {
             if (!tweet) return '';
-            let text = tweet.text || '';
-            const raw = tweet.raw_json;
+            if (this.isPlaceholderTweet(tweet)) return this.renderTweetPlaceholder(tweet);
+            const raw = tweet.raw_json?.raw_json || tweet.raw_json || tweet;
+            let text = tweet.text || raw?.legacy?.full_text || raw?.full_text || '';
+            if (!String(text).trim() && this.getTweetId(tweet)) {
+                return this.renderContentPlaceholder(
+                    'Post text was not captured in the local archive.',
+                    'text_not_archived',
+                );
+            }
             
             if (raw && raw.legacy && raw.legacy.in_reply_to_status_id_str) {
                 text = text.replace(/^(@\w+\s+)+/, '');
@@ -1522,8 +1586,10 @@ function tweetApp() {
         },
         
         renderCard(tweet) {
+            if (this.isPlaceholderTweet(tweet)) return '';
             if (!tweet || !tweet.raw_json) return '';
-            const card = tweet.raw_json.card;
+            const raw = tweet.raw_json.raw_json || tweet.raw_json;
+            const card = raw.card;
             if (!card) return '';
             const name = card.name || card.legacy?.name || '';
             const bindingArray = card.binding_values || card.legacy?.binding_values || [];
@@ -1753,6 +1819,7 @@ function tweetApp() {
         },
 
         renderCommunityNote(raw_json, isQuote = false) {
+            raw_json = raw_json?.raw_json || raw_json;
             if (!raw_json || !raw_json.birdwatch_pivot) return '';
             const bw = raw_json.birdwatch_pivot;
             if (!bw.subtitle || !bw.subtitle.text) return '';
@@ -1775,6 +1842,7 @@ function tweetApp() {
         },
 
         renderActionBar(tweet, isMain = false) {
+            if (this.isPlaceholderTweet(tweet)) return '';
             const legacy = tweet.raw_json?.legacy || {};
             const replyCount = legacy.reply_count || 0;
             const retweetCount = (legacy.retweet_count || 0) + (legacy.quote_count || 0);

@@ -804,6 +804,14 @@ test('thread cache reuses successes across modes but retries failures', async ()
     assert.equal(loaded.main.tweet_id, 'failed');
     assert.equal(cached, loaded);
     assert.equal(fetches, 2);
+
+    app.threadCache.set('stale', {
+        loadedAt: Date.now() - app.threadCacheTtlMs - 1,
+        request: Promise.resolve({ main: { tweet_id: 'old' } }),
+    });
+    const refreshed = await app.loadThread('stale');
+    assert.equal(refreshed.main.tweet_id, 'stale');
+    assert.equal(fetches, 3);
 });
 
 test('goBack tears down playing videos before navigating history', () => {
@@ -942,6 +950,7 @@ test('tweet overflow markup covers list and detail surfaces without legacy tag i
     assert.match(html, /startTweetMenuPress\(\$event, tweet\.tweet_id, tweet\.media_tags\)/);
     assert.match(html, /startTweetMenuPress\(\$event, threadData\.main\.tweet_id/);
     assert.match(html, /startTweetMenuPress\(\$event, panelThreadData\.main\.tweet_id/);
+    assert.equal((html.match(/renderQuotePlaceholder\(getQuoteTweet/g) || []).length, 3);
     assert.doesNotMatch(html, /View quoted tweet tags/);
     assert.doesNotMatch(appJs, /title="View Tags"/);
     assert.match(html, /x-model="editableDescription"/);
@@ -1045,6 +1054,67 @@ test('text and card renderers escape HTML and reject active URL schemes', () => 
     assert.match(card, /src="#"/);
     assert.match(card, /&lt;img onerror=x&gt;/);
     assert.doesNotMatch(card, /<script>/);
+});
+
+test('availability placeholders replace content and support normalized attachments', () => {
+    const context = browserContext();
+    const { tweetApp } = loadScripts(
+        context,
+        ['themes.js', 'app.js'],
+        '({tweetApp})',
+    );
+    const app = immediateComponent(tweetApp());
+    const unavailable = {
+        tweet_id: 'missing',
+        text: 'stale private text',
+        raw_json: { card: { name: 'summary' } },
+        availability: {
+            placeholder: true,
+            reason: 'protected_account',
+            message: 'This post is from a protected account. <unsafe>',
+        },
+    };
+
+    const placeholder = app.formatText(unavailable);
+    assert.match(placeholder, /tweet-availability-placeholder/);
+    assert.match(placeholder, /px-3 py-2/);
+    assert.doesNotMatch(placeholder, /py-4/);
+    assert.doesNotMatch(placeholder, /\n/);
+    assert.match(placeholder, /data-availability-reason="protected_account"/);
+    assert.match(placeholder, /&lt;unsafe&gt;/);
+    assert.doesNotMatch(placeholder, /stale private text/);
+    assert.equal(app.renderCard(unavailable), '');
+    assert.equal(app.renderActionBar(unavailable), '');
+    assert.equal(app.getQuoteTweet(unavailable), null);
+
+    const wrapper = {
+        quoted_tweet: unavailable,
+        retweeted_tweet: unavailable,
+        raw_json: {},
+    };
+    assert.equal(app.getQuoteTweet(wrapper), unavailable);
+    assert.equal(app.getQuoteText(app.getQuoteTweet(wrapper)), unavailable.availability.message);
+    assert.equal(app.getRetweet(wrapper), unavailable);
+    assert.equal(app.getTweetId(unavailable), 'missing');
+
+    const quotePlaceholder = app.renderQuotePlaceholder(unavailable);
+    assert.match(quotePlaceholder, /tweet-quote-placeholder/);
+    assert.match(quotePlaceholder, /mt-3/);
+    assert.match(quotePlaceholder, /rounded-xl border/);
+    assert.match(quotePlaceholder, /data-availability-reason="protected_account"/);
+    assert.doesNotMatch(quotePlaceholder, /stale private text/);
+
+    const missingText = app.formatText({
+        tweet_id: 'textless',
+        text: '',
+        raw_json: { rest_id: 'textless', legacy: {} },
+    });
+    assert.match(missingText, /data-availability-reason="text_not_archived"/);
+    assert.match(missingText, /Post text was not captured in the local archive/);
+    assert.match(
+        app.formatText({ rest_id: 'quoted-textless', legacy: {} }),
+        /data-availability-reason="text_not_archived"/,
+    );
 });
 
 test('media renderer preserves dimensions and selects photo, video, GIF, and placeholders', () => {
