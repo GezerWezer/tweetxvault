@@ -130,7 +130,8 @@ class RehydrateResult:
 class MigrationReport:
     from_version: int
     to_version: int
-    backup_path: Path
+    backup_path: Path | None
+    search_index_rebuilt: bool = False
     legacy_terminal_rows_scanned: int = 0
     content_rows_repaired: int = 0
     author_rows_repaired: int = 0
@@ -274,7 +275,7 @@ ARCHIVE_COLUMNS = [
     "value",
 ]
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 COLUMN_TYPES = {
     field: (
         "TEXT PRIMARY KEY"
@@ -357,6 +358,10 @@ class ArchiveStore:
             self._create_latest_schema()
             return
 
+        if current_version == 3:
+            self._migrate_search_index(current_version)
+            return
+
         self._migrate_legacy_database(current_version)
 
     def _create_latest_schema(self) -> None:
@@ -381,7 +386,7 @@ class ArchiveStore:
         with self.conn:
             self._add_missing_archive_columns()
             self._backfill_created_at_timestamps()
-            self._create_fts_schema()
+            self._rebuild_fts_schema()
             self._backfill_enrichment_scheduler()
             self._clear_available_enrichment_scheduler()
             self._create_archive_indexes()
@@ -395,6 +400,29 @@ class ArchiveStore:
             to_version=SCHEMA_VERSION,
             backup_path=backup_path,
             **repair_counts,
+        )
+
+    def _migrate_search_index(self, current_version: int) -> None:
+        """Replace the derived all-row FTS index without copying canonical archive data."""
+        with self.conn:
+            self._rebuild_fts_schema()
+            self._create_archive_indexes()
+            expected = self.conn.execute(
+                "SELECT COUNT(*) FROM archive WHERE record_type = 'tweet'"
+            ).fetchone()[0]
+            actual = self.conn.execute("SELECT COUNT(*) FROM archive_fts").fetchone()[0]
+            if actual != expected:
+                raise RuntimeError(
+                    "Search-index migration produced an unexpected row count: "
+                    f"expected={expected}, actual={actual}"
+                )
+            self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+        self.migration_report = MigrationReport(
+            from_version=current_version,
+            to_version=SCHEMA_VERSION,
+            backup_path=None,
+            search_index_rebuilt=True,
         )
 
     def _archive_table_exists(self) -> bool:
@@ -492,21 +520,16 @@ class ArchiveStore:
         if updates:
             self.conn.executemany("UPDATE archive SET created_at_ts = ? WHERE row_key = ?", updates)
 
-    def _create_fts_schema(self) -> None:
-        had_fts = (
-            self.conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'archive_fts'"
-            ).fetchone()
-            is not None
-        )
+    def _create_fts_schema(self, *, populate: bool = False) -> None:
         self.conn.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS archive_fts USING fts5(
                 author_username, author_display_name, text, note_tweet_text,
-                content='archive', content_rowid='rowid'
+                content=''
             )
         """)
         self.conn.execute("""
-        CREATE TRIGGER IF NOT EXISTS archive_ad AFTER DELETE ON archive BEGIN
+        CREATE TRIGGER IF NOT EXISTS archive_ad AFTER DELETE ON archive
+        WHEN old.record_type = 'tweet' BEGIN
           INSERT INTO archive_fts(
             archive_fts, rowid, author_username, author_display_name, text, note_tweet_text
           ) VALUES(
@@ -516,7 +539,8 @@ class ArchiveStore:
         END;
         """)
         self.conn.execute("""
-        CREATE TRIGGER IF NOT EXISTS archive_ai AFTER INSERT ON archive BEGIN
+        CREATE TRIGGER IF NOT EXISTS archive_ai AFTER INSERT ON archive
+        WHEN new.record_type = 'tweet' BEGIN
           INSERT INTO archive_fts(
             rowid, author_username, author_display_name, text, note_tweet_text
           ) VALUES(
@@ -529,20 +553,33 @@ class ArchiveStore:
         CREATE TRIGGER IF NOT EXISTS archive_au AFTER UPDATE ON archive BEGIN
           INSERT INTO archive_fts(
             archive_fts, rowid, author_username, author_display_name, text, note_tweet_text
-          ) VALUES(
+          ) SELECT
             'delete', old.rowid, old.author_username, old.author_display_name,
             old.text, old.note_tweet_text
-          );
+          WHERE old.record_type = 'tweet';
           INSERT INTO archive_fts(
             rowid, author_username, author_display_name, text, note_tweet_text
-          ) VALUES(
+          ) SELECT
             new.rowid, new.author_username, new.author_display_name,
             new.text, new.note_tweet_text
-          );
+          WHERE new.record_type = 'tweet';
         END;
         """)
-        if not had_fts:
-            self.conn.execute("INSERT INTO archive_fts(archive_fts) VALUES('rebuild')")
+        if populate:
+            self.conn.execute("""
+                INSERT INTO archive_fts(
+                    rowid, author_username, author_display_name, text, note_tweet_text
+                )
+                SELECT rowid, author_username, author_display_name, text, note_tweet_text
+                FROM archive
+                WHERE record_type = 'tweet'
+            """)
+
+    def _rebuild_fts_schema(self) -> None:
+        for trigger in ("archive_ad", "archive_ai", "archive_au"):
+            self.conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+        self.conn.execute("DROP TABLE IF EXISTS archive_fts")
+        self._create_fts_schema(populate=True)
 
     def _create_archive_indexes(self) -> None:
         index_sql = {
@@ -565,6 +602,11 @@ class ArchiveStore:
         }
         for name, columns in index_sql.items():
             self.conn.execute(f"CREATE INDEX IF NOT EXISTS {name} ON archive({columns})")
+        self.conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_archive_search_attachment
+            ON archive(record_type, tweet_id, media_type)
+            WHERE record_type IN ('media', 'url_ref')
+        """)
 
     def _backfill_enrichment_scheduler(self) -> None:
         now = utc_now()
@@ -869,7 +911,7 @@ class ArchiveStore:
         """Finalize timestamp and full-text indexes after an explicit bulk import."""
         with self.conn:
             self._backfill_created_at_timestamps()
-            self.conn.execute("INSERT INTO archive_fts(archive_fts) VALUES('rebuild')")
+            self._rebuild_fts_schema()
 
     def check_integrity(self, *, full: bool = False) -> list[str]:
         """Run an explicit SQLite integrity diagnostic and return every result row."""
@@ -934,9 +976,9 @@ class ArchiveStore:
         params = []
         if is_fts and query:
             if c != "*":
-                c += ", bm25(archive_fts) as rank"
+                c += ", archive_fts.rank AS rank"
             else:
-                c = "*, bm25(archive_fts) as rank"
+                c = "*, archive_fts.rank AS rank"
             q = (
                 f"SELECT {c} FROM archive "
                 "JOIN archive_fts ON archive.rowid = archive_fts.rowid "
@@ -951,7 +993,7 @@ class ArchiveStore:
                 q += f" WHERE {expr}"
 
         if is_fts and query:
-            q += " ORDER BY rank"
+            q += " ORDER BY archive_fts.rank"
         elif order_by:
             q += f" ORDER BY {order_by}"
 
@@ -4338,10 +4380,29 @@ class ArchiveStore:
         return float("-inf")
 
     def _search_post_rows_fts(
-        self, query: str, *, limit: int, collections: set[str] | None = None
+        self,
+        query: str,
+        *,
+        limit: int,
+        collections: set[str] | None = None,
+        narrow: bool = False,
     ) -> list[dict[str, Any]]:
         where_expr = _and_expr("record_type = 'tweet'", self._search_collection_expr(collections))
-        return self._query(expr=where_expr, limit=limit, is_fts=True, query=query)
+        columns = None
+        if narrow:
+            columns = [
+                "archive.tweet_id AS tweet_id",
+                "archive.created_at AS created_at",
+                "archive.created_at_ts AS created_at_ts",
+                "archive.sort_index AS sort_index",
+            ]
+        return self._query(
+            expr=where_expr,
+            cols=columns,
+            limit=limit,
+            is_fts=True,
+            query=query,
+        )
 
     def _search_article_rows_fts(self, query: str, *, limit: int) -> list[dict[str, Any]]:
         import re
@@ -4611,6 +4672,47 @@ class ArchiveStore:
             if types is None or SEARCH_KIND_ARTICLE in types:
                 exhausted = exhausted and len(article_raw_rows) < fetch_limit
             if len(results) >= limit or fetch_limit >= max_fetch_limit or exhausted:
+                return results[:limit]
+            fetch_limit = min(fetch_limit * 2, max_fetch_limit)
+
+    def search_post_fts_candidates(
+        self,
+        query: str,
+        *,
+        limit: int = 20,
+        collections: set[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return narrow ranked post candidates without hydrating their object graphs."""
+        self.ensure_fts_index()
+        query = self._prepare_fts_query(query)
+        if not query:
+            return []
+
+        fetch_limit = max(limit, 1)
+        max_fetch_limit = max(limit * 8, 50)
+        while True:
+            raw_rows = self._search_post_rows_fts(
+                query,
+                limit=fetch_limit,
+                collections=collections,
+                narrow=True,
+            )
+            rows = self._dedupe_search_rows(raw_rows)
+            results = [
+                {
+                    "tweet_id": row["tweet_id"],
+                    "created_at": row.get("created_at"),
+                    "created_at_ts": row.get("created_at_ts"),
+                    "sort_index": row.get("sort_index"),
+                    "match_score": self._search_score(row),
+                }
+                for row in rows
+            ]
+            if (
+                len(results) >= limit
+                or len(raw_rows) < fetch_limit
+                or fetch_limit >= max_fetch_limit
+            ):
                 return results[:limit]
             fetch_limit = min(fetch_limit * 2, max_fetch_limit)
 

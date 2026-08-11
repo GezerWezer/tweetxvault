@@ -1,3 +1,26 @@
+- 2026-08-11 (Search query planning and FTS performance)
+  - Reproduced production-sized search latency read-only on the 7.8 GB local vault: an empty page
+    took 0.029 seconds, `has:media` took 28.109 seconds, image/video/link filters exceeded a
+    20-second bound, common FTS ranged from 2.153 to 9.055 seconds, text OR ranged from 3.992 to
+    10.259 seconds, and negative text took about 3.13 seconds.
+  - Added a 6.3 MB partial attachment index and deterministic correlated probes; pushed reply,
+    quote, retweet, thread, verified, engagement, recipient, entity, URL, source, card, and ID
+    predicates into SQLite. Fixed grouped thread evaluation for null archived usernames.
+  - Advanced to schema v4 with a transactionally rebuilt contentless FTS5 index containing saved
+    tweet memberships only. The v3-to-v4 derived-index migration does not copy canonical archive
+    data; older canonical migrations retain their validated backup. Bulk LanceDB finalization now
+    uses the same tweet-only rebuild instead of FTS5's incompatible external-content command.
+  - Switched relevance ordering from a materialized `bm25()` alias sort to FTS5's native `rank`,
+    added narrow candidate reads so only the requested result page is hydrated, and routed pure
+    text OR plus negative-only searches around the full-archive Python fallback.
+  - On a copy-on-write clone, schema-v4 migration took 23.047 seconds, FTS rows fell from 2,091,119
+    to 10,388, and compressed FTS data fell from 37.5 MB to 1.2 MB. Warm searches took 10-16 ms for
+    media/image/video, 23-43 ms for capped common FTS, 5-6 ms for text OR, and 10-11 ms for negative
+    text; cold first-page hydration left the slowest measured query (`is:reply`) at 1.58 seconds.
+  - Focused search/storage/migration/CLI/Web tests and all 832 Python tests pass. Repository-wide
+    Ruff lint passes; task files are formatted and `git diff --check` passes. The full format check
+    retains four pre-existing unrelated files.
+
 - 2026-08-11 (Web statistics loaded-state and collector performance)
   - User clarification: the primary symptom is visible interaction/rendering lag after the cards
     have loaded, distinct from the separately verified 139-second cold-report latency.

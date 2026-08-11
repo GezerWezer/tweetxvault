@@ -119,6 +119,10 @@ def test_schema_creates_fts_triggers_and_page_indexes(paths) -> None:
 
     assert ("table", "archive") in objects
     assert ("table", "archive_fts") in objects
+    fts_sql = store.conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'archive_fts'"
+    ).fetchone()[0]
+    assert "content=''" in fts_sql
     assert {
         ("trigger", "archive_ai"),
         ("trigger", "archive_au"),
@@ -128,6 +132,7 @@ def test_schema_creates_fts_triggers_and_page_indexes(paths) -> None:
         ("index", "idx_archive_record_page"),
         ("index", "idx_archive_record_collection_page"),
         ("index", "idx_archive_tweet_id"),
+        ("index", "idx_archive_search_attachment"),
     } <= objects
     store.close()
 
@@ -183,6 +188,19 @@ def test_fts_triggers_follow_insert_update_and_delete(paths) -> None:
 
     store._merge_records([row])
     assert [result["tweet_id"] for result in store.search_fts("initial")] == ["1"]
+
+    store._merge_records(
+        [
+            store._record(
+                row_key="tweet_object:2",
+                record_type="tweet_object",
+                tweet_id="2",
+                text="secondary object must not be searchable",
+            )
+        ]
+    )
+    assert store.search_fts("secondary") == []
+    assert store.conn.execute("SELECT COUNT(*) FROM archive_fts").fetchone()[0] == 1
 
     row["text"] = "replacement searchable phrase"
     store._merge_records([row])
@@ -244,6 +262,66 @@ def test_current_schema_lock_probe_reads_only_user_version(
 
     assert storage_backend._database_requires_schema_migration(db_path) is False
     assert statements == ["PRAGMA user_version"]
+
+
+def test_schema_v3_rebuilds_only_derived_search_index_without_backup(tmp_path: Path) -> None:
+    db_path = tmp_path / "archive.db"
+    initial = ArchiveStore(db_path, create=True)
+    initial._merge_records(
+        [
+            _membership(
+                initial,
+                "1",
+                collection="bookmark",
+                text="searchable membership sentinel",
+                created_at=CREATED_2012,
+                created_at_ts=1,
+                sort_index="1",
+            ),
+            initial._record(
+                row_key="tweet_object:2",
+                record_type="tweet_object",
+                tweet_id="2",
+                text="legacy secondary sentinel",
+            ),
+        ]
+    )
+    initial.close()
+
+    legacy = sqlite3.connect(db_path)
+    for trigger in ("archive_ad", "archive_ai", "archive_au"):
+        legacy.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+    legacy.execute("DROP TABLE archive_fts")
+    legacy.execute("""
+        CREATE VIRTUAL TABLE archive_fts USING fts5(
+            author_username, author_display_name, text, note_tweet_text,
+            content='archive', content_rowid='rowid'
+        )
+    """)
+    legacy.execute("INSERT INTO archive_fts(archive_fts) VALUES('rebuild')")
+    legacy.execute("PRAGMA user_version = 3")
+    legacy.commit()
+    assert (
+        legacy.execute(
+            "SELECT COUNT(*) FROM archive_fts WHERE archive_fts MATCH 'secondary'"
+        ).fetchone()[0]
+        == 1
+    )
+    legacy.close()
+
+    migrated = ArchiveStore(db_path, create=True)
+
+    assert migrated.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    assert migrated.migration_report is not None
+    assert migrated.migration_report.from_version == 3
+    assert migrated.migration_report.to_version == SCHEMA_VERSION
+    assert migrated.migration_report.backup_path is None
+    assert migrated.migration_report.search_index_rebuilt is True
+    assert [row["tweet_id"] for row in migrated.search_fts("membership")] == ["1"]
+    assert migrated.search_fts("secondary") == []
+    assert migrated.conn.execute("SELECT COUNT(*) FROM archive_fts").fetchone()[0] == 1
+    assert list(tmp_path.glob("*.bak")) == []
+    migrated.close()
 
 
 def test_new_database_creates_latest_schema_without_migration_work(
@@ -538,12 +616,12 @@ def test_enrichment_scheduler_migration_is_backed_up_additive_and_idempotent(
     assert transient["enrichment_next_retry_at"] is not None
     first.close()
 
-    backups = list(tmp_path.glob("archive.db.pre-schema-v3.*.bak"))
+    backups = list(tmp_path.glob(f"archive.db.pre-schema-v{SCHEMA_VERSION}.*.bak"))
     assert len(backups) == 1
     second = ArchiveStore(db_path, create=True)
     assert second._count() == 9
     second.close()
-    assert list(tmp_path.glob("archive.db.pre-schema-v3.*.bak")) == backups
+    assert list(tmp_path.glob(f"archive.db.pre-schema-v{SCHEMA_VERSION}.*.bak")) == backups
 
 
 def test_legacy_terminal_repair_prefers_rich_indexed_capture_and_reports_deferral(
@@ -647,7 +725,7 @@ def test_explicit_legacy_repair_can_scan_timeline_captures(paths) -> None:
     store.close()
 
 
-def test_schema_v2_migrates_to_v3_with_backup_reason_preservation_and_repairs(
+def test_schema_v2_migrates_to_latest_with_backup_reason_preservation_and_repairs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -759,10 +837,10 @@ def test_schema_v2_migrates_to_v3_with_backup_reason_preservation_and_repairs(
     monkeypatch.setattr(ArchiveStore, "_repair_legacy_terminal_rows", tracked_repair)
 
     first = ArchiveStore(db_path, create=True)
-    assert first.conn.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert first.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     assert first.migration_report is not None
     assert first.migration_report.from_version == 2
-    assert first.migration_report.to_version == 3
+    assert first.migration_report.to_version == SCHEMA_VERSION
     terminal = first._get_row("tweet_object:1")
     assert terminal["text"] == "recovered from capture"
     assert terminal["author_id"] == "101"
@@ -777,7 +855,7 @@ def test_schema_v2_migrates_to_v3_with_backup_reason_preservation_and_repairs(
     assert available["enrichment_retry_eligible"] == 0
     first.close()
 
-    backups = list(tmp_path.glob("archive.db.pre-schema-v3.*.bak"))
+    backups = list(tmp_path.glob(f"archive.db.pre-schema-v{SCHEMA_VERSION}.*.bak"))
     assert len(backups) == 1
     backup = sqlite3.connect(backups[0])
     assert backup.execute("PRAGMA quick_check").fetchone()[0] == "ok"
@@ -787,7 +865,7 @@ def test_schema_v2_migrates_to_v3_with_backup_reason_preservation_and_repairs(
     second = ArchiveStore(db_path, create=True)
     assert second.migration_report is None
     second.close()
-    assert list(tmp_path.glob("archive.db.pre-schema-v3.*.bak")) == backups
+    assert list(tmp_path.glob(f"archive.db.pre-schema-v{SCHEMA_VERSION}.*.bak")) == backups
     assert quick_check_stages == ["before migration", "after migration"]
     assert backup_calls == 1
     assert repair_calls == 1
@@ -1180,5 +1258,36 @@ def test_page_queries_use_covering_indexes_without_temporary_sort(paths) -> None
 
     assert "idx_archive_record_page" in details
     assert "idx_archive_record_collection_page" in details
+    assert "USE TEMP B-TREE" not in details
+    store.close()
+
+
+def test_fts_native_rank_plan_does_not_materialize_a_temporary_sort(paths) -> None:
+    store = open_archive_store(paths, create=True)
+    assert store is not None
+    store._merge_records(
+        [
+            _membership(
+                store,
+                "1",
+                collection="bookmark",
+                text="native rank sentinel",
+                created_at=CREATED_2012,
+                created_at_ts=1,
+                sort_index="1",
+            )
+        ]
+    )
+
+    plan = store.conn.execute(
+        "EXPLAIN QUERY PLAN "
+        "SELECT archive.tweet_id, archive_fts.rank FROM archive "
+        "JOIN archive_fts ON archive.rowid = archive_fts.rowid "
+        "WHERE archive_fts MATCH 'sentinel' AND archive.record_type = 'tweet' "
+        "ORDER BY archive_fts.rank LIMIT 20"
+    ).fetchall()
+    details = " ".join(row["detail"] for row in plan)
+
+    assert "archive_fts" in details
     assert "USE TEMP B-TREE" not in details
     store.close()

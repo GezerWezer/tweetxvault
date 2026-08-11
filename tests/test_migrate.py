@@ -801,7 +801,7 @@ def test_lancedb_migration_creates_latest_schema_without_legacy_upgrade(
     assert list(paths.data_dir.glob("archive.db.pre-schema-v*.bak")) == []
 
 
-def test_realistic_rerun_preserves_existing_rows_and_backfills_search_data(
+def test_realistic_rerun_preserves_existing_rows_and_rebuilds_tweet_only_search(
     monkeypatch: pytest.MonkeyPatch,
     paths,
 ) -> None:
@@ -899,6 +899,6 @@ def test_realistic_rerun_preserves_existing_rows_and_backfills_search_data(
             WHERE archive_fts MATCH 'searchable'
             """
         ).fetchall()
-        assert [row["row_key"] for row in fts_matches] == ["tweet_object:2"]
+        assert [row["row_key"] for row in fts_matches] == []
     finally:
         final_store.close()

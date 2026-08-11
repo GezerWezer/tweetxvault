@@ -327,9 +327,9 @@ def _filter_matches(row: dict[str, Any], key: str, value: str) -> bool:
         if value == "retweet":
             return bool(legacy.get("retweeted_status_id_str"))
         if value == "thread":
-            return (legacy.get("in_reply_to_screen_name") or "").lower() == author.get(
-                "username", ""
-            ).lower()
+            reply_username = (legacy.get("in_reply_to_screen_name") or "").lower()
+            author_username = (author.get("username") or "").lower()
+            return bool(reply_username) and reply_username == author_username
         if value == "verified":
             user_result = raw.get("core", {}).get("user_results", {}).get("result", {})
             return bool(
@@ -347,9 +347,9 @@ def _filter_matches(row: dict[str, Any], key: str, value: str) -> bool:
         if value == "nativeretweets":
             return bool(legacy.get("retweeted_status_id_str"))
         if value in {"self_threads", "threads"}:
-            return (legacy.get("in_reply_to_screen_name") or "").lower() == author.get(
-                "username", ""
-            ).lower()
+            reply_username = (legacy.get("in_reply_to_screen_name") or "").lower()
+            author_username = (author.get("username") or "").lower()
+            return bool(reply_username) and reply_username == author_username
         if value == "media":
             return bool(row.get("media"))
         if value == "images":
@@ -441,8 +441,9 @@ def _collection_expr(collections: set[str] | None) -> str:
 
 
 def _normalized_filter_expr(key: str, value: str, *, negated: bool = False) -> str | None:
-    """Translate filters backed by normalized archive rows into correlated SQL."""
+    """Translate filters backed by archive columns or JSON into SQLite predicates."""
     condition = None
+    related_index = "idx_archive_tweet_id"
     if (key, value) in {("has", "media"), ("filter", "media")}:
         condition = "related.record_type = 'media'"
     elif (key, value) in {("has", "image"), ("filter", "images")}:
@@ -463,15 +464,138 @@ def _normalized_filter_expr(key: str, value: str, *, negated: bool = False) -> s
         condition = (
             "related.record_type = 'tweet_object' AND related.enrichment_state = 'resurrected'"
         )
-    if condition is None:
-        return None
+    if condition is not None:
+        if (key, value) in {
+            ("has", "media"),
+            ("filter", "media"),
+            ("has", "image"),
+            ("filter", "images"),
+            ("has", "video"),
+            ("filter", "videos"),
+            ("filter", "native_video"),
+            ("has", "links"),
+            ("filter", "links"),
+        }:
+            related_index = "idx_archive_search_attachment"
+            condition += " AND related.record_type IN ('media', 'url_ref')"
+        expression = (
+            f"EXISTS (SELECT 1 FROM archive AS related INDEXED BY {related_index} "
+            "WHERE related.tweet_id = archive.tweet_id "
+            f"AND {condition})"
+        )
+        return f"NOT (COALESCE(({expression}), 0))" if negated else expression
 
-    expression = (
-        "EXISTS (SELECT 1 FROM archive AS related "
-        "WHERE related.tweet_id = archive.tweet_id "
-        f"AND {condition})"
-    )
-    return f"NOT ({expression})" if negated else expression
+    legacy_path = "$.legacy"
+    expression = None
+    if key == "from":
+        expression = f"LOWER(COALESCE(author_username, '')) = {_sql_quote(value.replace('@', ''))}"
+    elif key == "to":
+        expression = (
+            f"LOWER(COALESCE(json_extract(raw_json, '{legacy_path}.in_reply_to_screen_name'), "
+            f"'')) = {_sql_quote(value.replace('@', ''))}"
+        )
+    elif key == "mentions":
+        expression = (
+            "EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(archive.raw_json) "
+            "THEN archive.raw_json ELSE '{}' END, '$.legacy.entities.user_mentions') AS mention "
+            "WHERE LOWER(COALESCE(json_extract(mention.value, '$.screen_name'), '')) = "
+            f"{_sql_quote(value.replace('@', ''))})"
+        )
+    elif key in {"since", "since_time", "until", "until_time"}:
+        boundary = _parse_twitter_date(value) if key in {"since", "until"} else float(value)
+        comparison = ">=" if key in {"since", "since_time"} else "<"
+        expression = f"created_at_ts {comparison} {int(boundary)}"
+    elif key == "since_id":
+        expression = f"CAST(tweet_id AS INTEGER) > {int(value)}"
+    elif key == "max_id":
+        expression = f"CAST(tweet_id AS INTEGER) <= {int(value)}"
+    elif (key, value) in {("is", "reply"), ("filter", "replies")}:
+        expression = (
+            f"NULLIF(json_extract(raw_json, '{legacy_path}.in_reply_to_status_id_str'), "
+            "'') IS NOT NULL"
+        )
+    elif (key, value) in {("is", "quote"), ("filter", "quote")}:
+        expression = f"COALESCE(json_extract(raw_json, '{legacy_path}.is_quote_status'), 0) != 0"
+    elif (key, value) in {("is", "retweet"), ("filter", "nativeretweets")}:
+        expression = (
+            f"NULLIF(json_extract(raw_json, '{legacy_path}.retweeted_status_id_str'), "
+            "'') IS NOT NULL"
+        )
+    elif (key, value) in {
+        ("is", "thread"),
+        ("filter", "self_threads"),
+        ("filter", "threads"),
+    }:
+        reply_path = f"{legacy_path}.in_reply_to_screen_name"
+        expression = (
+            f"NULLIF(json_extract(raw_json, '{reply_path}'), '') IS NOT NULL AND "
+            f"LOWER(json_extract(raw_json, '{reply_path}')) = "
+            "LOWER(COALESCE(author_username, ''))"
+        )
+    elif (key, value) in {("is", "verified"), ("filter", "verified")}:
+        expression = (
+            "COALESCE(json_extract(raw_json, '$.core.user_results.result.is_blue_verified'), "
+            "json_extract(raw_json, '$.core.user_results.result.legacy.verified'), 0) != 0"
+        )
+    elif key in {"min_retweets", "min_faves", "min_replies"}:
+        count_field = {
+            "min_retweets": "retweet_count",
+            "min_faves": "favorite_count",
+            "min_replies": "reply_count",
+        }[key]
+        expression = (
+            f"CAST(COALESCE(json_extract(raw_json, '{legacy_path}.{count_field}'), 0) "
+            f"AS INTEGER) >= {int(value)}"
+        )
+    elif key == "conversation_id":
+        expression = f"conversation_id = {_sql_quote(value)}"
+    elif key == "quoted_tweet_id":
+        expression = (
+            f"json_extract(raw_json, '{legacy_path}.quoted_status_id_str') = {_sql_quote(value)}"
+        )
+    elif key == "url":
+        escaped = _sql_quote(f"%{value}%")
+        expression = (
+            "EXISTS (SELECT 1 FROM archive AS related INDEXED BY idx_archive_search_attachment "
+            "WHERE related.tweet_id = archive.tweet_id AND related.record_type = 'url_ref' "
+            "AND related.record_type IN ('media', 'url_ref') "
+            f"AND (LOWER(COALESCE(related.expanded_url, '')) LIKE {escaped} "
+            f"OR LOWER(COALESCE(related.display_url, '')) LIKE {escaped}))"
+        )
+    elif key == "source":
+        expression = (
+            "LOWER(COALESCE(json_extract(raw_json, '$.source'), '')) LIKE "
+            f"{_sql_quote('%' + value.replace('_', ' ') + '%')}"
+        )
+    elif key == "card_name":
+        expression = f"json_extract(raw_json, '$.card.name') = {_sql_quote(value)}"
+    elif key == "tag":
+        escaped_value = value.replace("'", "''")
+        expression = (
+            "tweet_id IN ("
+            "SELECT direct_tag.tweet_id FROM archive direct_tag "
+            "WHERE direct_tag.record_type = 'media_tag' "
+            f"AND LOWER(direct_tag.raw_json) LIKE LOWER('%\"{escaped_value}\"%') "
+            "UNION SELECT relation.tweet_id "
+            "FROM archive relation INDEXED BY idx_archive_tweet_id "
+            "JOIN archive quoted_tag INDEXED BY idx_archive_tweet_id "
+            "ON quoted_tag.tweet_id = relation.target_tweet_id "
+            "AND quoted_tag.record_type = 'media_tag' "
+            "WHERE relation.record_type = 'tweet_relation' "
+            "AND relation.relation_type = 'quote_of' "
+            f"AND LOWER(quoted_tag.raw_json) LIKE LOWER('%\"{escaped_value}\"%'))"
+        )
+    elif key == "hashtag":
+        expression = (
+            "EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(archive.raw_json) "
+            "THEN archive.raw_json ELSE '{}' END, '$.legacy.entities.hashtags') AS hashtag "
+            "WHERE LOWER(COALESCE(json_extract(hashtag.value, '$.text'), '')) = "
+            f"{_sql_quote(value.replace('#', '').lower())})"
+        )
+
+    if expression is None:
+        return None
+    return f"NOT (COALESCE(({expression}), 0))" if negated else expression
 
 
 def _filter_candidate_ids(store: Any, tweet_ids: list[str], expressions: list[str]) -> set[str]:
@@ -562,6 +686,124 @@ def _export_candidates(store: Any, collections: set[str] | None) -> list[dict[st
     return rows
 
 
+def _search_post_candidates(
+    store: Any,
+    query: str,
+    *,
+    limit: int,
+    collections: set[str] | None,
+) -> list[dict[str, Any]]:
+    narrow_search = getattr(store, "search_post_fts_candidates", None)
+    if callable(narrow_search):
+        return narrow_search(query, limit=limit, collections=collections)
+    return store.search_fts(
+        query,
+        limit=limit,
+        types={"post"},
+        collections=collections,
+    )
+
+
+def _search_positive_text_or(
+    store: Any,
+    parsed: ParsedSearchQuery,
+    *,
+    collections: set[str] | None,
+    sort: str,
+    page: int,
+    limit: int,
+    candidate_limit: int,
+) -> SearchPage | None:
+    if len(parsed.groups) != 1 or not all(
+        clause.kind == "text" and not clause.negated for clause in parsed.groups[0]
+    ):
+        return None
+    text_query = " OR ".join(clause.value for clause in parsed.groups[0])
+    hits = _search_post_candidates(
+        store,
+        text_query,
+        limit=candidate_limit,
+        collections=collections,
+    )
+    effective_sort = _effective_sort(sort, has_positive_text=True)
+    if effective_sort != "relevance":
+        _sort_rows(hits, effective_sort)
+    total = len(hits)
+    start = (page - 1) * limit
+    page_hits = hits[start : start + limit]
+    ids = [hit["tweet_id"] for hit in page_hits if hit.get("tweet_id")]
+    return SearchPage(
+        rows=_hydrate_metadata(store.fetch_tweets_by_ids(ids), page_hits),
+        total=total,
+        page=page,
+        pages=math.ceil(total / limit) if total else 1,
+        truncated=len(hits) >= candidate_limit,
+    )
+
+
+def _search_negative_text_only(
+    store: Any,
+    parsed: ParsedSearchQuery,
+    *,
+    collections: set[str] | None,
+    sort: str,
+    page: int,
+    limit: int,
+    candidate_limit: int,
+) -> SearchPage | None:
+    clauses = [clause for group in parsed.groups for clause in group]
+    if (
+        any(len(group) != 1 for group in parsed.groups)
+        or not clauses
+        or not all(clause.kind == "text" and clause.negated for clause in clauses)
+    ):
+        return None
+
+    excluded_ids: set[str] = set()
+    truncated = False
+    for clause in clauses:
+        hits = _search_post_candidates(
+            store,
+            clause.value,
+            limit=candidate_limit,
+            collections=collections,
+        )
+        truncated = truncated or len(hits) >= candidate_limit
+        excluded_ids.update(str(hit["tweet_id"]) for hit in hits if hit.get("tweet_id"))
+
+    filter_expr = "record_type = 'tweet'"
+    collection_expr = _collection_expr(collections)
+    if collection_expr:
+        filter_expr += f" AND {collection_expr}"
+    if excluded_ids:
+        values = ", ".join(_sql_quote(tweet_id) for tweet_id in sorted(excluded_ids))
+        filter_expr += f" AND tweet_id NOT IN ({values})"
+
+    effective_sort = _effective_sort(sort, has_positive_text=False)
+    order_by = "created_at_ts DESC, CAST(sort_index AS INTEGER) DESC, tweet_id DESC"
+    if effective_sort == "oldest":
+        order_by = "created_at_ts ASC, CAST(sort_index AS INTEGER) ASC, tweet_id ASC"
+    elif effective_sort == "random":
+        order_by = "RANDOM()"
+    total = store._count_distinct("tweet_id", filter_expr)
+    start = (page - 1) * limit
+    id_rows = store._query(
+        expr=filter_expr,
+        cols=["DISTINCT tweet_id"],
+        limit=limit,
+        offset=start,
+        order_by=order_by,
+    )
+    ids = [row["tweet_id"] for row in id_rows if row.get("tweet_id")]
+    return SearchPage(
+        rows=_hydrate_metadata(store.fetch_tweets_by_ids(ids), []),
+        total=total,
+        page=page,
+        pages=math.ceil(total / limit) if total else 1,
+        truncated=truncated,
+    )
+
+
 def _search_grouped(
     store: Any,
     parsed: ParsedSearchQuery,
@@ -593,10 +835,10 @@ def _search_grouped(
         for clause in group:
             if clause.kind != "text" or clause in text_matches:
                 continue
-            hits = store.search_fts(
+            hits = _search_post_candidates(
+                store,
                 clause.value,
                 limit=candidate_limit,
-                types={"post"},
                 collections=collections,
             )
             truncated = truncated or len(hits) >= candidate_limit
@@ -675,6 +917,30 @@ def search_posts(
         collections = collections or None
 
     parsed = parse_search_query(query)
+    if parsed.has_or:
+        text_or_page = _search_positive_text_or(
+            store,
+            parsed,
+            collections=collections,
+            sort=sort,
+            page=page,
+            limit=limit,
+            candidate_limit=candidate_limit,
+        )
+        if text_or_page is not None:
+            return text_or_page
+    if parsed.has_negative_text:
+        negative_page = _search_negative_text_only(
+            store,
+            parsed,
+            collections=collections,
+            sort=sort,
+            page=page,
+            limit=limit,
+            candidate_limit=candidate_limit,
+        )
+        if negative_page is not None:
+            return negative_page
     if parsed.has_or or parsed.has_negative_text:
         return _search_grouped(
             store,
@@ -698,43 +964,7 @@ def search_posts(
         if all(expression is not None for expression in normalized_exprs):
             pushable_exprs.extend(str(expression) for expression in normalized_exprs)
             continue
-        if negated or key not in {
-            "from",
-            "conversation_id",
-            "since",
-            "until",
-            "since_time",
-            "until_time",
-            "tag",
-        }:
-            post_filters[raw_key] = values
-            continue
-        if key == "from":
-            pushable_exprs.extend(
-                f"LOWER(author_username) = {_sql_quote(value.replace('@', ''))}" for value in values
-            )
-        elif key == "conversation_id":
-            pushable_exprs.extend(f"conversation_id = {_sql_quote(value)}" for value in values)
-        elif key == "tag":
-            for value in values:
-                escaped_value = value.replace("'", "''")
-                pushable_exprs.append(
-                    "tweet_id IN ("
-                    "SELECT direct_tag.tweet_id FROM archive direct_tag "
-                    "WHERE direct_tag.record_type = 'media_tag' "
-                    f"AND LOWER(direct_tag.raw_json) LIKE LOWER('%\"{escaped_value}\"%') "
-                    "UNION SELECT relation.tweet_id FROM archive relation "
-                    "JOIN archive quoted_tag ON quoted_tag.tweet_id = relation.target_tweet_id "
-                    "AND quoted_tag.record_type = 'media_tag' "
-                    "WHERE relation.record_type = 'tweet_relation' "
-                    "AND relation.relation_type = 'quote_of' "
-                    f"AND LOWER(quoted_tag.raw_json) LIKE LOWER('%\"{escaped_value}\"%'))"
-                )
-        elif key in {"since", "since_time", "until", "until_time"}:
-            for value in values:
-                boundary = _parse_twitter_date(value) if key in {"since", "until"} else float(value)
-                comparison = ">=" if key in {"since", "since_time"} else "<"
-                pushable_exprs.append(f"created_at_ts {comparison} {int(boundary)}")
+        post_filters[raw_key] = values
 
     effective_sort = _effective_sort(sort, has_positive_text=bool(text_query))
     start = (page - 1) * limit
@@ -769,10 +999,10 @@ def search_posts(
         )
 
     if not post_filters and text_query and not pushable_exprs:
-        hits = store.search_fts(
+        hits = _search_post_candidates(
+            store,
             text_query,
             limit=candidate_limit,
-            types={"post"},
             collections=collections,
         )
         truncated = len(hits) >= candidate_limit
@@ -793,10 +1023,10 @@ def search_posts(
     hits: list[dict[str, Any]] = []
     truncated = False
     if text_query:
-        hits = store.search_fts(
+        hits = _search_post_candidates(
+            store,
             text_query,
             limit=candidate_limit,
-            types={"post"},
             collections=collections,
         )
         truncated = len(hits) >= candidate_limit

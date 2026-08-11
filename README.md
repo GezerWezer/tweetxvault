@@ -429,7 +429,10 @@ The CLI and Web UI use the same SQLite FTS5-backed post search engine and Twitte
 Spaces are an implicit `AND`; standalone uppercase `AND` is accepted when useful, and uppercase
 `OR` groups the clauses immediately around it while surrounding clauses remain required. Lowercase
 `and` and `or` remain ordinary search words. The Web UI continues to provide its existing dropdown
-for filter autocomplete.
+for filter autocomplete. The FTS index contains saved post rows only; canonical objects and other
+secondary archive records remain available for hydration without duplicating ranking work. Common
+attachment, state, identity, entity, and engagement filters execute inside SQLite before the result
+page is hydrated.
 
 **Supported Search Operators:**
 - `"exact phrase"` — wrap words in quotes to find an exact match
@@ -634,7 +637,15 @@ nonempty tag list.
 
 **Tombstones & Resurrection:** TweetDetail tombstones retain their original type, message, entities, and raw response while also receiving a stable reason such as `protected_account`, `suspended_account`, `account_missing`, `deleted_by_author`, or `unavailable_unknown`. A tombstone changes availability only when it can be positively associated with the requested tweet. X also sometimes returns an exact focal `TimelineTweet` entry with an empty `tweet_results` object; tweetxvault records that narrow sentinel as retryable `unavailable_unknown`. Missing focal entries and malformed nonempty result objects remain response-shape ambiguities, and three consecutive absences stop the worker before a broken parser or API shape can mass-classify rows. Confirmed archive deletions and deleted-by-author posts are never retried automatically. Each normal sync checks at most 200 due, retryable unavailable tweets with reason-weighted scheduling. A successful account-level recovery persists a few same-author probes as immediately due and can prioritize a small same-account burst, always inside the same 200-request budget. `tweetxvault stats` reports initial-enrichment completeness and resurrection eligibility separately.
 
-Already-current SQLite databases open with a cheap schema-version read and do not run integrity scans, index setup, or legacy repair during ordinary sync stages. A pre-v3 database still receives a validated `archive.db.pre-schema-v3...bak` before one direct upgrade to the current schema, and prints the backup plus legacy-repair summary once. Run `tweetxvault db check` (or `--full`) when you explicitly want an integrity scan. Startup repair during a real legacy upgrade is deliberately bounded to indexed local candidates; use `tweetxvault repair legacy-tombstones --scan-timeline-captures` only when you want the deeper scan.
+Already-current SQLite databases open with a cheap schema-version read and do not run integrity
+scans, index setup, or legacy repair during ordinary sync stages. A pre-v3 database receives a
+validated `archive.db.pre-schema-v4...bak` before one direct upgrade to the current schema and
+prints the backup plus legacy-repair summary once. A schema-v3 archive only rebuilds its derived
+full-text index with saved post rows; canonical archive rows are unchanged, so that narrow upgrade
+does not create a multi-gigabyte backup. Run `tweetxvault db check` (or `--full`) when you explicitly
+want an integrity scan. Startup repair during a real legacy upgrade is deliberately bounded to
+indexed local candidates; use `tweetxvault repair legacy-tombstones --scan-timeline-captures` only
+when you want the deeper scan.
 
 Long-running archive writers such as `sync`, `import enrich`, `threads expand`,
 `articles refresh`, `media download`, and `unfurl` now do a best-effort compact

@@ -11,6 +11,16 @@ Hard constraints:
 
 Definition of done: passes `uv run ruff format --check`, `uv run ruff check`, and `uv run pytest`.
 
+## Search performance follow-up (2026-08-11)
+
+- [x] Force selective partial or tweet-ID indexes for correlated attachment/state filters.
+- [x] Push JSON-backed post-state, identity, engagement, and entity filters into SQLite.
+- [x] Make thread classification null-safe on incomplete archived authors.
+- [x] Use FTS5's native rank ordering and restrict the index to searchable tweet rows.
+- [x] Rebuild the derived FTS index safely for existing schema-v3 archives.
+- [x] Add plan, migration, trigger, semantics, and production-size performance regressions.
+- [x] Update search/storage documentation and pass focused plus complete validation.
+
 ## Web statistics performance follow-up (2026-08-11)
 
 - [x] Reproduce cold report latency against the configured vault and time each section.

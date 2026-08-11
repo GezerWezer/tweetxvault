@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from tweetxvault.search import SearchQueryError, parse_search_query, search_posts
+from tweetxvault.search import SearchQueryError, _filter_matches, parse_search_query, search_posts
 from tweetxvault.storage.backend import ArchiveStore
 
 
@@ -157,7 +157,23 @@ def test_real_store_pushes_normalized_filters_into_sql(tmp_path) -> None:
                 created_at="Thu Jan 01 00:00:00 +0000 2026",
                 created_at_ts=1,
                 sort_index="1",
-                raw_json=json.dumps({"legacy": {"favorite_count": 20}}),
+                raw_json=json.dumps(
+                    {
+                        "legacy": {
+                            "favorite_count": 20,
+                            "in_reply_to_status_id_str": "parent",
+                            "in_reply_to_screen_name": "alice",
+                            "is_quote_status": True,
+                            "quoted_status_id_str": "quoted",
+                            "entities": {
+                                "hashtags": [{"text": "Python"}],
+                                "user_mentions": [{"screen_name": "Bob"}],
+                            },
+                        },
+                        "source": "Twitter Web App",
+                        "card": {"name": "summary"},
+                    }
+                ),
             ),
             store._record(
                 row_key="tweet:bookmark::2",
@@ -171,7 +187,12 @@ def test_real_store_pushes_normalized_filters_into_sql(tmp_path) -> None:
                 created_at="Fri Jan 02 00:00:00 +0000 2026",
                 created_at_ts=2,
                 sort_index="2",
-                raw_json=json.dumps({"legacy": {}}),
+                raw_json=json.dumps(
+                    {
+                        "legacy": {},
+                        "core": {"user_results": {"result": {"is_blue_verified": True}}},
+                    }
+                ),
             ),
             store._record(
                 row_key="tweet:like::3",
@@ -206,6 +227,8 @@ def test_real_store_pushes_normalized_filters_into_sql(tmp_path) -> None:
                 record_type="url_ref",
                 tweet_id="2",
                 position=0,
+                expanded_url="https://example.test/story",
+                display_url="example.test/story",
             ),
             store._record(
                 row_key="article:1",
@@ -248,6 +271,35 @@ def test_real_store_pushes_normalized_filters_into_sql(tmp_path) -> None:
     store.export_rows = lambda *_args, **_kwargs: pytest.fail("export_rows must not be called")
 
     assert {row["tweet_id"] for row in search_posts(store, "-filter:videos").rows} == {"1", "3"}
+    assert [row["tweet_id"] for row in search_posts(store, "is:reply").rows] == ["1"]
+    assert [row["tweet_id"] for row in search_posts(store, "is:quote").rows] == ["1"]
+    assert [row["tweet_id"] for row in search_posts(store, "is:thread").rows] == ["1"]
+    assert [row["tweet_id"] for row in search_posts(store, "is:verified").rows] == ["2"]
+    assert [row["tweet_id"] for row in search_posts(store, "to:alice").rows] == ["1"]
+    assert [row["tweet_id"] for row in search_posts(store, "mentions:bob").rows] == ["1"]
+    assert [row["tweet_id"] for row in search_posts(store, "#python").rows] == ["1"]
+    assert [row["tweet_id"] for row in search_posts(store, "source:twitter_web").rows] == ["1"]
+    assert [row["tweet_id"] for row in search_posts(store, "card_name:summary").rows] == ["1"]
+    assert [row["tweet_id"] for row in search_posts(store, "quoted_tweet_id:quoted").rows] == ["1"]
+    assert {row["tweet_id"] for row in search_posts(store, "-quoted_tweet_id:quoted").rows} == {
+        "2",
+        "3",
+    }
+    assert [row["tweet_id"] for row in search_posts(store, "url:example.test/story").rows] == ["2"]
+    assert {row["tweet_id"] for row in search_posts(store, "needle OR unrelated").rows} == {
+        "1",
+        "2",
+        "3",
+    }
+    assert [row["tweet_id"] for row in search_posts(store, "-needle").rows] == ["3"]
+
+    statements: list[str] = []
+    store.conn.set_trace_callback(statements.append)
+    search_posts(store, "has:image is:reply")
+    store.conn.set_trace_callback(None)
+    traced_sql = " ".join(statements)
+    assert "related INDEXED BY idx_archive_search_attachment" in traced_sql
+    assert "json_extract(raw_json, '$.legacy.in_reply_to_status_id_str')" in traced_sql
 
     text_media = search_posts(store, "needle has:media")
     assert {row["tweet_id"] for row in text_media.rows} == {"1", "2"}
@@ -265,7 +317,51 @@ def test_real_store_pushes_normalized_filters_into_sql(tmp_path) -> None:
     store.fetch_tweets_by_ids = track_fetch
     popular = search_posts(store, "needle min_faves:10")
     assert [row["tweet_id"] for row in popular.rows] == ["1"]
-    assert set(hydrated_ids[-1]) == {"1", "2"}
+    assert hydrated_ids[-1] == ["1"]
+    store.close()
+
+
+def test_thread_filter_is_null_safe_for_incomplete_authors() -> None:
+    row = _row("1", "incomplete")
+    row["author"] = {"username": None}
+    row["raw_json"] = {"legacy": {"in_reply_to_screen_name": "alice"}}
+
+    assert _filter_matches(row, "is", "thread") is False
+    assert _filter_matches(row, "filter", "threads") is False
+
+
+def test_real_store_hydrates_only_the_requested_fts_page(tmp_path) -> None:
+    store = ArchiveStore(tmp_path / "archive.db", create=True)
+    store._merge_records(
+        [
+            store._record(
+                row_key=f"tweet:bookmark::{tweet_id}",
+                record_type="tweet",
+                tweet_id=str(tweet_id),
+                collection_type="bookmark",
+                text="shared candidate token",
+                created_at_ts=tweet_id,
+                sort_index=str(tweet_id),
+                raw_json=json.dumps({"legacy": {}}),
+            )
+            for tweet_id in range(1, 31)
+        ]
+    )
+    hydrated_ids: list[list[str]] = []
+    original_fetch = store.fetch_tweets_by_ids
+
+    def track_fetch(tweet_ids: list[str]) -> list[dict[str, Any]]:
+        hydrated_ids.append(tweet_ids)
+        return original_fetch(tweet_ids)
+
+    store.fetch_tweets_by_ids = track_fetch
+
+    page = search_posts(store, "candidate", limit=5, candidate_limit=30)
+
+    assert len(page.rows) == 5
+    assert page.total == 30
+    assert len(hydrated_ids) == 1
+    assert len(hydrated_ids[0]) == 5
     store.close()
 
 
@@ -337,8 +433,6 @@ def test_tag_search_matches_tags_on_a_quoted_original(tmp_path) -> None:
     grouped = search_posts(store, 'tag:"Quoted Topic" OR from:nobody')
 
     assert [row["tweet_id"] for row in direct.rows] == ["quote"]
-    assert direct.rows[0]["qt_media_tags"] == {
-        "tags": ["Quoted Topic", "Specific Subject"]
-    }
+    assert direct.rows[0]["qt_media_tags"] == {"tags": ["Quoted Topic", "Specific Subject"]}
     assert [row["tweet_id"] for row in grouped.rows] == ["quote"]
     store.close()
