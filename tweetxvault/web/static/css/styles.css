@@ -229,6 +229,15 @@ body {
     padding-right: 6px;
 }
 
+/* Valid Boolean Operators */
+.search-capsule.boolean-capsule {
+    background-color: transparent;
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    font-weight: 600;
+    padding: 1px 6px;
+}
+
 /* Negative States */
 .search-capsule.negative-capsule.valid-capsule {
     background-color: color-mix(in srgb, var(--danger-color) 15%, transparent);
@@ -271,4 +280,3 @@ body {
     caret-color: var(--text-primary);
     vertical-align: bottom;
 }
-

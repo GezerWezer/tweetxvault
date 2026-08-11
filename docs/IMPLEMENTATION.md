@@ -16,7 +16,7 @@ Definition of done: passes `uv run ruff format --check`, `uv run ruff check`, an
 - [x] Preserve `resurrected` across later successful live sync/detail/thread writes.
 - [x] Replace visible catch-all filter suggestions with distinct `has:` and `is:` groups.
 - [x] Add `is:resurrected` search support backed by canonical tweet-object state.
-- [ ] Render valid uppercase `AND` / `OR` search operators as neutral capsules.
+- [x] Render valid uppercase `AND` / `OR` search operators as neutral capsules.
 - [ ] Keep autocomplete functional while entering quoted multi-word values.
 - [ ] Pass focused and complete validation.
 
@@ -735,6 +735,11 @@ Fresh fixture status (2026-03-16):
   - preserved existing manifest warnings when reusing a completed archive with `import x-archive --enrich`
   - constrained `--regen` archive-managed file deletion to the `media/` subtree and changed the bookmark-dataset warning/docs to note that missing bookmarks are expected for current official X archives
   - removed the full-archive authored secondary-graph precompute by preparing authored import chunks lazily inside the batched merge loop
+- [x] Hardened archive-import identity and deletion classification:
+  - reject a metadata-less Grailbird archive when the local vault already has an owner, before archive captures or data rows are written
+  - keep every `deletedTweets` row in the deleted-authored count and classify its normalized tweet object as permanently archive-deleted even when no `deleted_at` value exists
+  - preserve real deletion timestamps when available and retain the fresh-vault metadata-less Grailbird import path
+  - added focused regressions for unknown-owner rejection, no partial writes, and timestamp-less deleted rows
 - [ ] Post-rollout archive-import follow-ups:
   - narrow archive media copy lookups so `_copy_exported_media(...)` only scans rows relevant to the imported archive's tweet ids / provenance instead of materializing the full `media` table
   - revisit `clear_archive_import_data()` / `--regen` manifest semantics so archive-only cleanup can preserve multi-digest manifest history when desired

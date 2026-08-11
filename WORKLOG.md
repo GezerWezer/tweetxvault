@@ -1,3 +1,12 @@
+- 2026-08-10 (Archive import safety)
+  - Added an archive-path owner guard that rejects metadata-less Grailbird imports into a vault
+    with an existing owner, while continuing to allow them in a fresh ownerless vault and leaving
+    modern account-ID validation unchanged.
+  - Added a narrow `force_deleted` signal for `deletedTweets`: counts remain deleted-authored and
+    normalized objects become terminal `archive_deleted` / non-retryable without fabricating
+    `deleted_at`; real deletion timestamps still pass through unchanged.
+  - Added regressions for unknown-owner rejection/no import rows and timestamp-less deleted rows.
+
 - 2026-08-10 (Sticky resurrection state)
   - Kept canonical tweet objects in the successful `resurrected` state when later live timeline,
     detail, thread, or rehydration writes observe them again; ordinary successful objects remain
@@ -53,6 +62,12 @@
   - Added `has:article` plus `is:reply`, `is:quote`, `is:retweet`, `is:thread`, `is:verified`, and
     `is:resurrected`; resurrection queries use canonical tweet-object state in conjunctive and OR
     searches. Updated CLI/Web search documentation and parser/SQL/browser regressions.
+
+- 2026-08-10 (Boolean search capsules)
+  - Rendered syntactically valid standalone uppercase `AND` and `OR` operators as neutral gray
+    bordered capsules in the rich Web search input. Lowercase words and malformed leading,
+    adjacent, or trailing operators remain ordinary text, matching the shared parser contract.
+  - Added deterministic browser coverage for valid, lowercase, and trailing operator rendering.
 
 - 2026-08-10 (Cached Web statistics)
   - Added a five-minute process-local Web cache for complete statistics reports. Initial collection

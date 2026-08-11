@@ -260,6 +260,57 @@ function searchAutocomplete() {
             return (unsafe || '').replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
         },
 
+        validBooleanOperatorOffsets(text) {
+            const tokens = [];
+            const tokenRegex = /-?[\w_]+:(?:"[^"]*"|[^\s]+)|-?"[^"]*"|[^\s]+/g;
+            let tokenMatch;
+            while ((tokenMatch = tokenRegex.exec(text)) !== null) {
+                tokens.push({ value: tokenMatch[0], offset: tokenMatch.index });
+            }
+
+            const hasFollowingClause = index => {
+                let next = index + 1;
+                if (tokens[next] && tokens[next].value === 'NOT') next += 1;
+                return Boolean(tokens[next] && !['AND', 'OR', 'NOT'].includes(tokens[next].value));
+            };
+            const validOffsets = new Set();
+            let hasClause = false;
+            let expectingClause = false;
+            let joinWithOr = false;
+            let negateNext = false;
+
+            tokens.forEach((token, index) => {
+                if (token.value === 'OR') {
+                    if (hasClause && !joinWithOr && !expectingClause && hasFollowingClause(index)) {
+                        validOffsets.add(token.offset);
+                        joinWithOr = true;
+                        expectingClause = true;
+                    }
+                    return;
+                }
+                if (token.value === 'AND') {
+                    if (hasClause && !joinWithOr && !expectingClause && hasFollowingClause(index)) {
+                        validOffsets.add(token.offset);
+                        expectingClause = true;
+                    }
+                    return;
+                }
+                if (token.value === 'NOT') {
+                    if (!negateNext) {
+                        negateNext = true;
+                        expectingClause = true;
+                    }
+                    return;
+                }
+
+                hasClause = true;
+                expectingClause = false;
+                joinWithOr = false;
+                negateNext = false;
+            });
+            return validOffsets;
+        },
+
         formatRichText(text) {
             const input = this.$refs.searchInput;
             if (!input) return;
@@ -270,6 +321,7 @@ function searchAutocomplete() {
             }
 
             let html = '';
+            const validBooleanOffsets = this.validBooleanOperatorOffsets(text);
             
             // Regex to parse operators vs normal text, preserving quotes and whitespace
             const regex = /(\s+)|(?:(-?(?:from|to|has|is|filter|since|until|url|tag):)(".*?"|[^\s]*))|([^\s]+)/gi;
@@ -333,7 +385,11 @@ function searchAutocomplete() {
                         html += `<span class="search-capsule incomplete-capsule${negativeClass}"><span class="capsule-key">${prefix}</span></span>`;
                     }
                 } else if (match[4]) {
-                    html += this.escapeHtml(match[4]);
+                    if (validBooleanOffsets.has(match.index)) {
+                        html += `<span class="search-capsule boolean-capsule">${this.escapeHtml(match[4])}</span>`;
+                    } else {
+                        html += this.escapeHtml(match[4]);
+                    }
                 }
             }
             

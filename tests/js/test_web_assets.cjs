@@ -260,6 +260,25 @@ test('autocomplete formats valid, invalid, negative, quoted, and escaped capsule
     assert.doesNotMatch(input.innerHTML, /<img src=x>/);
 });
 
+test('autocomplete renders only valid uppercase boolean operators as neutral capsules', () => {
+    const context = browserContext();
+    const { searchAutocomplete } = loadScripts(
+        context,
+        ['autocomplete.js'],
+        '({searchAutocomplete})',
+    );
+    const input = { innerHTML: '' };
+    const component = immediateComponent(searchAutocomplete());
+    component.$refs.searchInput = input;
+
+    component.formatRichText('cats AND dogs OR birds and fish OR');
+
+    assert.equal((input.innerHTML.match(/boolean-capsule/g) || []).length, 2);
+    assert.match(input.innerHTML, /boolean-capsule">AND<\/span>/);
+    assert.match(input.innerHTML, /boolean-capsule">OR<\/span>/);
+    assert.match(input.innerHTML, /birds&nbsp;and&nbsp;fish&nbsp;OR$/);
+});
+
 test('autocomplete highlighting escapes API-provided labels', () => {
     const context = browserContext();
     const { searchAutocomplete } = loadScripts(
