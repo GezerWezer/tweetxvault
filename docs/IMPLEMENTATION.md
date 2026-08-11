@@ -18,7 +18,8 @@ Definition of done: passes `uv run ruff format --check`, `uv run ruff check`, an
 - [x] Add `is:resurrected` search support backed by canonical tweet-object state.
 - [x] Render valid uppercase `AND` / `OR` search operators as neutral capsules.
 - [x] Keep autocomplete functional while entering quoted multi-word values.
-- [ ] Pass focused and complete validation.
+- [x] Open Replying-to usernames in an anchored profile card instead of starting a search.
+- [x] Pass focused and complete validation.
 
 ## Web unavailable-post placeholders (2026-08-10)
 

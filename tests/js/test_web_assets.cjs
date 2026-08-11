@@ -510,6 +510,31 @@ test('tweet app starts with coherent list, panel, modal, and theme state', () =>
     assert.ok(Object.keys(app.THEMES).length >= 15);
 });
 
+test('reply-recipient links open an anchored profile card without searching', () => {
+    const context = browserContext();
+    const { tweetApp } = loadScripts(
+        context,
+        ['themes.js', 'app.js'],
+        '({tweetApp})',
+    );
+    const app = immediateComponent(tweetApp());
+    let searches = 0;
+    app.searchFrom = () => { searches += 1; };
+    const anchor = {
+        getBoundingClientRect() {
+            return { left: 40, right: 100, top: 20, bottom: 50 };
+        },
+    };
+
+    app.openUsernameProfileCard({ currentTarget: anchor }, 'reply_target');
+
+    assert.equal(searches, 0);
+    assert.equal(app.profileCard.username, 'reply_target');
+    assert.equal(app.profileCard.name, 'reply_target');
+    assert.equal(app.profileCard.id, 'unknown');
+    assert.deepEqual([app.profileCard.x, app.profileCard.y], [40, 58]);
+});
+
 test('analytics uses one cached snapshot and retains it during manual refresh', async () => {
     const context = browserContext();
     const calls = [];
@@ -1016,6 +1041,16 @@ test('tweet overflow markup covers list and detail surfaces without legacy tag i
     assert.doesNotMatch(html, /View quoted tweet tags/);
     assert.doesNotMatch(appJs, /title="View Tags"/);
     assert.match(html, /x-model="editableDescription"/);
+});
+
+test('reply-recipient markup opens profile cards on every tweet surface', () => {
+    const html = fs.readFileSync(
+        path.join(ROOT, 'tweetxvault', 'web', 'index.html'),
+        'utf8',
+    );
+
+    assert.equal((html.match(/openUsernameProfileCard\(\$event, getReplyTo/g) || []).length, 14);
+    assert.doesNotMatch(html, /searchFrom\(getReplyTo/);
 });
 
 test('config and stats requests update their matching UI state', async () => {

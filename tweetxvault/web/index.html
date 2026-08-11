@@ -258,7 +258,7 @@
                             
                             <template x-if="getReplyTo(tweet)">
                                 <div class="text-[15px] text-[var(--text-secondary)] mb-1">
-                                    Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo(tweet))" x-text="'@' + getReplyTo(tweet)"></span>
+                                    Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="openUsernameProfileCard($event, getReplyTo(tweet))" x-text="'@' + getReplyTo(tweet)"></span>
                                 </div>
                             </template>
 
@@ -291,7 +291,7 @@
                                             
                                             <template x-if="getReplyTo({raw_json: getQuoteTweet(tweet)})">
                                                 <div class="text-[15px] text-[var(--text-secondary)] mb-1">
-                                                    Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo({raw_json: getQuoteTweet(tweet)}))" x-text="'@' + getReplyTo({raw_json: getQuoteTweet(tweet)})"></span>
+                                                    Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="openUsernameProfileCard($event, getReplyTo({raw_json: getQuoteTweet(tweet)}))" x-text="'@' + getReplyTo({raw_json: getQuoteTweet(tweet)})"></span>
                                                 </div>
                                             </template>
 
@@ -356,7 +356,7 @@
                                 
                                 <template x-if="getReplyTo(parent)">
                                     <div class="text-[15px] text-[var(--text-secondary)] mb-1">
-                                        Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo(parent))" x-text="'@' + getReplyTo(parent)"></span>
+                                        Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="openUsernameProfileCard($event, getReplyTo(parent))" x-text="'@' + getReplyTo(parent)"></span>
                                     </div>
                                 </template>
 
@@ -415,7 +415,7 @@
                         
                         <template x-if="getReplyTo(threadData.main) && threadData.parents.length === 0">
                             <div class="text-[15px] text-[var(--text-secondary)] mb-2">
-                                Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo(threadData.main))" x-text="'@' + getReplyTo(threadData.main)"></span>
+                                Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="openUsernameProfileCard($event, getReplyTo(threadData.main))" x-text="'@' + getReplyTo(threadData.main)"></span>
                             </div>
                         </template>
 
@@ -444,7 +444,7 @@
                                         
                                         <template x-if="getReplyTo({raw_json: getQuoteTweet(threadData?.main)})">
                                             <div class="text-[15px] text-[var(--text-secondary)] mb-1">
-                                                Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo({raw_json: getQuoteTweet(threadData?.main)}))" x-text="'@' + getReplyTo({raw_json: getQuoteTweet(threadData?.main)})"></span>
+                                                Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="openUsernameProfileCard($event, getReplyTo({raw_json: getQuoteTweet(threadData?.main)}))" x-text="'@' + getReplyTo({raw_json: getQuoteTweet(threadData?.main)})"></span>
                                             </div>
                                         </template>
 
@@ -505,7 +505,7 @@
 
                                     <template x-if="getReplyTo(child) && getReplyTo(child) !== (threadData?.main?.author?.username)">
                                         <div class="text-[15px] text-[#71767b] mb-1">
-                                            Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo(child))" x-text="'@' + getReplyTo(child)"></span>
+                                            Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="openUsernameProfileCard($event, getReplyTo(child))" x-text="'@' + getReplyTo(child)"></span>
                                         </div>
                                     </template>
 
@@ -552,7 +552,7 @@
                                                 
                                                 <template x-if="getReplyTo(reply)">
                                                     <div class="text-[15px] text-[#71767b] mb-1">
-                                                        Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo(reply))" x-text="'@' + getReplyTo(reply)"></span>
+                                                        Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="openUsernameProfileCard($event, getReplyTo(reply))" x-text="'@' + getReplyTo(reply)"></span>
                                                     </div>
                                                 </template>
 
@@ -621,7 +621,7 @@
                             
                             <template x-if="getReplyTo(tweet)">
                                 <div class="text-[15px] text-[#71767b] mb-1">
-                                    Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo(tweet))" x-text="'@' + getReplyTo(tweet)"></span>
+                                    Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="openUsernameProfileCard($event, getReplyTo(tweet))" x-text="'@' + getReplyTo(tweet)"></span>
                                 </div>
                             </template>
 
@@ -691,7 +691,7 @@
                                 </div>
                                 <template x-if="getReplyTo(parent)">
                                     <div class="text-[15px] text-[var(--text-secondary)] mb-1">
-                                        Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo(parent))" x-text="'@' + getReplyTo(parent)"></span>
+                                        Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="openUsernameProfileCard($event, getReplyTo(parent))" x-text="'@' + getReplyTo(parent)"></span>
                                     </div>
                                 </template>
                                 <div class="text-[15px] mt-1 whitespace-pre-wrap leading-normal break-words" x-html="formatText(parent)" @click="handleTextClick($event)"></div>
@@ -746,7 +746,7 @@
                         </div>
                         <template x-if="getReplyTo(panelThreadData.main) && panelThreadData.parents.length === 0">
                             <div class="text-[15px] text-[var(--text-secondary)] mb-2">
-                                Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo(panelThreadData.main))" x-text="'@' + getReplyTo(panelThreadData.main)"></span>
+                                Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="openUsernameProfileCard($event, getReplyTo(panelThreadData.main))" x-text="'@' + getReplyTo(panelThreadData.main)"></span>
                             </div>
                         </template>
                         <div class="text-[17px] whitespace-pre-wrap leading-normal break-words" x-html="formatText(panelThreadData.main)" @click="handleTextClick($event)"></div>
@@ -773,7 +773,7 @@
                                         </div>
                                         <template x-if="getReplyTo({raw_json: getQuoteTweet(panelThreadData?.main)})">
                                             <div class="text-[15px] text-[var(--text-secondary)] mb-1">
-                                                Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo({raw_json: getQuoteTweet(panelThreadData?.main)}))" x-text="'@' + getReplyTo({raw_json: getQuoteTweet(panelThreadData?.main)})"></span>
+                                                Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="openUsernameProfileCard($event, getReplyTo({raw_json: getQuoteTweet(panelThreadData?.main)}))" x-text="'@' + getReplyTo({raw_json: getQuoteTweet(panelThreadData?.main)})"></span>
                                             </div>
                                         </template>
                                         <div class="text-[15px] whitespace-pre-wrap leading-normal break-words" x-html="formatText(getQuoteTweet(panelThreadData?.main))" @click="handleTextClick($event)"></div>
@@ -827,7 +827,7 @@
                                     </div>
                                     <template x-if="getReplyTo(child) && getReplyTo(child) !== (panelThreadData?.main?.author?.username)">
                                         <div class="text-[15px] text-[var(--text-secondary)] mb-1">
-                                            Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo(child))" x-text="'@' + getReplyTo(child)"></span>
+                                            Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="openUsernameProfileCard($event, getReplyTo(child))" x-text="'@' + getReplyTo(child)"></span>
                                         </div>
                                     </template>
                                     <div class="text-[15px] mt-1 whitespace-pre-wrap leading-normal break-words" x-html="formatText(child)" @click="handleTextClick($event)"></div>
@@ -864,7 +864,7 @@
                                                 </div>
                                                 <template x-if="getReplyTo(reply)">
                                                     <div class="text-[15px] text-[var(--text-secondary)] mb-1">
-                                                        Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo(reply))" x-text="'@' + getReplyTo(reply)"></span>
+                                                        Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="openUsernameProfileCard($event, getReplyTo(reply))" x-text="'@' + getReplyTo(reply)"></span>
                                                     </div>
                                                 </template>
                                                 <div class="text-[15px] mt-1 whitespace-pre-wrap leading-normal break-words" x-html="formatText(reply)" @click="handleTextClick($event)"></div>
@@ -929,7 +929,7 @@
                             </div>
                             <template x-if="getReplyTo(tweet)">
                                 <div class="text-[15px] text-[var(--text-secondary)] mb-1">
-                                    Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="searchFrom(getReplyTo(tweet))" x-text="'@' + getReplyTo(tweet)"></span>
+                                    Replying to <span class="text-[var(--accent-color)] hover:underline cursor-pointer" @click.stop="openUsernameProfileCard($event, getReplyTo(tweet))" x-text="'@' + getReplyTo(tweet)"></span>
                                 </div>
                             </template>
                             <div class="text-[15px] mt-1 whitespace-pre-wrap leading-normal break-words" x-html="formatText(tweet)" @click="handleTextClick($event)"></div>

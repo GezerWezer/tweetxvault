@@ -75,6 +75,17 @@
   - Made rich search formatting retain unfinished quoted values as one operator expression and
     added deterministic lookup, selection, and rendering coverage.
 
+- 2026-08-10 (Reply-recipient profile cards)
+  - Changed all list, full-detail, split-panel, quoted-post, parent, child, and nested-reply
+    “Replying to” username links to open a profile card anchored to the clicked username instead
+    of replacing the current view with an author search.
+  - Reused the established username-only profile fallback and added behavior plus complete-markup
+    coverage across all 14 rendered surfaces.
+  - Final follow-up validation passed all 812 Python tests, repository-wide Ruff lint, all 30
+    deterministic browser tests, and `git diff --check`. Repository-wide Ruff format check reports
+    the same seven pre-existing files, including `tests/test_search.py` and
+    `tweetxvault/storage/backend.py` outside the task hunks.
+
 - 2026-08-10 (Cached Web statistics)
   - Added a five-minute process-local Web cache for complete statistics reports. Initial collection
     and background refreshes are deduplicated; stale data remains available during refresh and

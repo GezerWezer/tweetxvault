@@ -65,9 +65,25 @@ function tweetApp() {
         showKeyboardShortcuts: false,
         profileCard: null,
 
-        openProfileCard(event, tweet, isQt = false) {
+        openUsernameProfileCard(event, username) {
+            if (!username) return;
+            this.openProfileCard(
+                event,
+                {
+                    author: {
+                        display_name: username,
+                        username,
+                        id: 'unknown',
+                    },
+                },
+                false,
+                true,
+            );
+        },
+
+        openProfileCard(event, tweet, isQt = false, useClickedAnchor = false) {
             let anchor = event.currentTarget;
-            if (!anchor.classList.contains('w-10')) {
+            if (!useClickedAnchor && !anchor.classList.contains('w-10')) {
                 // Attempt to find the pfp avatar container which is usually a previous sibling or in the parent flex row
                 let container = anchor.closest('.flex.space-x-2') || anchor.closest('.flex.relative');
                 if (!container && anchor.parentElement && anchor.parentElement.parentElement) {
