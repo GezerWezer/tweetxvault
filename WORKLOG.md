@@ -30,6 +30,11 @@
   - Replaced multi-gigabyte exact database-component payload scans with bounded 4,096-row estimates;
     total SQLite/media sizes, counts, and filesystem segment sizes remain exact and the UI/docs label
     detailed database payloads as estimates. Storage fell from 35.612 to 5.220 seconds.
+  - Read-only accuracy validation against the former full-scan formulas found the combined sampled
+    database payload within 1.01%: thread objects -1.50%, core tweets +12.68%, profiles +12.86%, and
+    articles exact. Thread objects dominate the payload, so the net difference was 20.25 MB, or
+    0.26% of the 7.80 GB SQLite file; the exact total is unchanged and the difference moves only
+    between detailed payload and database-overhead segments.
   - On the same vault, a fresh-process complete report fell from 139.453 to 26.079 seconds (81.3%
     faster); a follow-up with warm OS/database pages took 10.048 seconds. No schema/index migration
     or production database mutation was required.
