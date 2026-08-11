@@ -229,9 +229,10 @@
                                 </div>
                                 <div class="relative ml-auto -mr-2 -mt-2 flex-shrink-0" @click.outside="closeTweetMenu('list:' + tweet.tweet_id)" @keydown.escape.window="closeTweetMenu('list:' + tweet.tweet_id)">
                                     <button type="button"
-                                            class="w-9 h-9 rounded-full flex items-center justify-center text-[var(--text-secondary)] hover:text-[var(--accent-color)] hover:bg-[color-mix(in_srgb,var(--accent-color)_10%,transparent)] transition select-none touch-manipulation"
+                                            class="w-9 h-9 rounded-full flex items-center justify-center text-[var(--text-secondary)] hover:text-[var(--accent-color)] hover:bg-[color-mix(in_srgb,var(--accent-color)_10%,transparent)] select-none touch-manipulation"
                                             aria-label="More actions" aria-haspopup="menu"
                                             :aria-expanded="tweetMenuOpen === 'list:' + tweet.tweet_id"
+                                            :class="{ 'opacity-0': tweetMenuOpen === 'list:' + tweet.tweet_id }"
                                             title="More actions (hold for Tags)"
                                             @pointerdown.stop="startTweetMenuPress($event, tweet.tweet_id, tweet.media_tags)"
                                             @pointerup.stop="cancelTweetMenuPress()"
@@ -244,10 +245,10 @@
                                     <div x-show="tweetMenuOpen === 'list:' + tweet.tweet_id" x-cloak
                                          x-transition:enter="transition ease-out duration-100" x-transition:enter-start="opacity-0 scale-95" x-transition:enter-end="opacity-100 scale-100"
                                          x-transition:leave="transition ease-in duration-75" x-transition:leave-start="opacity-100 scale-100" x-transition:leave-end="opacity-0 scale-95"
-                                         class="absolute right-[18px] top-[18px] z-50 w-56 origin-top-right overflow-hidden rounded-xl border border-[var(--border-color)] bg-[var(--dropdown-bg)] py-1 shadow-2xl"
+                                         class="absolute right-0 top-0 z-50 w-56 origin-top-right overflow-hidden rounded-xl border border-[var(--border-color)] bg-[var(--dropdown-bg)] shadow-2xl"
                                          role="menu">
                                         <button type="button" role="menuitem" @click.stop="openTagsFromTweetMenu(tweet.tweet_id, tweet.media_tags)"
-                                                class="flex w-full items-center gap-3 px-4 py-3 text-left text-[15px] font-bold text-[var(--text-primary)] hover:bg-[var(--hover-bg)] transition">
+                                                class="flex w-full items-center gap-3 px-4 py-3 text-left text-[15px] font-bold text-[var(--text-primary)] hover:bg-[var(--hover-bg)]">
                                             <svg viewBox="0 0 24 24" class="w-5 h-5 fill-current flex-shrink-0" aria-hidden="true"><path d="M20.95 13.05 10.9 3H3v7.9l10.05 10.05a1.5 1.5 0 0 0 2.12 0l5.78-5.78a1.5 1.5 0 0 0 0-2.12ZM7.5 9A1.5 1.5 0 1 1 7.5 6a1.5 1.5 0 0 1 0 3Z"></path></svg>
                                             <span>Tags</span>
                                         </button>
@@ -385,9 +386,10 @@
                             </div>
                             <div class="relative -mr-2 -mt-2 flex-shrink-0" @click.outside="closeTweetMenu('detail:' + threadData.main.tweet_id)" @keydown.escape.window="closeTweetMenu('detail:' + threadData.main.tweet_id)">
                                 <button type="button"
-                                        class="w-9 h-9 rounded-full flex items-center justify-center text-[var(--text-secondary)] hover:text-[var(--accent-color)] hover:bg-[color-mix(in_srgb,var(--accent-color)_10%,transparent)] transition select-none touch-manipulation"
+                                        class="w-9 h-9 rounded-full flex items-center justify-center text-[var(--text-secondary)] hover:text-[var(--accent-color)] hover:bg-[color-mix(in_srgb,var(--accent-color)_10%,transparent)] select-none touch-manipulation"
                                         aria-label="More actions" aria-haspopup="menu"
                                         :aria-expanded="tweetMenuOpen === 'detail:' + threadData.main.tweet_id"
+                                        :class="{ 'opacity-0': tweetMenuOpen === 'detail:' + threadData.main.tweet_id }"
                                         title="More actions (hold for Tags)"
                                         @pointerdown.stop="startTweetMenuPress($event, threadData.main.tweet_id, threadData.main.media_tags)"
                                         @pointerup.stop="cancelTweetMenuPress()"
@@ -400,10 +402,10 @@
                                 <div x-show="tweetMenuOpen === 'detail:' + threadData.main.tweet_id" x-cloak
                                      x-transition:enter="transition ease-out duration-100" x-transition:enter-start="opacity-0 scale-95" x-transition:enter-end="opacity-100 scale-100"
                                      x-transition:leave="transition ease-in duration-75" x-transition:leave-start="opacity-100 scale-100" x-transition:leave-end="opacity-0 scale-95"
-                                     class="absolute right-[18px] top-[18px] z-50 w-56 origin-top-right overflow-hidden rounded-xl border border-[var(--border-color)] bg-[var(--dropdown-bg)] py-1 shadow-2xl"
+                                     class="absolute right-0 top-0 z-50 w-56 origin-top-right overflow-hidden rounded-xl border border-[var(--border-color)] bg-[var(--dropdown-bg)] shadow-2xl"
                                      role="menu">
                                     <button type="button" role="menuitem" @click.stop="openTagsFromTweetMenu(threadData.main.tweet_id, threadData.main.media_tags)"
-                                            class="flex w-full items-center gap-3 px-4 py-3 text-left text-[15px] font-bold text-[var(--text-primary)] hover:bg-[var(--hover-bg)] transition">
+                                            class="flex w-full items-center gap-3 px-4 py-3 text-left text-[15px] font-bold text-[var(--text-primary)] hover:bg-[var(--hover-bg)]">
                                         <svg viewBox="0 0 24 24" class="w-5 h-5 fill-current flex-shrink-0" aria-hidden="true"><path d="M20.95 13.05 10.9 3H3v7.9l10.05 10.05a1.5 1.5 0 0 0 2.12 0l5.78-5.78a1.5 1.5 0 0 0 0-2.12ZM7.5 9A1.5 1.5 0 1 1 7.5 6a1.5 1.5 0 0 1 0 3Z"></path></svg>
                                         <span>Tags</span>
                                     </button>
@@ -716,9 +718,10 @@
                             </div>
                             <div class="relative -mr-2 -mt-2 flex-shrink-0" @click.outside="closeTweetMenu('panel:' + panelThreadData.main.tweet_id)" @keydown.escape.window="closeTweetMenu('panel:' + panelThreadData.main.tweet_id)">
                                 <button type="button"
-                                        class="w-9 h-9 rounded-full flex items-center justify-center text-[var(--text-secondary)] hover:text-[var(--accent-color)] hover:bg-[color-mix(in_srgb,var(--accent-color)_10%,transparent)] transition select-none touch-manipulation"
+                                        class="w-9 h-9 rounded-full flex items-center justify-center text-[var(--text-secondary)] hover:text-[var(--accent-color)] hover:bg-[color-mix(in_srgb,var(--accent-color)_10%,transparent)] select-none touch-manipulation"
                                         aria-label="More actions" aria-haspopup="menu"
                                         :aria-expanded="tweetMenuOpen === 'panel:' + panelThreadData.main.tweet_id"
+                                        :class="{ 'opacity-0': tweetMenuOpen === 'panel:' + panelThreadData.main.tweet_id }"
                                         title="More actions (hold for Tags)"
                                         @pointerdown.stop="startTweetMenuPress($event, panelThreadData.main.tweet_id, panelThreadData.main.media_tags)"
                                         @pointerup.stop="cancelTweetMenuPress()"
@@ -731,10 +734,10 @@
                                 <div x-show="tweetMenuOpen === 'panel:' + panelThreadData.main.tweet_id" x-cloak
                                      x-transition:enter="transition ease-out duration-100" x-transition:enter-start="opacity-0 scale-95" x-transition:enter-end="opacity-100 scale-100"
                                      x-transition:leave="transition ease-in duration-75" x-transition:leave-start="opacity-100 scale-100" x-transition:leave-end="opacity-0 scale-95"
-                                     class="absolute right-[18px] top-[18px] z-50 w-56 origin-top-right overflow-hidden rounded-xl border border-[var(--border-color)] bg-[var(--dropdown-bg)] py-1 shadow-2xl"
+                                     class="absolute right-0 top-0 z-50 w-56 origin-top-right overflow-hidden rounded-xl border border-[var(--border-color)] bg-[var(--dropdown-bg)] shadow-2xl"
                                      role="menu">
                                     <button type="button" role="menuitem" @click.stop="openTagsFromTweetMenu(panelThreadData.main.tweet_id, panelThreadData.main.media_tags)"
-                                            class="flex w-full items-center gap-3 px-4 py-3 text-left text-[15px] font-bold text-[var(--text-primary)] hover:bg-[var(--hover-bg)] transition">
+                                            class="flex w-full items-center gap-3 px-4 py-3 text-left text-[15px] font-bold text-[var(--text-primary)] hover:bg-[var(--hover-bg)]">
                                         <svg viewBox="0 0 24 24" class="w-5 h-5 fill-current flex-shrink-0" aria-hidden="true"><path d="M20.95 13.05 10.9 3H3v7.9l10.05 10.05a1.5 1.5 0 0 0 2.12 0l5.78-5.78a1.5 1.5 0 0 0 0-2.12ZM7.5 9A1.5 1.5 0 1 1 7.5 6a1.5 1.5 0 0 1 0 3Z"></path></svg>
                                         <span>Tags</span>
                                     </button>

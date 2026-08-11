@@ -17,6 +17,7 @@ Definition of done: passes `uv run ruff format --check`, `uv run ruff check`, an
 - [x] Move tag access into the overflow menu and support a one-second press-and-hold shortcut.
 - [x] Let the tag modal create tags for untagged tweets and add/edit descriptions.
 - [x] Persist manual descriptions through the tag API/storage layer and refresh visible tweet state.
+- [x] Align the dropdown over its trigger, remove outer vertical gaps, and make hover immediate.
 - [x] Add route, storage, browser-state, and markup regressions; pass targeted validation.
 
 ## Cached Web statistics (2026-08-10)

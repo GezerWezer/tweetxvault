@@ -931,7 +931,14 @@ test('tweet overflow markup covers list and detail surfaces without legacy tag i
 
     assert.equal((html.match(/aria-label="More actions"/g) || []).length, 3);
     assert.equal((html.match(/<span>Tags<\/span>/g) || []).length, 3);
-    assert.equal((html.match(/right-\[18px\] top-\[18px\]/g) || []).length, 3);
+    assert.equal((html.match(/right-0 top-0 z-50 w-56/g) || []).length, 3);
+    assert.equal((html.match(/'opacity-0': tweetMenuOpen ===/g) || []).length, 3);
+    assert.doesNotMatch(html, /right-\[18px\] top-\[18px\]/);
+    assert.doesNotMatch(html, /bg-\[var\(--dropdown-bg\)\] py-1 shadow-2xl/);
+    assert.doesNotMatch(
+        html,
+        /hover:bg-\[var\(--hover-bg\)\] transition">\s*<svg viewBox="0 0 24 24" class="w-5 h-5/,
+    );
     assert.match(html, /startTweetMenuPress\(\$event, tweet\.tweet_id, tweet\.media_tags\)/);
     assert.match(html, /startTweetMenuPress\(\$event, threadData\.main\.tweet_id/);
     assert.match(html, /startTweetMenuPress\(\$event, panelThreadData\.main\.tweet_id/);
