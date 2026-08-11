@@ -1,3 +1,17 @@
+- 2026-08-11 (High-cardinality tag search benchmark)
+  - Reproduced `tag:` latency on a copy-on-write clone of the configured 7.8 GB vault after adding
+    700 benchmark-only tag records. The current exact-count and first-page queries each exceeded a
+    10-second bound because the quote-tag branch scans `idx_archive_tweet_id` across 2.09 million
+    archive rows; the predicate is executed independently for count and page selection.
+  - Benchmarked a covering partial media-tag index plus exact `json_each` matching and target-ID
+    quote traversal with a forced outer loop. Warm count/page medians were 17.2/18.0 ms; the cold
+    count was 365.8 ms. The partial index was 48 KiB for 700 tag rows and took 19.6 seconds to build
+    on the clone. Planner statistics alone cannot override the current `INDEXED BY` hint, and the
+    replacement needs `CROSS JOIN` to prevent SQLite from reordering it into another full scan.
+  - Confirmed the configured live vault currently has no `media_tag` rows. An immutable 220 MB
+    backup has 365 tag records (top tag `deadlock`, 47 posts), so the 700-post symptom was modeled
+    on the production-sized clone. Removed all temporary database clones and benchmark scripts.
+
 - 2026-08-11 (Search query planning and FTS performance)
   - Reproduced production-sized search latency read-only on the 7.8 GB local vault: an empty page
     took 0.029 seconds, `has:media` took 28.109 seconds, image/video/link filters exceeded a
