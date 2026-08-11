@@ -385,7 +385,7 @@ def test_archive_stats_reports_followup_work(paths) -> None:
     store.close()
 
 
-def test_live_timeline_ingestion_clears_terminal_scheduler_metadata(paths) -> None:
+def test_live_timeline_ingestion_resurrects_and_clears_terminal_scheduler_metadata(paths) -> None:
     store = open_archive_store(paths, create=True)
     assert store is not None
     tweet = _complex_tweet("100")
@@ -429,7 +429,7 @@ def test_live_timeline_ingestion_clears_terminal_scheduler_metadata(paths) -> No
 
     row = store._get_row("tweet_object:100")
     assert row is not None
-    assert row["enrichment_state"] == "done"
+    assert row["enrichment_state"] == "resurrected"
     assert row["enrichment_reason"] is None
     assert row["enrichment_detail"] is None
     assert row["enrichment_retry_count"] == 0
@@ -1206,6 +1206,49 @@ def test_rehydrate_from_raw_json_rebuilds_thread_capture_secondary_rows(paths) -
     assert ("100", "thread_parent", "200") in relations
     assert ("200", "thread_child", "100") in relations
     assert ("100", "links_to_status", "300") in relations
+    store.close()
+
+
+def test_successful_live_refresh_preserves_resurrected_state(paths) -> None:
+    store = open_archive_store(paths, create=True)
+    assert store is not None
+    tweet = _complex_tweet()
+
+    def persist_page() -> None:
+        store.persist_page(
+            operation="Bookmarks",
+            collection_type="bookmark",
+            cursor_in=None,
+            cursor_out=None,
+            http_status=200,
+            raw_json={"ok": True},
+            tweets=[tweet],
+            last_head_tweet_id=tweet.tweet_id,
+            backfill_cursor=None,
+            backfill_incomplete=False,
+        )
+
+    persist_page()
+    store.update_tweet_object_enrichment(
+        tweet.tweet_id,
+        enrichment_state="terminal_unavailable",
+        enrichment_checked_at=None,
+        enrichment_http_status=404,
+        enrichment_reason="deleted_by_author",
+    )
+
+    persist_page()
+    assert store._get_row(f"tweet_object:{tweet.tweet_id}")["enrichment_state"] == "resurrected"
+
+    persist_page()
+    store.persist_tweet_detail(tweet=tweet, raw_json=make_tweet_detail_response([tweet.raw_json]))
+    store.persist_thread_detail(
+        focal_tweet_id=tweet.tweet_id,
+        tweets=[tweet],
+        raw_json=make_tweet_detail_response([tweet.raw_json]),
+    )
+
+    assert store._get_row(f"tweet_object:{tweet.tweet_id}")["enrichment_state"] == "resurrected"
     store.close()
 
 

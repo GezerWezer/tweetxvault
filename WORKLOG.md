@@ -1,3 +1,9 @@
+- 2026-08-10 (Sticky resurrection state)
+  - Kept canonical tweet objects in the successful `resurrected` state when later live timeline,
+    detail, thread, or rehydration writes observe them again; ordinary successful objects remain
+    `done`, while direct live recovery from `terminal_unavailable` now becomes `resurrected`.
+  - Added storage coverage for timeline recovery and repeated page/detail/thread refreshes.
+
 - 2026-08-10 (Web unavailable-post placeholders)
   - Removed availability-based search suppression so unavailable saved posts retain their feed
     position and pagination. Added one Web presentation contract backed by canonical

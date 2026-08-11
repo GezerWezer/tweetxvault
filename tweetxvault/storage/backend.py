@@ -1587,7 +1587,13 @@ class ArchiveStore:
             deleted_at=deleted_at,
         )
         if source == LIVE_SOURCE:
-            enrichment_state = enrichment_state or "done"
+            if enrichment_state is None:
+                prior_state = self._existing_value(context, "enrichment_state")
+                enrichment_state = (
+                    "resurrected"
+                    if prior_state in {"terminal_unavailable", "resurrected"}
+                    else "done"
+                )
             enrichment_checked_at = enrichment_checked_at or context.now
             enrichment_http_status = (
                 200 if enrichment_http_status is None else enrichment_http_status
@@ -3051,9 +3057,7 @@ class ArchiveStore:
         owns_buffer = cursor is None
         buffer = cursor or _PageBuffer()
         existing = self._lookup_row(self._row_key_for_tweet_object(tweet.tweet_id), cursor=buffer)
-        was_terminal = (
-            existing is not None and existing.get("enrichment_state") == "terminal_unavailable"
-        )
+        prior_state = existing.get("enrichment_state") if existing is not None else None
         self.append_raw_capture(
             "TweetDetail",
             tweet.tweet_id,
@@ -3073,7 +3077,9 @@ class ArchiveStore:
 
         self.update_tweet_object_enrichment(
             tweet.tweet_id,
-            enrichment_state="resurrected" if was_terminal else "done",
+            enrichment_state=(
+                "resurrected" if prior_state in {"terminal_unavailable", "resurrected"} else "done"
+            ),
             enrichment_checked_at=utc_now(),
             enrichment_http_status=http_status,
             enrichment_reason=None,

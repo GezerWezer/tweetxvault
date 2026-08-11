@@ -11,6 +11,15 @@ Hard constraints:
 
 Definition of done: passes `uv run ruff format --check`, `uv run ruff check`, and `uv run pytest`.
 
+## Search vocabulary and resurrection state follow-up (2026-08-10)
+
+- [x] Preserve `resurrected` across later successful live sync/detail/thread writes.
+- [ ] Replace visible catch-all filter suggestions with distinct `has:` and `is:` groups.
+- [ ] Add `is:resurrected` search support backed by canonical tweet-object state.
+- [ ] Render valid uppercase `AND` / `OR` search operators as neutral capsules.
+- [ ] Keep autocomplete functional while entering quoted multi-word values.
+- [ ] Pass focused and complete validation.
+
 ## Web unavailable-post placeholders (2026-08-10)
 
 - [x] Stop excluding unavailable membership rows from shared search pagination.
