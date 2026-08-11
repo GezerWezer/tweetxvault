@@ -1,3 +1,9 @@
+- 2026-08-10 (Instant Web statistics hover states)
+  - Removed transition timing from statistics card borders, card info icons, and unavailable-status
+    bar colors so their existing hover highlights appear immediately.
+  - Kept the storage bar's width-only expansion animation because it responds to category/detail
+    changes rather than hover, and added deterministic CSS/markup regressions.
+
 - 2026-08-10 (Sparse configuration — CLI, API, and Web UI)
   - Converted default-password creation and `web set-password` to write only
     `web.password_hash`; removed the full-model save path and its application callers.

@@ -11,6 +11,12 @@ Hard constraints:
 
 Definition of done: passes `uv run ruff format --check`, `uv run ruff check`, and `uv run pytest`.
 
+## Instant Web statistics hover states (2026-08-10)
+
+- [x] Remove transition timing from statistics cards, info icons, and status bar segments.
+- [x] Preserve non-hover storage expansion animation and existing hover highlighting.
+- [x] Add deterministic asset regressions and pass focused validation.
+
 ## Sparse configuration and SQLite defaults (2026-08-10)
 
 - [x] Set fixed 512 MiB page-cache and 1 GiB mmap defaults in `DatabaseConfig`.

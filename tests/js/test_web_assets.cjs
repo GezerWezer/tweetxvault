@@ -669,6 +669,10 @@ test('analytics markup exposes the Archive status cards and reason breakdown', (
         path.join(ROOT, 'tweetxvault', 'web', 'index.html'),
         'utf8',
     );
+    const styles = fs.readFileSync(
+        path.join(ROOT, 'tweetxvault', 'web', 'static', 'css', 'styles.css'),
+        'utf8',
+    );
 
     assert.match(html, />Archive status</);
     assert.match(html, />Enriched /);
@@ -685,6 +689,12 @@ test('analytics markup exposes the Archive status cards and reason breakdown', (
     assert.match(html, /x-show="statsRefreshing" class="inline-flex items-center gap-1.5"/);
     assert.match(html, /\sRefreshing\s+<\/span>/);
     assert.doesNotMatch(html, />Pipeline health</);
+    assert.doesNotMatch(
+        html,
+        /class="archive-status-bar-seg[^"]*(?:transition|duration-)/,
+    );
+    assert.doesNotMatch(styles.match(/\.stats-card \{[^}]+\}/s)[0], /transition:/);
+    assert.doesNotMatch(styles.match(/\.stats-info-icon \{[^}]+\}/s)[0], /transition:/);
 });
 
 test('tweet fetching encodes search state, hydrates pagination, appends, and reports errors', async () => {
