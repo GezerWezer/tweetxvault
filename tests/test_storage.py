@@ -370,6 +370,8 @@ def test_archive_stats_reports_followup_work(paths) -> None:
     )
     store._delete("row_key = 'tweet_object:300'")
 
+    statements: list[str] = []
+    store.conn.set_trace_callback(statements.append)
     stats = store.archive_stats()
 
     assert stats.pending_enrichment_count == 1
@@ -382,6 +384,14 @@ def test_archive_stats_reports_followup_work(paths) -> None:
     assert stats.expanded_thread_target_count == 1
     assert stats.pending_thread_membership_count == 2
     assert stats.pending_thread_linked_status_count == 2
+    enrichment_aggregates = [
+        statement for statement in statements if "SELECT enrichment_state, count(*)" in statement
+    ]
+    assert len(enrichment_aggregates) == 1
+    assert "INDEXED BY idx_archive_enrichment_due" in enrichment_aggregates[0]
+    assert not any(
+        "SELECT tweet_id, deleted_at, enrichment_state" in statement for statement in statements
+    )
     store.close()
 
 

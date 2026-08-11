@@ -2735,9 +2735,10 @@ class ArchiveStore:
             ),
             quoted AS (
                 SELECT DISTINCT relation.target_tweet_id AS tweet_id
-                FROM archive relation INDEXED BY idx_archive_tweet_id
-                JOIN saved ON saved.tweet_id = relation.tweet_id
-                WHERE relation.record_type = 'tweet_relation'
+                FROM saved
+                CROSS JOIN archive relation INDEXED BY idx_archive_tweet_id
+                WHERE relation.tweet_id = saved.tweet_id
+                  AND relation.record_type = 'tweet_relation'
                   AND relation.relation_type = 'quote_of'
                   AND EXISTS (
                       SELECT 1
@@ -3722,12 +3723,16 @@ class ArchiveStore:
 
     def archive_stats(self, max_linked_depth: int = 1) -> ArchiveStats:
         counts = self.counts()
-        tweet_rows = self._query(
-            expr="record_type = 'tweet'", cols=["tweet_id", "collection_type", "created_at"]
-        )
-        capture_rows = self._query(
-            expr="record_type = 'raw_capture'", cols=["captured_at", "operation", "cursor_in"]
-        )
+        tweet_rows = [
+            dict(row)
+            for row in self.conn.execute(
+                """
+                SELECT tweet_id, collection_type, created_at
+                FROM archive INDEXED BY idx_archive_record_page
+                WHERE record_type = 'tweet'
+                """
+            ).fetchall()
+        ]
         sync_rows = self._query(
             expr="record_type = 'sync_state'",
             cols=[
@@ -3738,30 +3743,58 @@ class ArchiveStore:
                 "backfill_incomplete",
             ],
         )
-        tweet_object_rows = self._query(
-            expr="record_type = 'tweet_object'",
-            cols=[
-                "tweet_id",
-                "deleted_at",
-                "enrichment_state",
-                "enrichment_reason",
-                "enrichment_retry_eligible",
-                "enrichment_next_retry_at",
-            ],
-        )
-        article_rows = self._query(expr="record_type = 'article'", cols=["status"])
-        url_ref_rows = self._query(
-            expr="record_type = 'url_ref'",
-            cols=["tweet_id", "canonical_url", "expanded_url", "url"],
-        )
+        enrichment_counts = {
+            row[0]: int(row[1])
+            for row in self.conn.execute(
+                """
+                SELECT enrichment_state, count(*)
+                FROM archive INDEXED BY idx_archive_enrichment_due
+                WHERE record_type = 'tweet_object'
+                GROUP BY enrichment_state
+                """
+            ).fetchall()
+            if isinstance(row[0], str)
+        }
+        scheduler_rows = [
+            dict(row)
+            for row in self.conn.execute(
+                """
+                SELECT deleted_at, enrichment_state, enrichment_reason,
+                       enrichment_retry_eligible, enrichment_next_retry_at
+                FROM archive INDEXED BY idx_archive_enrichment_due
+                WHERE record_type = 'tweet_object'
+                  AND enrichment_state IN ('transient_failure', 'terminal_unavailable')
+                """
+            ).fetchall()
+        ]
+        url_ref_rows = [
+            dict(row)
+            for row in self.conn.execute(
+                """
+                SELECT tweet_id, canonical_url, expanded_url, url
+                FROM archive INDEXED BY idx_archive_record_page
+                WHERE record_type = 'url_ref'
+                """
+            ).fetchall()
+        ]
 
         oldest_created_dt: datetime | None = None
         newest_created_dt: datetime | None = None
         oldest_created_at: str | None = None
         newest_created_at: str | None = None
         unique_post_ids: set[str] = set()
-        tweet_object_ids: set[str] = set()
-        expanded_thread_targets: set[str] = set()
+        expanded_thread_targets = {
+            str(row[0])
+            for row in self.conn.execute(
+                """
+                SELECT cursor_in
+                FROM archive INDEXED BY idx_archive_capture_target
+                WHERE record_type = 'raw_capture'
+                  AND operation = 'ThreadExpandDetail'
+                  AND cursor_in IS NOT NULL AND cursor_in != ''
+                """
+            ).fetchall()
+        }
         collection_stats = {
             collection: ArchiveCollectionStats(collection_type=collection)
             for collection in SEARCH_COLLECTION_ORDER
@@ -3807,33 +3840,26 @@ class ArchiveStore:
                 collection.post_count += 1
             update_created_bounds(row.get("created_at"), collection=collection)
 
-        pending_enrichment_count = 0
-        transient_enrichment_failure_count = 0
+        pending_enrichment_count = enrichment_counts.get("pending", 0)
+        transient_enrichment_failure_count = enrichment_counts.get("transient_failure", 0)
         transient_enrichment_due_count = 0
         transient_enrichment_delayed_count = 0
-        terminal_enrichment_count = 0
-        resurrected_enrichment_count = 0
-        done_enrichment_count = 0
+        terminal_enrichment_count = enrichment_counts.get("terminal_unavailable", 0)
+        resurrected_enrichment_count = enrichment_counts.get("resurrected", 0)
+        done_enrichment_count = enrichment_counts.get("done", 0)
         retryable_unavailable_count = 0
         permanent_unavailable_count = 0
         due_resurrection_count = 0
         stats_now = utc_now()
-        for row in tweet_object_rows:
-            tweet_id = row.get("tweet_id")
-            if isinstance(tweet_id, str) and tweet_id:
-                tweet_object_ids.add(tweet_id)
+        for row in scheduler_rows:
             enrichment_state = row.get("enrichment_state")
-            if enrichment_state == "pending":
-                pending_enrichment_count += 1
-            elif enrichment_state == "transient_failure":
-                transient_enrichment_failure_count += 1
+            if enrichment_state == "transient_failure":
                 next_retry_at = row.get("enrichment_next_retry_at")
                 if not next_retry_at or next_retry_at <= stats_now:
                     transient_enrichment_due_count += 1
                 else:
                     transient_enrichment_delayed_count += 1
             elif enrichment_state == "terminal_unavailable":
-                terminal_enrichment_count += 1
                 reason = row.get("enrichment_reason")
                 deleted_at = row.get("deleted_at")
                 retry_eligible = self._parse_bool(row.get("enrichment_retry_eligible"))
@@ -3853,33 +3879,43 @@ class ArchiveStore:
                     next_retry_at = row.get("enrichment_next_retry_at")
                     if not next_retry_at or next_retry_at <= stats_now:
                         due_resurrection_count += 1
-            elif enrichment_state == "resurrected":
-                resurrected_enrichment_count += 1
-            elif enrichment_state == "done":
-                done_enrichment_count += 1
-
-        preview_article_count = sum(
-            1
-            for row in article_rows
-            if not isinstance(row.get("status"), str) or row.get("status") != "body_present"
+        preview_article_count = int(
+            self.conn.execute(
+                """
+                SELECT count(*)
+                FROM archive INDEXED BY idx_archive_record_page
+                WHERE record_type = 'article'
+                  AND (status IS NULL OR status != 'body_present')
+                """
+            ).fetchone()[0]
+            or 0
         )
-        missing_tweet_object_count = len(unique_post_ids - tweet_object_ids)
+        missing_tweet_object_count = int(
+            self.conn.execute(
+                """
+                SELECT count(DISTINCT tweet.tweet_id)
+                FROM archive tweet INDEXED BY idx_archive_record_page
+                WHERE tweet.record_type = 'tweet'
+                  AND tweet.tweet_id IS NOT NULL
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM archive object INDEXED BY idx_archive_tweet_id
+                      WHERE object.tweet_id = tweet.tweet_id
+                        AND object.record_type = 'tweet_object'
+                  )
+                """
+            ).fetchone()[0]
+            or 0
+        )
 
-        latest_capture_at: str | None = None
-        for row in capture_rows:
-            captured_at = row.get("captured_at")
-            if (
-                isinstance(captured_at, str)
-                and captured_at
-                and (latest_capture_at is None or captured_at > latest_capture_at)
-            ):
-                latest_capture_at = captured_at
-            if (
-                row.get("operation") == "ThreadExpandDetail"
-                and isinstance(row.get("cursor_in"), str)
-                and row["cursor_in"]
-            ):
-                expanded_thread_targets.add(row["cursor_in"])
+        latest_capture_row = self.conn.execute(
+            """
+            SELECT max(captured_at)
+            FROM archive INDEXED BY idx_archive_capture_target
+            WHERE record_type = 'raw_capture'
+            """
+        ).fetchone()
+        latest_capture_at = latest_capture_row[0] if latest_capture_row else None
 
         latest_sync_at: str | None = None
         for row in sync_rows:
@@ -3920,7 +3956,6 @@ class ArchiveStore:
             if name not in SEARCH_COLLECTION_ORDER
         )
         pending_thread_membership_count = len(unique_post_ids - expanded_thread_targets)
-        known_tweet_ids = unique_post_ids | tweet_object_ids
         pending_linked_status_targets: set[str] = set()
 
         url_edges: dict[str, list[str]] = {}
@@ -3965,13 +4000,38 @@ class ArchiveStore:
                     depths[target_id] = depth
                     discovery_kinds[target_id] = kind
 
+        linked_candidates = {
+            target_id
+            for target_id, depth in depths.items()
+            if depth > 0
+            and target_id not in quote_reachable_targets
+            and discovery_kinds[target_id] == "linked"
+        }
+        known_linked_targets = set(unique_post_ids & linked_candidates)
+        linked_candidate_ids = sorted(linked_candidates - known_linked_targets)
+        for start in range(0, len(linked_candidate_ids), 500):
+            chunk = linked_candidate_ids[start : start + 500]
+            placeholders = ", ".join("?" for _tweet_id in chunk)
+            known_linked_targets.update(
+                str(row[0])
+                for row in self.conn.execute(
+                    f"""
+                    SELECT DISTINCT tweet_id
+                    FROM archive INDEXED BY idx_archive_tweet_id
+                    WHERE tweet_id IN ({placeholders})
+                      AND record_type = 'tweet_object'
+                    """,
+                    chunk,
+                ).fetchall()
+            )
+
         for target_id, depth in depths.items():
             if depth == 0 or target_id in expanded_thread_targets:
                 continue
             if (
                 target_id not in quote_reachable_targets
                 and discovery_kinds[target_id] == "linked"
-                and target_id in known_tweet_ids
+                and target_id in known_linked_targets
             ):
                 continue
             pending_linked_status_targets.add(target_id)

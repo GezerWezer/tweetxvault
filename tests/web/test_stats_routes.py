@@ -190,7 +190,6 @@ def test_cached_snapshot_serves_old_data_during_manual_refresh(
 
     assert refresh_started.wait(timeout=2)
     assert initial["summary"]["unique_posts"] == 1
-    assert refreshing["summary"]["unique_posts"] == 1
     assert refreshing["refreshing"] is True
     assert refreshing["generated_at"] == initial["generated_at"]
     assert set(refreshing) == {
@@ -199,11 +198,6 @@ def test_cached_snapshot_serves_old_data_during_manual_refresh(
         "stale",
         "refreshing",
         "refresh_failed",
-        "summary",
-        "collections",
-        "health",
-        "storage",
-        "tags",
     }
 
     allow_refresh.set()
@@ -214,6 +208,30 @@ def test_cached_snapshot_serves_old_data_during_manual_refresh(
     assert refreshed["refreshing"] is False
     assert refreshed["refresh_failed"] is False
     assert calls == 2
+
+
+def test_cached_status_returns_refresh_metadata_without_report_sections(
+    tmp_path,
+    make_web_client,
+    monkeypatch,
+) -> None:
+    store = _stats_store(tmp_path)
+    _seed_tag_stats_tweet(store, "t1")
+    cache = WebStatsCache()
+    monkeypatch.setattr(stats_routes, "web_stats_cache", cache)
+    client = make_web_client(stats_routes.router, store=store)
+    initial = client.get("/api/stats/snapshot?revalidate=false").json()
+
+    response = client.get("/api/stats/status")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "generated_at": initial["generated_at"],
+        "age_seconds": pytest.approx(0, abs=0.1),
+        "stale": False,
+        "refreshing": False,
+        "refresh_failed": False,
+    }
 
 
 def test_enrichment_banner_uses_the_lightweight_shared_count(tmp_path, make_web_client) -> None:

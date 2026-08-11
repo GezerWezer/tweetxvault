@@ -1494,10 +1494,10 @@
 
         <!-- Stats Modal (Twitter Analytics Style) -->
         <div x-show="showStatsModal" 
-             @keydown.window.escape="showStatsModal = false" 
+             @keydown.window.escape="closeStatsModal()"
              class="fixed inset-0 z-[100] bg-black/60 flex justify-center items-center p-4 md:p-6" 
              x-cloak 
-             @click.self="showStatsModal = false">
+             @click.self="closeStatsModal()">
             <div class="bg-[var(--bg-primary)] rounded-2xl w-full h-full md:h-[85vh] md:max-w-5xl flex flex-col overflow-hidden shadow-2xl relative border border-[var(--border-color)]">
                 
                 <!-- Modal Header (Twitter-minimal) -->
@@ -1522,7 +1522,7 @@
                                 Refreshing
                             </span>
                         </button>
-                        <button type="button" @click="showStatsModal = false" class="text-[var(--text-secondary)] hover:text-[var(--text-primary)] p-2 rounded-full hover-bg transition" aria-label="Close statistics">
+                        <button type="button" @click="closeStatsModal()" class="text-[var(--text-secondary)] hover:text-[var(--text-primary)] p-2 rounded-full hover-bg transition" aria-label="Close statistics">
                             <svg viewBox="0 0 24 24" class="w-5 h-5 fill-current"><path d="M13.414 12l5.793-5.793c.39-.39.39-1.023 0-1.414s-1.024-.39-1.414 0L12 10.586 6.207 4.793c-.39-.39-1.023-.39-1.414 0s-.39 1.024 0 1.414L10.586 12l-5.793 5.793c-.39.39-.39 1.023 0 1.414.195.195.45.293.707.293s.512-.098.707-.293L12 13.414l5.793 5.793c.195.195.45.293.707.293s.512-.098.707-.293c.39-.39.39-1.023 0-1.414L13.414 12z"></path></svg>
                         </button>
                     </div>

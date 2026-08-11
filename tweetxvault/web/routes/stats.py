@@ -107,6 +107,17 @@ def _cached_snapshot_payload(cached: CachedStatsReport) -> dict[str, Any]:
     }
 
 
+def _cached_status_payload(cached: CachedStatsReport) -> dict[str, Any]:
+    """Return refresh metadata without serializing the cached report again."""
+    return {
+        "generated_at": cached.report.generated_at,
+        "age_seconds": round(cached.age_seconds, 1),
+        "stale": cached.stale,
+        "refreshing": cached.refreshing,
+        "refresh_failed": cached.refresh_failed,
+    }
+
+
 @router.get("/report")
 def get_stats_report(
     store: ArchiveStore = Depends(get_store),  # noqa: B008 - FastAPI dependency
@@ -124,12 +135,20 @@ def get_cached_stats_snapshot(
     return _cached_snapshot_payload(web_stats_cache.get(store, revalidate=revalidate))
 
 
+@router.get("/status")
+def get_cached_stats_status(
+    store: ArchiveStore = Depends(get_store),  # noqa: B008 - FastAPI dependency
+) -> dict[str, Any]:
+    """Return only cache state for inexpensive browser refresh polling."""
+    return _cached_status_payload(web_stats_cache.get(store, revalidate=False))
+
+
 @router.post("/refresh")
 def refresh_cached_stats(
     store: ArchiveStore = Depends(get_store),  # noqa: B008 - FastAPI dependency
 ) -> dict[str, Any]:
     """Start a manual refresh while retaining the currently displayed snapshot."""
-    return _cached_snapshot_payload(web_stats_cache.refresh(store))
+    return _cached_status_payload(web_stats_cache.refresh(store))
 
 
 @router.get("/enrichment-incomplete")

@@ -2,6 +2,8 @@
  * Main Alpine.js application for tweetxvault Web UI.
  */
 
+const statsSuspendedVideos = new Set();
+
 function tweetApp() {
     return {
         viewMode: 'list',
@@ -710,8 +712,38 @@ function tweetApp() {
         },
 
         async openStatsModal() {
+            this.suspendMediaForStats();
             this.showStatsModal = true;
             await this.fetchStatsSnapshot();
+        },
+
+        closeStatsModal() {
+            this.showStatsModal = false;
+            if (this.statsRefreshPollTimer) {
+                clearTimeout(this.statsRefreshPollTimer);
+                this.statsRefreshPollTimer = null;
+            }
+            this.resumeMediaAfterStats();
+        },
+
+        suspendMediaForStats() {
+            statsSuspendedVideos.clear();
+            document.querySelectorAll('video').forEach(video => {
+                if (!video.paused) {
+                    statsSuspendedVideos.add(video);
+                    video.pause();
+                }
+            });
+        },
+
+        resumeMediaAfterStats() {
+            statsSuspendedVideos.forEach(video => {
+                if (video.isConnected !== false) {
+                    const playResult = video.play();
+                    if (playResult?.catch) playResult.catch(() => {});
+                }
+            });
+            statsSuspendedVideos.clear();
         },
 
         setStatsLoading(loading) {
@@ -736,6 +768,12 @@ function tweetApp() {
             if (snapshot.summary?.latest_sync) {
                 this.lastSyncFormatted = snapshot.summary.latest_sync;
             }
+        },
+
+        applyStatsStatus(status) {
+            this.statsRefreshing = Boolean(status.refreshing);
+            this.statsRefreshFailed = Boolean(status.refresh_failed);
+            this.statsAgeNow = Date.now();
         },
 
         async fetchStatsSnapshot(revalidate = true) {
@@ -764,7 +802,12 @@ function tweetApp() {
             try {
                 const res = await fetch('/api/stats/refresh', { method: 'POST' });
                 if (!res.ok) throw new Error(`Statistics refresh failed (${res.status})`);
-                this.applyStatsSnapshot(await res.json());
+                const snapshot = await res.json();
+                if (snapshot.generated_at !== this.statsGeneratedAt) {
+                    this.applyStatsSnapshot(snapshot);
+                } else {
+                    this.applyStatsStatus(snapshot);
+                }
                 if (this.statsRefreshing) {
                     this.statsRefreshPollAttempts = 0;
                     this.scheduleStatsRefreshPoll();
@@ -792,9 +835,14 @@ function tweetApp() {
             this.statsRefreshPollTimer = null;
             if (!this.showStatsModal) return;
             try {
-                const res = await fetch('/api/stats/snapshot?revalidate=false');
+                const res = await fetch('/api/stats/status');
                 if (!res.ok) throw new Error(`Statistics refresh poll failed (${res.status})`);
-                this.applyStatsSnapshot(await res.json());
+                const status = await res.json();
+                if (status.generated_at !== this.statsGeneratedAt) {
+                    await this.fetchStatsSnapshot(false);
+                    return;
+                }
+                this.applyStatsStatus(status);
             } catch (e) {
                 console.error('Failed to check statistics refresh', e);
             }

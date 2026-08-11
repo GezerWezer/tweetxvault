@@ -484,38 +484,76 @@ def _collect_tags(context: _StatsContext) -> StatsSection:
 def _collect_storage(context: _StatsContext) -> StatsSection:
     store = context.store
     segments: list[dict[str, Any]] = []
+    payload_sample_limit = 4096
 
-    def get_db_stats(query_count: str, query_bytes: str) -> tuple[int, int]:
-        count = store.conn.execute(query_count).fetchone()[0] or 0
-        bytes_value = store.conn.execute(query_bytes).fetchone()[0] or 0
-        return int(count), int(bytes_value)
+    def get_db_stats(record_type: str, payload_expression: str) -> tuple[int, int]:
+        count = int(
+            store.conn.execute(
+                """
+                SELECT count(*)
+                FROM archive INDEXED BY idx_archive_record_page
+                WHERE record_type = ?
+                """,
+                (record_type,),
+            ).fetchone()[0]
+            or 0
+        )
+        if count == 0:
+            return 0, 0
+        sample_count, sample_bytes = store.conn.execute(
+            f"""
+            SELECT count(*), sum(payload_bytes)
+            FROM (
+                SELECT {payload_expression} AS payload_bytes
+                FROM archive INDEXED BY idx_archive_record_page
+                WHERE record_type = ?
+                LIMIT ?
+            )
+            """,
+            (record_type, payload_sample_limit),
+        ).fetchone()
+        estimated_bytes = round((int(sample_bytes or 0) / int(sample_count or 1)) * count)
+        return count, estimated_bytes
 
-    core_ids_sql = """
-        SELECT tweet_id FROM archive WHERE record_type = 'tweet'
-        UNION
-        SELECT target_tweet_id AS tweet_id
-        FROM archive
-        WHERE record_type = 'tweet_relation'
-          AND relation_type IN ('quote_of', 'quoted', 'links_to_status')
-          AND tweet_id IN (SELECT tweet_id FROM archive WHERE record_type = 'tweet')
-    """
-    core_media_rows = store.conn.execute(
-        f"""
-        SELECT local_path, thumbnail_local_path, media_type FROM archive
-        WHERE record_type = 'media' AND tweet_id IN ({core_ids_sql})
-        """
-    ).fetchall()
-    context_media_rows = store.conn.execute(
-        f"""
-        SELECT local_path, thumbnail_local_path, media_type FROM archive
-        WHERE record_type = 'media' AND tweet_id NOT IN ({core_ids_sql})
-        """
-    ).fetchall()
-    core_primary_types = {Path(row[0]).name: row[2] for row in core_media_rows if row[0]}
-    context_primary_types = {Path(row[0]).name: row[2] for row in context_media_rows if row[0]}
-    supplementary_file_names = {
-        Path(row[1]).name for row in (*core_media_rows, *context_media_rows) if row[1]
+    core_tweet_ids = {
+        str(row[0])
+        for row in store.conn.execute(
+            """
+            SELECT tweet_id
+            FROM archive INDEXED BY idx_archive_record_page
+            WHERE record_type = 'tweet' AND tweet_id IS NOT NULL
+            """
+        )
     }
+    root_tweet_ids = sorted(core_tweet_ids)
+    for start in range(0, len(root_tweet_ids), 500):
+        chunk = root_tweet_ids[start : start + 500]
+        placeholders = ", ".join("?" for _tweet_id in chunk)
+        related_rows = store.conn.execute(
+            f"""
+            SELECT target_tweet_id
+            FROM archive INDEXED BY idx_archive_tweet_id
+            WHERE tweet_id IN ({placeholders})
+              AND record_type = 'tweet_relation'
+              AND relation_type IN ('quote_of', 'quoted', 'links_to_status')
+              AND target_tweet_id IS NOT NULL
+            """,
+            chunk,
+        ).fetchall()
+        core_tweet_ids.update(str(row[0]) for row in related_rows)
+
+    media_rows = store.conn.execute(
+        """
+        SELECT tweet_id, local_path, thumbnail_local_path, media_type
+        FROM archive INDEXED BY idx_archive_record_page
+        WHERE record_type = 'media'
+        """
+    ).fetchall()
+    core_media_rows = [row for row in media_rows if row[0] in core_tweet_ids]
+    context_media_rows = [row for row in media_rows if row[0] not in core_tweet_ids]
+    core_primary_types = {Path(row[1]).name: row[3] for row in core_media_rows if row[1]}
+    context_primary_types = {Path(row[1]).name: row[3] for row in context_media_rows if row[1]}
+    supplementary_file_names = {Path(row[2]).name for row in media_rows if row[2]}
 
     def is_supplementary(path: Path) -> bool:
         stem = path.stem.lower()
@@ -558,12 +596,12 @@ def _collect_storage(context: _StatsContext) -> StatsSection:
                 context_photos += int(not is_video)
     if core_photos == 0 and core_videos == 0 and core_media_rows:
         for row in core_media_rows:
-            core_videos += int(row[2] in {"video", "animated_gif"})
-            core_photos += int(row[2] not in {"video", "animated_gif"})
+            core_videos += int(row[3] in {"video", "animated_gif"})
+            core_photos += int(row[3] not in {"video", "animated_gif"})
     if context_photos == 0 and context_videos == 0 and context_media_rows:
         for row in context_media_rows:
-            context_videos += int(row[2] in {"video", "animated_gif"})
-            context_photos += int(row[2] not in {"video", "animated_gif"})
+            context_videos += int(row[3] in {"video", "animated_gif"})
+            context_photos += int(row[3] not in {"video", "animated_gif"})
     if supplementary_count == 0 and supplementary_file_names:
         supplementary_count = len(supplementary_file_names)
 
@@ -604,28 +642,34 @@ def _collect_storage(context: _StatsContext) -> StatsSection:
         ]
     )
     core_db_count, core_db_bytes = get_db_stats(
-        "SELECT count(*) FROM archive WHERE record_type = 'tweet'",
-        """SELECT sum(ifnull(length(raw_json), 0) + ifnull(length(text), 0))
-           FROM archive WHERE record_type = 'tweet'""",
+        "tweet",
+        "ifnull(length(raw_json), 0) + ifnull(length(text), 0)",
     )
     threads_count, threads_bytes = get_db_stats(
-        "SELECT count(*) FROM archive WHERE record_type = 'tweet_object'",
-        "SELECT sum(length(raw_json)) FROM archive WHERE record_type = 'tweet_object'",
+        "tweet_object",
+        "ifnull(length(raw_json), 0)",
     )
     articles_count, articles_bytes = get_db_stats(
-        "SELECT count(*) FROM archive WHERE record_type = 'article'",
-        """SELECT sum(ifnull(length(content_text), 0) + ifnull(length(summary_text), 0))
-           FROM archive WHERE record_type = 'article'""",
+        "article",
+        "ifnull(length(content_text), 0) + ifnull(length(summary_text), 0)",
     )
     tags_count, tags_bytes = get_db_stats(
-        "SELECT count(*) FROM archive WHERE record_type = 'media_tag'",
-        "SELECT sum(length(raw_json)) FROM archive WHERE record_type = 'media_tag'",
+        "media_tag",
+        "ifnull(length(raw_json), 0)",
     )
-    profiles_count, profiles_bytes = get_db_stats(
-        """SELECT count(DISTINCT author_id) FROM archive
-           WHERE author_id IS NOT NULL AND author_id != ''""",
-        """SELECT sum(ifnull(length(author_username), 0) + ifnull(length(author_display_name), 0))
-           FROM archive WHERE record_type = 'tweet'""",
+    _tweet_count, profiles_bytes = get_db_stats(
+        "tweet",
+        "ifnull(length(author_username), 0) + ifnull(length(author_display_name), 0)",
+    )
+    profiles_count = int(
+        store.conn.execute(
+            """
+            SELECT count(DISTINCT author_id)
+            FROM archive
+            WHERE author_id IS NOT NULL AND author_id != ''
+            """
+        ).fetchone()[0]
+        or 0
     )
     segments.extend(
         [
@@ -636,7 +680,7 @@ def _collect_storage(context: _StatsContext) -> StatsSection:
                 "bytes": core_db_bytes,
                 "count": core_db_count,
                 "unit": "tweets",
-                "description": "Saved tweet records and canonical raw payloads.",
+                "description": "Estimated payload size for saved tweet records and raw data.",
             },
             {
                 "id": "threads",
@@ -645,7 +689,7 @@ def _collect_storage(context: _StatsContext) -> StatsSection:
                 "bytes": threads_bytes,
                 "count": threads_count,
                 "unit": "objects",
-                "description": "Conversation context fetched during thread expansion.",
+                "description": "Estimated payload size for fetched conversation context.",
             },
             {
                 "id": "articles",
@@ -654,7 +698,7 @@ def _collect_storage(context: _StatsContext) -> StatsSection:
                 "bytes": articles_bytes,
                 "count": articles_count,
                 "unit": "articles",
-                "description": "Article bodies, previews, and linked card metadata.",
+                "description": "Estimated payload size for article bodies, previews, and cards.",
             },
             {
                 "id": "tags",
@@ -663,7 +707,7 @@ def _collect_storage(context: _StatsContext) -> StatsSection:
                 "bytes": tags_bytes,
                 "count": tags_count,
                 "unit": "tags",
-                "description": "Generated search tags and structured topic metadata.",
+                "description": "Estimated payload size for search tags and topic metadata.",
             },
             {
                 "id": "user_profiles",
@@ -672,7 +716,7 @@ def _collect_storage(context: _StatsContext) -> StatsSection:
                 "bytes": profiles_bytes,
                 "count": profiles_count,
                 "unit": "profiles",
-                "description": "Stored author names, handles, and profile metadata.",
+                "description": "Estimated payload size for stored author names and handles.",
             },
             {
                 "id": "avatars",
@@ -749,6 +793,7 @@ def _collect_storage(context: _StatsContext) -> StatsSection:
     data = {
         "total_bytes": total_bytes,
         "formatted_total": format_bytes(total_bytes),
+        "database_component_bytes_estimated": True,
         "segments": segments,
         "simplified_segments": simplified_segments,
     }

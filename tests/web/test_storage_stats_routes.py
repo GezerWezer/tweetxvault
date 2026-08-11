@@ -46,6 +46,8 @@ def _storage_store(tmp_path: Path) -> SimpleNamespace:
         )
         """
     )
+    conn.execute("CREATE INDEX idx_archive_record_page ON archive(record_type, tweet_id)")
+    conn.execute("CREATE INDEX idx_archive_tweet_id ON archive(tweet_id)")
     conn.executemany(
         """
         INSERT INTO archive (
@@ -223,6 +225,37 @@ def test_storage_breakdown_accounts_for_database_media_and_avatars(
     assert simplified["media"]["formatted_count"] == (
         "1 photos · 1 videos · 1 supplementary · 1 avatars"
     )
+
+
+def test_storage_breakdown_reads_media_once_and_probes_relations_by_tweet_id(
+    make_web_client, tmp_path: Path
+) -> None:
+    store = _storage_store(tmp_path)
+    statements: list[str] = []
+    store.conn.set_trace_callback(statements.append)
+    client = make_web_client(storage_stats.router, store=store)
+
+    response = client.get("/api/storage/breakdown")
+
+    assert response.status_code == 200
+    media_reads = [
+        statement
+        for statement in statements
+        if "SELECT tweet_id, local_path, thumbnail_local_path, media_type" in statement
+    ]
+    assert len(media_reads) == 1
+    assert "INDEXED BY idx_archive_record_page" in media_reads[0]
+    relation_reads = [
+        statement
+        for statement in statements
+        if "SELECT target_tweet_id" in statement and "relation_type IN" in statement
+    ]
+    assert len(relation_reads) == 1
+    assert "INDEXED BY idx_archive_tweet_id" in relation_reads[0]
+    assert all("NOT IN" not in statement for statement in statements)
+    payload_samples = [statement for statement in statements if "sum(payload_bytes)" in statement]
+    assert len(payload_samples) == 5
+    assert all("LIMIT 4096" in statement for statement in payload_samples)
 
 
 def test_storage_breakdown_falls_back_to_database_media_counts(

@@ -92,12 +92,11 @@ def test_tagging_eligibility_filters_dedupes_orders_and_limits(paths) -> None:
         for statement in eligibility_queries
     )
     assert all("classified AS" in statement for statement in eligibility_queries)
-    coverage_queries = [
-        statement for statement in statements if "eligible_tweets AS" in statement
-    ]
+    coverage_queries = [statement for statement in statements if "eligible_tweets AS" in statement]
     assert len(coverage_queries) == 2
     assert "FROM archive t INDEXED BY idx_archive_record_page" in coverage_queries[0]
     assert "quoted AS" in coverage_queries[0]
+    assert "FROM saved\n                CROSS JOIN archive relation" in coverage_queries[0]
     store.close()
 
 

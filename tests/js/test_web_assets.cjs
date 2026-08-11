@@ -593,6 +593,87 @@ test('analytics uses one cached snapshot and retains it during manual refresh', 
     assert.equal(polls, 1);
 });
 
+test('analytics refresh polling does not replace an unchanged report', async () => {
+    const context = browserContext();
+    const calls = [];
+    context.fetch = async url => {
+        calls.push(url);
+        return {
+            ok: true,
+            async json() {
+                return {
+                    generated_at: '2026-08-10T00:00:00+00:00',
+                    refreshing: true,
+                    refresh_failed: false,
+                };
+            },
+        };
+    };
+    const { tweetApp } = loadScripts(
+        context,
+        ['themes.js', 'app.js'],
+        '({tweetApp})',
+    );
+    const app = immediateComponent(tweetApp());
+    const originalSummary = { unique_posts: 12 };
+    app.showStatsModal = true;
+    app.statsGeneratedAt = '2026-08-10T00:00:00+00:00';
+    app.statsSummary = originalSummary;
+    app.scheduleStatsRefreshPoll = () => {};
+
+    await app.pollStatsRefresh();
+
+    assert.deepEqual(calls, ['/api/stats/status']);
+    assert.equal(app.statsSummary, originalSummary);
+    assert.equal(app.statsRefreshing, true);
+});
+
+test('analytics suspends only playing videos and resumes them on close', async () => {
+    const context = browserContext();
+    const playing = {
+        paused: false,
+        isConnected: true,
+        pauseCalls: 0,
+        playCalls: 0,
+        pause() { this.paused = true; this.pauseCalls += 1; },
+        play() { this.paused = false; this.playCalls += 1; return Promise.resolve(); },
+    };
+    const alreadyPaused = {
+        paused: true,
+        isConnected: true,
+        pauseCalls: 0,
+        playCalls: 0,
+        pause() { this.pauseCalls += 1; },
+        play() { this.playCalls += 1; return Promise.resolve(); },
+    };
+    context.__state.videos.push(playing, alreadyPaused);
+    context.fetch = async () => ({
+        ok: true,
+        async json() {
+            return {
+                generated_at: '2026-08-10T00:00:00+00:00',
+                refreshing: false,
+                refresh_failed: false,
+                summary: {}, collections: [], health: {}, storage: {}, tags: {},
+            };
+        },
+    });
+    const { tweetApp } = loadScripts(
+        context,
+        ['themes.js', 'app.js'],
+        '({tweetApp})',
+    );
+    const app = immediateComponent(tweetApp());
+
+    await app.openStatsModal();
+    assert.equal(playing.pauseCalls, 1);
+    assert.equal(alreadyPaused.pauseCalls, 0);
+
+    app.closeStatsModal();
+    assert.equal(playing.playCalls, 1);
+    assert.equal(alreadyPaused.playCalls, 0);
+});
+
 test('archive status filters empty reasons and summarizes retry state', () => {
     const context = browserContext();
     const { tweetApp } = loadScripts(
@@ -684,6 +765,9 @@ test('analytics markup exposes the Archive status cards and reason breakdown', (
     assert.match(html, /archive-status-bar-seg/);
     assert.match(html, /archive-status-reason-row/);
     assert.match(html, /@click="refreshStats\(\)"/);
+    assert.match(html, /@keydown\.window\.escape="closeStatsModal\(\)"/);
+    assert.match(html, /@click\.self="closeStatsModal\(\)"/);
+    assert.match(html, /@click="closeStatsModal\(\)"/);
     assert.match(html, /x-text="statsAgeLabel\(\)"/);
     assert.match(html, /x-show="!statsRefreshing">Refresh</);
     assert.match(html, /x-show="statsRefreshing" class="inline-flex items-center gap-1.5"/);

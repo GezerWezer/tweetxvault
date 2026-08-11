@@ -611,12 +611,19 @@ separately so they do not inflate photo/video counts. The tagging tile is omitte
 has no generated tags. Legacy Web endpoints are thin adapters over the same collectors, so the two
 surfaces share metric definitions without forcing them into the same visual design.
 
+The total SQLite and downloaded-media sizes are exact. Detailed database component sizes use a
+bounded payload sample and are estimates; this keeps statistics collection responsive even when
+canonical tweet-object JSON occupies several gigabytes. Counts and filesystem component sizes
+remain exact.
+
 The Web modal keeps its complete statistics snapshot in the server process for five minutes.
 Opening it again during that window serves the cached snapshot immediately. After five minutes,
 the modal continues showing that snapshot while one background refresh recomputes the metrics;
 the header shows when the displayed data was generated and offers a manual refresh button. Failed
-refreshes leave the last successful snapshot available. `tweetxvault stats` never uses this Web
-cache and always reads current archive data when invoked.
+refreshes leave the last successful snapshot available. While a refresh runs, the browser polls
+only lightweight cache metadata and swaps the displayed report once its generation changes.
+Autoplay media obscured by the modal is suspended until it closes. `tweetxvault stats` never uses
+this Web cache and always reads current archive data when invoked.
 
 Tagging coverage uses the same base population as automatic tagging: directly saved text or media
 posts with an available enriched tweet object, plus their directly quoted originals when those

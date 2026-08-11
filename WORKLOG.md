@@ -1,3 +1,43 @@
+- 2026-08-11 (Web statistics loaded-state and collector performance)
+  - User clarification: the primary symptom is visible interaction/rendering lag after the cards
+    have loaded, distinct from the separately verified 139-second cold-report latency.
+  - Loaded-state inspection found that every one-second refresh poll calls `applyStatsSnapshot`,
+    replacing all five cached statistics object trees even when `generated_at` is unchanged. The
+    modal contains 85 Alpine bindings, so a long stale/manual refresh repeatedly wakes its rendered
+    tree for status checks that only need the `refreshing` flag.
+  - Opening Analytics also leaves autoplay GIF/video elements behind the fixed overlay running.
+    The overlay does not change their IntersectionObserver intersection, and `openStatsModal` does
+    not call the existing video-pause helper. This is a second continuous-jank path on media-heavy
+    feeds. A live process sample found the Web server sleeping at 0% CPU, confirming that an active
+    statistics collector is not necessary for the visible lag.
+  - Reproduced the regression read-only against the configured 7.80 GB vault: a complete uncached
+    statistics report took 139.453 seconds. Standalone section timings were overview 2.966 seconds,
+    collections 37.543 seconds, archive status 35.536 seconds, storage 35.612 seconds, and tagging
+    51.085 seconds.
+  - The vault has no `sqlite_stat1` planner statistics and contains 1,402,400 relation rows plus
+    462,501 tweet-object rows. `EXPLAIN QUERY PLAN` shows tagging coverage scanning the complete
+    tweet-ID index for quote relations; storage repeats a compound core-ID relation query for both
+    `IN` and `NOT IN`. A filesystem walk was only 0.119 seconds for 4,489 files, so storage latency
+    is database work rather than filesystem traversal.
+  - Added a metadata-only cache-status endpoint and manual-refresh response. The browser now leaves
+    the rendered report object graph untouched until `generated_at` changes, fetches the replacement
+    snapshot once, cancels polling immediately when the modal closes, and suspends only media that
+    was playing behind Analytics before safely resuming it.
+  - Reordered tagging quote traversal so saved IDs drive indexed relation probes (51.085 seconds to
+    7.040 seconds), classified one indexed media read with chunked root-relation probes instead of
+    repeating `IN`/`NOT IN`, and replaced the 462,501-row Python enrichment walk with the existing
+    covering scheduler index plus narrow exceptional rows.
+  - Replaced multi-gigabyte exact database-component payload scans with bounded 4,096-row estimates;
+    total SQLite/media sizes, counts, and filesystem segment sizes remain exact and the UI/docs label
+    detailed database payloads as estimates. Storage fell from 35.612 to 5.220 seconds.
+  - On the same vault, a fresh-process complete report fell from 139.453 to 26.079 seconds (81.3%
+    faster); a follow-up with warm OS/database pages took 10.048 seconds. No schema/index migration
+    or production database mutation was required.
+  - Added metadata-poll, unchanged-object, media suspend/resume, indexed aggregate/join, bounded
+    sampling, and one-pass storage regressions. Repository-wide Ruff lint, scoped format checks, the
+    complete Python suite, all 34 deterministic browser tests, and `git diff --check` pass. The
+    repository-wide format check reports five pre-existing unrelated files.
+
 - 2026-08-10 (Instant Web statistics hover states)
   - Removed transition timing from statistics card borders, card info icons, and unavailable-status
     bar colors so their existing hover highlights appear immediately.

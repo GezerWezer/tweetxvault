@@ -11,6 +11,20 @@ Hard constraints:
 
 Definition of done: passes `uv run ruff format --check`, `uv run ruff check`, and `uv run pytest`.
 
+## Web statistics performance follow-up (2026-08-11)
+
+- [x] Reproduce cold report latency against the configured vault and time each section.
+- [x] Inspect production-sized row counts, planner statistics, query plans, and filesystem cost.
+- [x] Identify the cached snapshot's all-or-nothing cold-load and shared-store refresh contention.
+- [x] Identify loaded-state reactive snapshot churn and obscured autoplay media playback.
+- [x] Poll refresh metadata without reapplying unchanged statistics object trees.
+- [x] Suspend autoplay media while Analytics obscures the feed and restore it safely on close.
+- [ ] Restore progressive first paint if the remaining 26-second cold-process report is still too
+  slow; deferred from this loaded-state fix after the measured 81% collector improvement.
+- [x] Rewrite tagging coverage, archive aggregation, and storage classification/payload reads.
+- [x] Reduce refresh contention and prevent polling from creating loaded-state browser churn.
+- [x] Add production-sized performance checks and pass focused plus complete validation.
+
 ## Instant Web statistics hover states (2026-08-10)
 
 - [x] Remove transition timing from statistics cards, info icons, and status bar segments.
