@@ -906,6 +906,28 @@ def test_database_pragmas_use_configured_values(paths) -> None:
     store.close()
 
 
+def test_database_pragmas_use_application_defaults(paths) -> None:
+    store = open_archive_store(paths, create=True)
+    assert store is not None
+
+    assert store.conn.execute("PRAGMA cache_size").fetchone()[0] == -524288
+    effective_mmap = store.conn.execute("PRAGMA mmap_size").fetchone()[0]
+    assert effective_mmap > 0
+    assert effective_mmap <= 1073741824
+    store.close()
+
+
+def test_archive_store_without_app_config_uses_database_defaults(paths) -> None:
+    from tweetxvault.storage.backend import ArchiveStore
+
+    store = ArchiveStore(paths.database_path, create=True)
+
+    assert store.conn.execute("PRAGMA cache_size").fetchone()[0] == -524288
+    effective_mmap = store.conn.execute("PRAGMA mmap_size").fetchone()[0]
+    assert 0 < effective_mmap <= 1073741824
+    store.close()
+
+
 def test_query_supports_projection_order_limit_and_offset(paths) -> None:
     store = open_archive_store(paths, create=True)
     assert store is not None

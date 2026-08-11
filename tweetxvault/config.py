@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import os
 import tomllib
 from collections.abc import Mapping
@@ -27,6 +28,10 @@ CONFIG_FILENAME = "config.toml"
 QUERY_ID_CACHE_FILENAME = "query-ids.json"
 LOCK_FILENAME = "sync.lock"
 DB_FILENAME = "archive.db"
+DEFAULT_SQLITE_CACHE_SIZE_KB = 512 * 1024
+DEFAULT_SQLITE_MMAP_SIZE_BYTES = 1024**3
+AUTH_PLACEHOLDER_FIELDS = ("auth_token", "ct0", "user_id")
+CONFIG_SECTION_ORDER = ("auth", "sync", "web", "database", "tagging")
 
 
 class AuthConfig(BaseModel):
@@ -68,8 +73,8 @@ class WebConfig(BaseModel):
 class DatabaseConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    cache_size_kb: int = Field(default=1000000, ge=0)
-    mmap_size_bytes: int = Field(default=8589934592, ge=0)
+    cache_size_kb: int = Field(default=DEFAULT_SQLITE_CACHE_SIZE_KB, ge=0)
+    mmap_size_bytes: int = Field(default=DEFAULT_SQLITE_MMAP_SIZE_BYTES, ge=0)
 
 
 class TaggingConfig(BaseModel):
@@ -167,25 +172,76 @@ def ensure_paths(paths: XDGPaths) -> XDGPaths:
 
 def _load_config_file(path: Path) -> dict[str, Any]:
     if not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            "[database]\ncache_size_kb = 1000000\nmmap_size_bytes = 8589934592\n",
-            encoding="utf-8",
-        )
+        raw: dict[str, Any] = {"auth": {key: "" for key in AUTH_PLACEHOLDER_FIELDS}}
+        _write_config_file(path, raw)
+        return raw
 
     with path.open("rb") as handle:
         loaded = tomllib.load(handle)
     if not isinstance(loaded, dict):
-        return {}
-    if "database" not in loaded:
-        content = path.read_text(encoding="utf-8").rstrip()
-        content += "\n\n[database]\ncache_size_kb = 1000000\nmmap_size_bytes = 8589934592\n"
-        path.write_text(content, encoding="utf-8")
-        loaded["database"] = {
-            "cache_size_kb": 1000000,
-            "mmap_size_bytes": 8589934592,
-        }
+        loaded = {}
+    changed = _ensure_auth_skeleton(loaded)
+    if changed:
+        _write_config_file(path, loaded)
     return loaded
+
+
+def _ensure_auth_skeleton(raw: dict[str, Any]) -> bool:
+    auth = raw.get("auth")
+    changed = not isinstance(auth, dict)
+    if changed:
+        auth = {}
+        raw["auth"] = auth
+    for key in AUTH_PLACEHOLDER_FIELDS:
+        if key not in auth:
+            auth[key] = ""
+            changed = True
+    return changed
+
+
+def _normalize_auth_placeholders(raw: dict[str, Any]) -> dict[str, Any]:
+    normalized = copy.deepcopy(raw)
+    auth = normalized.get("auth")
+    if isinstance(auth, dict):
+        for key in AUTH_PLACEHOLDER_FIELDS:
+            if auth.get(key) == "":
+                auth[key] = None
+    return normalized
+
+
+def _format_toml_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int | float):
+        return str(value)
+    escaped = (
+        str(value)
+        .replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\b", "\\b")
+        .replace("\t", "\\t")
+        .replace("\n", "\\n")
+        .replace("\f", "\\f")
+        .replace("\r", "\\r")
+    )
+    return f'"{escaped}"'
+
+
+def _write_config_file(path: Path, raw: Mapping[str, Any]) -> None:
+    lines: list[str] = []
+    section_names = [name for name in CONFIG_SECTION_ORDER if name in raw]
+    section_names.extend(name for name in raw if name not in CONFIG_SECTION_ORDER)
+    for section in section_names:
+        fields = raw[section]
+        if not isinstance(fields, Mapping) or (section != "auth" and not fields):
+            continue
+        lines.append(f"[{section}]")
+        for key, value in fields.items():
+            if value is not None:
+                lines.append(f"{key} = {_format_toml_value(value)}")
+        lines.append("")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
 
 
 def _env_float(env: Mapping[str, str], name: str) -> float | None:
@@ -202,7 +258,7 @@ def load_config(env: Mapping[str, str] | None = None) -> tuple[AppConfig, XDGPat
     env = os.environ if env is None else env
     paths = ensure_paths(resolve_paths(env))
     raw = _load_config_file(paths.config_file)
-    config = AppConfig.model_validate(raw)
+    config = AppConfig.model_validate(_normalize_auth_placeholders(raw))
 
     auth_updates = {
         "auth_token": env.get("TWEETXVAULT_AUTH_TOKEN"),
@@ -235,39 +291,59 @@ def load_config(env: Mapping[str, str] | None = None) -> tuple[AppConfig, XDGPat
     return config, paths
 
 
-def save_app_config(paths: XDGPaths, config: AppConfig) -> None:
-    lines: list[str] = []
+def _valid_config_paths() -> set[str]:
+    return {
+        f"{section}.{field}"
+        for section, model_field in AppConfig.model_fields.items()
+        for field in model_field.annotation.model_fields
+    }
 
-    def format_value(value: Any) -> str:
-        if isinstance(value, bool):
-            return "true" if value else "false"
-        if isinstance(value, int | float):
-            return str(value)
-        escaped = (
-            str(value)
-            .replace("\\", "\\\\")
-            .replace('"', '\\"')
-            .replace("\b", "\\b")
-            .replace("\t", "\\t")
-            .replace("\n", "\\n")
-            .replace("\f", "\\f")
-            .replace("\r", "\\r")
-        )
-        return f'"{escaped}"'
 
-    config_dict = config.model_dump(exclude_none=True)
+def update_config_values(paths: XDGPaths, changes: Mapping[str, Any]) -> None:
+    raw = _load_config_file(paths.config_file)
+    valid_paths = _valid_config_paths()
+    defaults = AppConfig().model_dump()
 
-    for section, fields in config_dict.items():
-        if isinstance(fields, dict):
-            lines.append(f"[{section}]")
-            for k, v in fields.items():
-                if v is not None:
-                    lines.append(f"{k} = {format_value(v)}")
-            lines.append("")
+    for path, value in changes.items():
+        if path not in valid_paths:
+            raise ValueError(f"Unknown configuration field: {path}")
+        section, field = path.split(".", 1)
+        section_data = raw.get(section)
+        if not isinstance(section_data, dict):
+            section_data = {}
+            raw[section] = section_data
 
-    content = "\n".join(lines).strip() + "\n"
-    paths.config_file.parent.mkdir(parents=True, exist_ok=True)
-    paths.config_file.write_text(content, encoding="utf-8")
+        if section == "auth" and field in AUTH_PLACEHOLDER_FIELDS:
+            section_data[field] = "" if value is None else value
+        elif value is None or value == defaults[section][field]:
+            section_data.pop(field, None)
+        else:
+            section_data[field] = value
+
+    for section in tuple(raw):
+        if section != "auth" and isinstance(raw[section], dict) and not raw[section]:
+            del raw[section]
+    _ensure_auth_skeleton(raw)
+    AppConfig.model_validate(_normalize_auth_placeholders(raw))
+    _write_config_file(paths.config_file, raw)
+
+
+def get_explicit_config_fields(paths: XDGPaths) -> list[str]:
+    raw = _load_config_file(paths.config_file)
+    valid_paths = _valid_config_paths()
+    explicit: list[str] = []
+    for section in CONFIG_SECTION_ORDER:
+        fields = raw.get(section)
+        if not isinstance(fields, dict):
+            continue
+        for field, value in fields.items():
+            path = f"{section}.{field}"
+            if path not in valid_paths or path == "web.password_hash":
+                continue
+            if section == "auth" and field in AUTH_PLACEHOLDER_FIELDS and value == "":
+                continue
+            explicit.append(path)
+    return explicit
 
 
 def get_config_ui_schema() -> dict[str, Any]:

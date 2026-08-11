@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from tweetxvault.client.timelines import TimelineTweet, parse_tweet_detail_tweets
-from tweetxvault.config import XDGPaths
+from tweetxvault.config import DatabaseConfig, XDGPaths
 from tweetxvault.exceptions import ArchiveOwnerMismatchError
 from tweetxvault.extractor import (
     ExtractedTweetGraph,
@@ -330,16 +330,11 @@ class ArchiveStore:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
 
-        cache_size_kb = (
-            config.database.cache_size_kb if config and hasattr(config, "database") else 1000000
-        )
-        mmap_size_bytes = (
-            config.database.mmap_size_bytes
-            if config and hasattr(config, "database")
-            else 8589934592
-        )
-        self.conn.execute(f"PRAGMA cache_size = -{cache_size_kb}")  # Negative for kibibytes
-        self.conn.execute(f"PRAGMA mmap_size = {mmap_size_bytes}")
+        database_config = config.database if config is not None else DatabaseConfig()
+        self.conn.execute(
+            f"PRAGMA cache_size = -{database_config.cache_size_kb}"
+        )  # Negative for kibibytes
+        self.conn.execute(f"PRAGMA mmap_size = {database_config.mmap_size_bytes}")
 
         if create or db_path.exists():
             try:
@@ -2620,9 +2615,7 @@ class ArchiveStore:
         exclusion_sql = ""
         if excluded:
             exclusion_sql = (
-                "AND candidate.tweet_id NOT IN ("
-                + ", ".join("?" for _tweet_id in excluded)
-                + ")"
+                "AND candidate.tweet_id NOT IN (" + ", ".join("?" for _tweet_id in excluded) + ")"
             )
         query = f"""
             WITH saved AS (
@@ -2722,10 +2715,7 @@ class ArchiveStore:
 
     def get_eligible_tweets_for_tagging(self, *, limit: int = 20) -> list[str]:
         """Compatibility wrapper returning IDs from the next homogeneous tag batch."""
-        return [
-            row["tweet_id"]
-            for row in self.get_eligible_tagging_candidates(limit=limit)
-        ]
+        return [row["tweet_id"] for row in self.get_eligible_tagging_candidates(limit=limit)]
 
     def get_tagging_coverage_counts(self) -> tuple[int, int]:
         """Return eligible and validly tagged post counts for coverage reporting."""
@@ -3506,9 +3496,7 @@ class ArchiveStore:
             for row in quote_relations
             if row.get("tweet_id") and row.get("target_tweet_id")
         }
-        tag_tweet_ids = list(
-            dict.fromkeys([*tweet_ids, *quoted_tweet_by_source.values()])
-        )
+        tag_tweet_ids = list(dict.fromkeys([*tweet_ids, *quoted_tweet_by_source.values()]))
         media_tag_rows = self._rows_for_values(
             "media_tag", "tweet_id", tag_tweet_ids, columns=["tweet_id", "raw_json"]
         )

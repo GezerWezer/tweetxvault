@@ -16,9 +16,10 @@ from tweetxvault.config import (
     XDGPaths,
     ensure_paths,
     get_config_ui_schema,
+    get_explicit_config_fields,
     load_config,
     resolve_paths,
-    save_app_config,
+    update_config_values,
 )
 
 
@@ -65,20 +66,21 @@ def test_ensure_paths_creates_all_application_directories(tmp_path: Path) -> Non
     assert all(path.is_dir() for path in (paths.config_dir, paths.data_dir, paths.cache_dir))
 
 
-def test_load_config_creates_default_database_section_idempotently(tmp_path: Path) -> None:
+def test_load_config_creates_auth_skeleton_idempotently(tmp_path: Path) -> None:
     env = _xdg_env(tmp_path)
 
     first, paths = load_config(env)
     first_text = paths.config_file.read_text(encoding="utf-8")
     second, _ = load_config(env)
 
+    assert first.auth == AuthConfig()
     assert first.database == DatabaseConfig()
     assert second == first
     assert first_text == paths.config_file.read_text(encoding="utf-8")
-    assert first_text.count("[database]") == 1
+    assert first_text == '[auth]\nauth_token = ""\nct0 = ""\nuser_id = ""\n'
 
 
-def test_load_config_migrates_existing_file_without_database_section(tmp_path: Path) -> None:
+def test_load_config_repairs_only_missing_auth_skeleton(tmp_path: Path) -> None:
     env = _xdg_env(tmp_path)
     paths = ensure_paths(resolve_paths(env))
     paths.config_file.write_text(
@@ -87,14 +89,29 @@ def test_load_config_migrates_existing_file_without_database_section(tmp_path: P
     )
 
     config, _ = load_config(env)
-    migrated = paths.config_file.read_text(encoding="utf-8")
+    repaired = paths.config_file.read_text(encoding="utf-8")
 
     assert config.web.port == 9123
     assert config.database == DatabaseConfig()
-    assert "# keep this comment" in migrated
-    assert migrated.count("[database]") == 1
+    assert "[database]" not in repaired
+    assert repaired == ('[auth]\nauth_token = ""\nct0 = ""\nuser_id = ""\n\n[web]\nport = 9123\n')
     load_config(env)
-    assert paths.config_file.read_text(encoding="utf-8") == migrated
+    assert paths.config_file.read_text(encoding="utf-8") == repaired
+
+
+def test_load_config_repairs_missing_auth_keys_and_preserves_values(tmp_path: Path) -> None:
+    env = _xdg_env(tmp_path)
+    paths = ensure_paths(resolve_paths(env))
+    paths.config_file.write_text('[auth]\nauth_token = "saved"\n', encoding="utf-8")
+
+    config, _ = load_config(env)
+
+    assert config.auth.auth_token == "saved"
+    assert config.auth.ct0 is None
+    assert config.auth.user_id is None
+    assert paths.config_file.read_text(encoding="utf-8") == (
+        '[auth]\nauth_token = "saved"\nct0 = ""\nuser_id = ""\n'
+    )
 
 
 def test_load_config_applies_environment_overrides_after_toml(tmp_path: Path) -> None:
@@ -175,25 +192,76 @@ def test_new_config_models_reject_invalid_values(model, kwargs: dict[str, object
         model(**kwargs)
 
 
-def test_save_app_config_round_trips_defaults_and_escaped_strings(paths: XDGPaths) -> None:
-    config = AppConfig(
-        auth=AuthConfig(
-            auth_token='slash\\quote"line\nnext',
-            browser_profile_path="C:\\Profiles\\Main",
-        ),
-        web=WebConfig(host="localhost", port=8765),
-        tagging=TaggingConfig(api_key='secret"value', thinking_level="low", rpd=25),
+def test_update_config_values_writes_only_changed_fields_and_escapes_strings(
+    paths: XDGPaths,
+) -> None:
+    update_config_values(
+        paths,
+        {
+            "auth.auth_token": 'slash\\quote"line\nnext',
+            "web.port": 8765,
+            "database.cache_size_kb": 786432,
+        },
     )
-
-    save_app_config(paths, config)
 
     with paths.config_file.open("rb") as handle:
         raw = tomllib.load(handle)
-    loaded = AppConfig.model_validate(raw)
 
-    assert raw["auth"]["auth_token"] == config.auth.auth_token
-    assert loaded == config
-    assert "[database]" in paths.config_file.read_text(encoding="utf-8")
+    assert raw == {
+        "auth": {"auth_token": 'slash\\quote"line\nnext', "ct0": "", "user_id": ""},
+        "web": {"port": 8765},
+        "database": {"cache_size_kb": 786432},
+    }
+    assert get_explicit_config_fields(paths) == [
+        "auth.auth_token",
+        "web.port",
+        "database.cache_size_kb",
+    ]
+
+
+def test_update_config_values_keeps_sections_sparse(paths: XDGPaths) -> None:
+    update_config_values(paths, {"sync.page_delay": 1.0})
+
+    raw = tomllib.loads(paths.config_file.read_text(encoding="utf-8"))
+
+    assert raw["sync"] == {"page_delay": 1.0}
+    assert "database" not in raw
+    assert set(raw) == {"auth", "sync"}
+
+
+def test_update_config_values_removes_normal_override_and_empty_section(paths: XDGPaths) -> None:
+    update_config_values(paths, {"database.cache_size_kb": 123})
+    update_config_values(paths, {"database.cache_size_kb": None})
+
+    assert tomllib.loads(paths.config_file.read_text(encoding="utf-8")) == {
+        "auth": {"auth_token": "", "ct0": "", "user_id": ""}
+    }
+
+
+def test_update_config_values_removes_value_returned_to_default(paths: XDGPaths) -> None:
+    update_config_values(paths, {"sync.page_delay": 1.0})
+    update_config_values(paths, {"sync.page_delay": 2.0})
+
+    assert "[sync]" not in paths.config_file.read_text(encoding="utf-8")
+
+
+def test_update_config_values_none_restores_auth_placeholder(paths: XDGPaths) -> None:
+    update_config_values(paths, {"auth.ct0": "secret"})
+    update_config_values(paths, {"auth.ct0": None})
+
+    raw = tomllib.loads(paths.config_file.read_text(encoding="utf-8"))
+    assert raw["auth"]["ct0"] == ""
+    assert set(raw["auth"]) == {"auth_token", "ct0", "user_id"}
+
+
+def test_update_config_values_rejects_unknown_paths(paths: XDGPaths) -> None:
+    with pytest.raises(ValueError, match="Unknown configuration field"):
+        update_config_values(paths, {"web.auto_start": True})
+
+
+def test_database_defaults_are_fixed() -> None:
+    assert DatabaseConfig().cache_size_kb == 524288
+    assert DatabaseConfig().mmap_size_bytes == 1073741824
 
 
 def test_legacy_web_auto_start_setting_is_ignored_and_not_exposed() -> None:

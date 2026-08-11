@@ -1,3 +1,12 @@
+- 2026-08-10 (Sparse configuration and SQLite defaults — core)
+  - Centralized SQLite defaults in `DatabaseConfig` at a fixed 524,288 KiB page cache and
+    1,073,741,824-byte mmap request; storage now uses the same model defaults with or without an
+    explicit `AppConfig`.
+  - Replaced automatic database-section materialization with a permanent three-key auth skeleton,
+    blank-placeholder runtime normalization, sparse targeted updates, default/reset removal, and
+    explicit-field discovery.
+  - Focused configuration and native SQLite tests pass (78 tests).
+
 - 2026-08-10 (Archive import safety)
   - Added an archive-path owner guard that rejects metadata-less Grailbird imports into a vault
     with an existing owner, while continuing to allow them in a fresh ownerless vault and leaving
