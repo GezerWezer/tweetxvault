@@ -95,6 +95,7 @@ def test_get_schema_returns_ui_contract(make_web_client) -> None:
     assert response.status_code == 200
     schema = response.json()
     assert "tagging.api_key" in schema["whitelist"]
+    assert "auth.auth_token" in schema["blacklist"]
     assert "web.password_hash" in schema["blacklist"]
 
 

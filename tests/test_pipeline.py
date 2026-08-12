@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import random
 import time
 from io import StringIO
@@ -8,6 +9,7 @@ import pytest
 from rich.console import Console
 from rich.text import Text
 
+from tweetxvault.exceptions import ProcessLockError
 from tweetxvault.pipeline import (
     SPINNER_FRAMES,
     TWITTER_BLUE,
@@ -253,3 +255,61 @@ def test_completed_steps_render_their_elapsed_time_at_the_right() -> None:
     assert "elapsed 00:12" in rendered
     assert "1 expanded" in rendered
     assert "00:07" in rendered
+
+
+def test_reporter_atomically_publishes_web_lifecycle_snapshot(tmp_path) -> None:
+    state_path = tmp_path / "activity-status.json"
+    reporter = PipelineReporter(
+        _console(StringIO()),
+        "tweetxvault import enrich",
+        interactive=False,
+        state_path=state_path,
+    )
+
+    with reporter:
+        reporter.add_step("enrich", "Enrich", total=20, unit="tweets")
+        reporter.start_step("enrich", activity="Fetching tweet 10")
+        reporter.update_step(
+            "enrich",
+            completed=10,
+            counters="9 refreshed · 1 unavailable",
+        )
+        reporter.issue("X rate limit reached", dedupe_key="rate-limit")
+
+        snapshot = json.loads(state_path.read_text(encoding="utf-8"))
+        assert snapshot["running"] is True
+        assert snapshot["title"] == "tweetxvault import enrich"
+        assert snapshot["active_step"] == "enrich"
+        assert snapshot["steps"][0]["completed"] == 10
+        assert snapshot["steps"][0]["counters"] == "9 refreshed · 1 unavailable"
+        assert snapshot["issues"][0]["message"] == "X rate limit reached"
+
+    finished = json.loads(state_path.read_text(encoding="utf-8"))
+    assert finished["running"] is False
+    assert finished["success"] is True
+    assert list(tmp_path.glob(".*.tmp")) == []
+
+
+def test_reporter_lifecycle_lock_serializes_commands_and_releases_after_failure(tmp_path) -> None:
+    state_path = tmp_path / "activity-status.json"
+    first = PipelineReporter(
+        _console(StringIO()),
+        "tweetxvault import x-archive",
+        interactive=False,
+        state_path=state_path,
+    )
+    second = PipelineReporter(
+        _console(StringIO()),
+        "tweetxvault sync",
+        interactive=False,
+        state_path=state_path,
+    )
+
+    with pytest.raises(RuntimeError, match="import failed"):
+        with first:
+            with pytest.raises(ProcessLockError, match="Another tweetxvault command"):
+                second.__enter__()
+            raise RuntimeError("import failed")
+
+    with second:
+        second.final_note("sync can start after import releases its lifecycle lock")

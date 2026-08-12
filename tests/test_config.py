@@ -102,7 +102,10 @@ def test_load_config_repairs_only_missing_auth_skeleton(tmp_path: Path) -> None:
 def test_load_config_repairs_missing_auth_keys_and_preserves_values(tmp_path: Path) -> None:
     env = _xdg_env(tmp_path)
     paths = ensure_paths(resolve_paths(env))
-    paths.config_file.write_text('[auth]\nauth_token = "saved"\n', encoding="utf-8")
+    paths.config_file.write_text(
+        '[auth]\nauth_token = "saved"\nbrowser = "firefox"\n',
+        encoding="utf-8",
+    )
 
     config, _ = load_config(env)
 
@@ -121,7 +124,7 @@ def test_load_config_applies_environment_overrides_after_toml(tmp_path: Path) ->
         """
 [auth]
 auth_token = "file-token"
-browser = "firefox"
+ct0 = "file-ct0"
 
 [sync]
 page_delay = 9
@@ -146,7 +149,7 @@ mmap_size_bytes = 64
     config, _ = load_config(env)
 
     assert config.auth.auth_token == "env-token"
-    assert config.auth.browser == "firefox"
+    assert config.auth.ct0 == "file-ct0"
     assert config.sync.page_delay == 1.5
     assert config.sync.max_retries == 4
     assert config.sync.max_linked_depth == 7
@@ -292,17 +295,16 @@ def test_config_ui_schema_only_references_real_fields_and_masks_secrets() -> Non
     assert all(exists(path) for path in basic | blocked)
     assert set(schema["full_width"]) <= editable
     assert set(schema["types"]) <= editable
-    assert schema["types"]["auth.auth_token"] == "password"
-    assert schema["types"]["auth.ct0"] == "password"
     assert schema["types"]["tagging.api_key"] == "password"
+    assert {path for path in blocked if path.startswith("auth.")} == {
+        "auth.auth_token",
+        "auth.ct0",
+        "auth.user_id",
+    }
     assert "web.password_hash" in blocked
     assert all(path in schema["labels"] for path in editable)
     assert all(path in schema["descriptions"] for path in editable)
     assert {
-        "auth.browser",
-        "auth.browser_profile",
-        "auth.browser_profile_path",
-        "auth.firefox_profile_path",
         "sync.page_delay",
         "sync.detail_delay",
         "sync.max_retries",

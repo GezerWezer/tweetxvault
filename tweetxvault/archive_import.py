@@ -1019,7 +1019,7 @@ def _resolve_archive_followup_auth(
             "Authentication",
             total=1,
             unit="session",
-            detail="resolve the configured X browser session for live follow-up",
+            detail="resolve the configured X session values for live follow-up",
             show_rate=False,
             show_eta=False,
         )

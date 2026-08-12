@@ -8,8 +8,9 @@ import tomllib
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 APP_NAME = "tweetxvault"
 API_BASE_URL = "https://x.com/i/api/graphql"
@@ -27,11 +28,19 @@ DEFAULT_USER_AGENT = (
 CONFIG_FILENAME = "config.toml"
 QUERY_ID_CACHE_FILENAME = "query-ids.json"
 LOCK_FILENAME = "sync.lock"
+ACTIVITY_STATUS_FILENAME = "activity-status.json"
+COMMAND_LOCK_FILENAME = "command.lock"
 DB_FILENAME = "archive.db"
 DEFAULT_SQLITE_CACHE_SIZE_KB = 512 * 1024
 DEFAULT_SQLITE_MMAP_SIZE_BYTES = 1024**3
 AUTH_PLACEHOLDER_FIELDS = ("auth_token", "ct0", "user_id")
-CONFIG_SECTION_ORDER = ("auth", "sync", "web", "database", "tagging")
+LEGACY_BROWSER_AUTH_FIELDS = (
+    "browser",
+    "browser_profile",
+    "browser_profile_path",
+    "firefox_profile_path",
+)
+CONFIG_SECTION_ORDER = ("auth", "sync", "web", "schedule", "activity", "database", "tagging")
 
 
 class AuthConfig(BaseModel):
@@ -40,10 +49,6 @@ class AuthConfig(BaseModel):
     auth_token: str | None = None
     ct0: str | None = None
     user_id: str | None = None
-    browser: str | None = None
-    browser_profile: str | None = None
-    browser_profile_path: str | None = None
-    firefox_profile_path: str | None = None
 
 
 class SyncConfig(BaseModel):
@@ -68,6 +73,36 @@ class WebConfig(BaseModel):
     host: str = Field(default="127.0.0.1", min_length=1)
     port: int = Field(default=8000, ge=1, le=65535)
     fetch_avatars: bool = True
+
+
+class ScheduleConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    enabled: bool = False
+    cadence: Literal["hours", "daily", "weekly", "monthly"] = "daily"
+    every_hours: int = Field(default=6, ge=1, le=720)
+    time: str = Field(default="03:00", pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    weekday: int = Field(default=0, ge=0, le=6)
+    day_of_month: int = Field(default=1, ge=1, le=31)
+    timezone: str = Field(default="local", min_length=1)
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: str) -> str:
+        if value == "local":
+            return value
+        try:
+            ZoneInfo(value)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError(f"Unknown timezone: {value}") from exc
+        return value
+
+
+class ActivityConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    max_runs: int = Field(default=100, ge=1, le=10_000)
+    retention_days: int = Field(default=90, ge=1, le=3650)
 
 
 class DatabaseConfig(BaseModel):
@@ -97,6 +132,8 @@ class AppConfig(BaseModel):
     auth: AuthConfig = Field(default_factory=AuthConfig)
     sync: SyncConfig = Field(default_factory=SyncConfig)
     web: WebConfig = Field(default_factory=WebConfig)
+    schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
+    activity: ActivityConfig = Field(default_factory=ActivityConfig)
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     tagging: TaggingConfig = Field(default_factory=TaggingConfig)
 
@@ -121,6 +158,26 @@ class XDGPaths(BaseModel):
     @property
     def lock_file(self) -> Path:
         return self.data_dir / LOCK_FILENAME
+
+    @property
+    def activity_status_file(self) -> Path:
+        return self.data_dir / ACTIVITY_STATUS_FILENAME
+
+    @property
+    def command_lock_file(self) -> Path:
+        return self.data_dir / COMMAND_LOCK_FILENAME
+
+    @property
+    def staged_archive_file(self) -> Path:
+        return self.data_dir / "setup" / "archive.zip"
+
+    @property
+    def schedule_state_file(self) -> Path:
+        return self.data_dir / "schedule-state.json"
+
+    @property
+    def activity_runs_dir(self) -> Path:
+        return self.data_dir / "activity" / "runs"
 
     @property
     def database_path(self) -> Path:
@@ -192,6 +249,10 @@ def _ensure_auth_skeleton(raw: dict[str, Any]) -> bool:
     if changed:
         auth = {}
         raw["auth"] = auth
+    for key in LEGACY_BROWSER_AUTH_FIELDS:
+        if key in auth:
+            del auth[key]
+            changed = True
     for key in AUTH_PLACEHOLDER_FIELDS:
         if key not in auth:
             auth[key] = ""
@@ -264,10 +325,6 @@ def load_config(env: Mapping[str, str] | None = None) -> tuple[AppConfig, XDGPat
         "auth_token": env.get("TWEETXVAULT_AUTH_TOKEN"),
         "ct0": env.get("TWEETXVAULT_CT0"),
         "user_id": env.get("TWEETXVAULT_USER_ID"),
-        "browser": env.get("TWEETXVAULT_BROWSER"),
-        "browser_profile": env.get("TWEETXVAULT_BROWSER_PROFILE"),
-        "browser_profile_path": env.get("TWEETXVAULT_BROWSER_PROFILE_PATH"),
-        "firefox_profile_path": env.get("TWEETXVAULT_FIREFOX_PROFILE_PATH"),
     }
     auth_updates = {key: value for key, value in auth_updates.items() if value is not None}
     sync_updates = {
@@ -349,9 +406,6 @@ def get_explicit_config_fields(paths: XDGPaths) -> list[str]:
 def get_config_ui_schema() -> dict[str, Any]:
     return {
         "whitelist": [
-            "auth.auth_token",
-            "auth.ct0",
-            "auth.user_id",
             "web.fetch_avatars",
             "web.host",
             "web.port",
@@ -365,16 +419,26 @@ def get_config_ui_schema() -> dict[str, Any]:
             "tagging.rpd",
             "tagging.max_media_size_mb",
         ],
-        "blacklist": ["web.password_hash"],
+        "blacklist": [
+            "auth.auth_token",
+            "auth.ct0",
+            "auth.user_id",
+            "web.password_hash",
+            "schedule.enabled",
+            "schedule.cadence",
+            "schedule.every_hours",
+            "schedule.time",
+            "schedule.weekday",
+            "schedule.day_of_month",
+            "schedule.timezone",
+            "activity.max_runs",
+            "activity.retention_days",
+        ],
         "types": {
-            "auth.auth_token": "password",
-            "auth.ct0": "password",
             "tagging.api_key": "password",
             "tagging.thinking_level": "select",
         },
         "full_width": [
-            "auth.browser_profile_path",
-            "auth.firefox_profile_path",
             "tagging.api_key",
         ],
         "select_options": {
@@ -389,15 +453,13 @@ def get_config_ui_schema() -> dict[str, Any]:
             "auth": "Authentication",
             "sync": "Sync & Delays",
             "web": "Web Server",
+            "schedule": "Scheduled Syncs",
+            "activity": "Activity History",
             "database": "Database",
             "tagging": "AI Tagging",
             "auth.auth_token": "Auth Token",
             "auth.ct0": "CT0 (CSRF Token)",
             "auth.user_id": "User ID",
-            "auth.browser": "Browser",
-            "auth.browser_profile": "Browser Profile",
-            "auth.browser_profile_path": "Browser Profile Path",
-            "auth.firefox_profile_path": "Firefox Profile Path",
             "sync.page_delay": "Page Delay (s)",
             "sync.detail_delay": "Detail Delay (s)",
             "sync.max_retries": "Max Retries",
@@ -411,6 +473,15 @@ def get_config_ui_schema() -> dict[str, Any]:
             "web.host": "Host",
             "web.port": "Port",
             "web.fetch_avatars": "Fetch Avatars locally",
+            "schedule.enabled": "Enable Scheduled Syncs",
+            "schedule.cadence": "Schedule Frequency",
+            "schedule.every_hours": "Every N Hours",
+            "schedule.time": "Run Time",
+            "schedule.weekday": "Weekday",
+            "schedule.day_of_month": "Day of Month",
+            "schedule.timezone": "Time Zone",
+            "activity.max_runs": "Maximum Saved Runs",
+            "activity.retention_days": "Log Retention (Days)",
             "database.cache_size_kb": "Cache Size (KiB)",
             "database.mmap_size_bytes": "MMap Size (Bytes)",
             "tagging.enabled": "Enable Tagging",
@@ -427,10 +498,6 @@ def get_config_ui_schema() -> dict[str, Any]:
             "auth.auth_token": "Your Twitter authentication token. See README",
             "auth.ct0": "Your CSRF token. See README",
             "auth.user_id": "Your numerical X user ID.",
-            "auth.browser": "Select a browser to automatically extract cookies from.",
-            "auth.browser_profile": "Name of the browser profile to extract cookies from.",
-            "auth.browser_profile_path": "Absolute path to a specific browser profile.",
-            "auth.firefox_profile_path": "Absolute path to a Firefox profile.",
             "database.cache_size_kb": (
                 "Maximum SQLite page-cache target per database connection. "
                 "Default: 524288 KiB (512 MiB)."
@@ -468,6 +535,15 @@ def get_config_ui_schema() -> dict[str, Any]:
             "web.fetch_avatars": "Automatically download and cache user profile pictures.",
             "web.host": "The IP address the Web UI runs on (default is 127.0.0.1 for local only).",
             "web.port": "The port the Web UI runs on.",
+            "schedule.enabled": "Run sync automatically from the always-on Web service.",
+            "schedule.cadence": "Run every N hours, every day, every week, or every month.",
+            "schedule.every_hours": "Hours between runs when the hourly cadence is selected.",
+            "schedule.time": "Local or configured-zone time for daily, weekly, and monthly runs.",
+            "schedule.weekday": "Weekday for weekly runs, where Monday is zero.",
+            "schedule.day_of_month": "Preferred calendar day for monthly runs.",
+            "schedule.timezone": "IANA time zone name, or local for the system time zone.",
+            "activity.max_runs": "Maximum number of completed command histories to retain.",
+            "activity.retention_days": "Maximum age of completed command histories.",
             "tagging.enabled": "Turn automated AI tagging on or off.",
             "tagging.api_key": "Your Google Gemini API key.",
             "tagging.model": "Which Gemini AI model to use for tagging tweets.",

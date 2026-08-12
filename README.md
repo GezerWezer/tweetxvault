@@ -22,7 +22,7 @@ A Python CLI tool for archiving your Twitter/X bookmarks, likes, and authored tw
 - **Secondary object extraction** — archives canonical tweet objects, attached-tweet relations, media metadata, URL refs, and article payloads alongside collection memberships
 - **Crash-safe checkpoints** — sync state advances atomically with data writes; safe to kill mid-run
 - **Automatic query ID discovery** — scrapes Twitter's JS bundles to stay current with GraphQL endpoint changes
-- **Browser cookie extraction** — reads session cookies from Firefox plus Chromium-family browsers like Chrome, Chromium, Brave, Edge, Opera, Opera GX, Vivaldi, and Arc
+- **Explicit remote-friendly authentication** — accepts X session values through the Web setup pane, config, or environment variables without inspecting a local browser
 - **Rate limit handling** — exponential backoff, cooldown periods, and configurable retry limits
 - **Export** — export your archive to JSON or a self-contained HTML viewer
 
@@ -31,7 +31,7 @@ A Python CLI tool for archiving your Twitter/X bookmarks, likes, and authored tw
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/) (recommended) or pip
 - Unix-like runtime only today (Linux/macOS). Windows is not supported yet because the CLI currently depends on `fcntl`, `resource`, and `strftime("%-d")`.
-- A Twitter/X account logged in via Firefox or a supported Chromium-family browser, or session cookies obtained manually
+- Explicit `auth_token` and `ct0` values from an authenticated Twitter/X session
 
 ## Installation
 
@@ -53,18 +53,7 @@ Install globally with `pipx`:
 pipx install tweetxvault
 ```
 
-To enable the interactive web UI:
-
-```bash
-pip install "tweetxvault[web]"
-```
-
-Or install the extra as a global tool:
-
-```bash
-uv tool install "tweetxvault[web]"
-pipx install "tweetxvault[web]"
-```
+The interactive Web UI is included in every installation.
 
 Install from source:
 
@@ -107,9 +96,16 @@ The migration tool reads from the old `archive.lancedb` table with LanceDB 0.34 
 
 ## Authentication
 
-tweetxvault needs your `auth_token` and `ct0` session cookies from Twitter/X. There are three ways to provide them (checked in this order):
+tweetxvault needs the `auth_token` and `ct0` values from an authenticated Twitter/X session.
+It never inspects local browser profiles, which keeps authentication predictable when the server
+runs on a separate machine.
 
-### 1. Environment variables (simplest)
+For routine setup, open **Settings → Setup** in the Web UI, paste the session values, and choose
+**Save** to run the same remote readiness probe as `tweetxvault auth check`.
+The candidate values are written only after that probe succeeds, so a failed replacement leaves
+the last working credentials intact. Saved secret values are masked when the page is reopened.
+
+For automated installations, environment variables override saved config values:
 
 ```bash
 export TWEETXVAULT_AUTH_TOKEN="your_auth_token"
@@ -117,7 +113,7 @@ export TWEETXVAULT_CT0="your_ct0_token"
 export TWEETXVAULT_USER_ID="your_numeric_user_id"  # required for likes and own-tweet sync
 ```
 
-### 2. Config file
+The Web setup pane stores the same values in the config file. You can also edit it directly:
 
 tweetxvault creates `~/.config/tweetxvault/config.toml` during normal initialization with this
 permanent authentication skeleton:
@@ -130,62 +126,16 @@ user_id = ""
 ```
 
 Replace the empty strings to store credentials in the file. Empty values remain unset and do not
-interfere with environment variables or browser-cookie extraction.
-
-### 3. Browser auto-extraction
-
-If you're logged into x.com in Firefox, Chrome, Chromium, Brave, Edge, Opera, Opera GX, Vivaldi, or Arc, tweetxvault will try them in that order and stop after the first browser profile that yields valid X cookies.
-
-Firefox is read from its profile database directly. Chromium-family browsers use `browser-cookie3` for cookie decryption and OS keyring access.
-
-To force a specific browser or profile for one command:
-
-```bash
-uv run tweetxvault auth check --browser chrome
-uv run tweetxvault sync --browser brave --profile "Profile 2"
-uv run tweetxvault sync --browser firefox --profile-path /path/to/profile
-```
-
-How `--browser` behaves:
-
-- `--browser`, `--profile`, and `--profile-path` force tweetxvault to take `auth_token` and `ct0` from that browser/profile.
-- `user_id` still uses the normal precedence order: `TWEETXVAULT_USER_ID` -> `auth.user_id` -> browser `twid`.
-- That means you can still pin `user_id` explicitly for likes or authored-tweet sync if needed, even while forcing cookies from a specific browser profile.
-- If you do not set `user_id` explicitly, tweetxvault will use the browser profile's `twid` cookie when available.
-
-For example, this uses Firefox cookies from the selected profile, but still pins `user_id` from the environment:
-
-```bash
-export TWEETXVAULT_USER_ID="123456789"
-uv run tweetxvault sync likes --browser firefox --profile my-profile
-```
-
-This matters most if you use multiple X accounts. Make sure the selected browser profile and resolved `user_id` belong to the same account. If you mix cookies from one account with a `user_id` from another, likes/authored-tweet sync may fail, and tweetxvault's archive-owner guardrail will refuse writes if the local archive already belongs to a different user.
-
-Run `uv run tweetxvault auth check --browser ...` first if you want to verify which sources are being used before a sync.
-
-To persist a browser preference in the environment or config:
-
-```bash
-export TWEETXVAULT_BROWSER="chrome"
-export TWEETXVAULT_BROWSER_PROFILE="Profile 2"
-export TWEETXVAULT_BROWSER_PROFILE_PATH="/path/to/profile"
-```
-
-Legacy Firefox-only override is still supported:
-
-```bash
-export TWEETXVAULT_FIREFOX_PROFILE_PATH="/path/to/your/firefox/profile"
-```
+interfere with environment variables. Keep the session values and `user_id` from the same X
+account; the archive-owner guardrail rejects writes for a different account.
 
 ### Verify your setup
 
 ```bash
 uv run tweetxvault auth check
-uv run tweetxvault auth check --interactive
 ```
 
-This probes the API without writing any data and reports credential status and endpoint readiness. `--interactive` opens a picker over discovered browser profiles with valid X cookies.
+This probes the API without writing any data and reports credential status and endpoint readiness.
 
 ## Usage
 
@@ -203,9 +153,6 @@ uv run tweetxvault sync all
 uv run tweetxvault sync bookmarks
 uv run tweetxvault sync likes
 uv run tweetxvault sync tweets
-
-# Force a specific browser profile for this run
-uv run tweetxvault sync --browser chrome --profile "Profile 2"
 
 # Full re-sync from scratch (resets sync state, does not delete existing data)
 uv run tweetxvault sync --full
@@ -252,7 +199,6 @@ Common sync flags:
 - `--article-backfill`: rewalk existing pages to refresh article-bearing tweets after article extraction changes.
 - `--skip-resurrection`, `--skip-threads`, `--skip-articles`, `--skip-media`, `--skip-unfurl`: skip one or more automatic follow-up archive-maintenance jobs for just that sync run.
 - `--limit N`: cap the run to `N` fetched pages for debugging, sampling, or shorter catch-up runs.
-- `--browser`, `--profile`, `--profile-path`: force a specific browser/profile for cookie extraction on just that run.
 
 Backfill status markers shown by `tweetxvault stats`:
 
@@ -361,7 +307,7 @@ Terminal views render tweet timestamps in your local timezone. Sort order uses t
 
 ### Web UI
 
-If you installed the `web` extra, you can browse your archive through an interactive web interface. The web UI is designed as a fast, local clone of the Twitter interface, allowing you to seamlessly navigate threads, read articles, and browse your bookmarks and likes in a familiar layout with full-text search and light/dark theme support.
+Every tweetxvault installation includes an interactive web interface. The web UI is designed as a fast, local clone of the Twitter interface, allowing you to seamlessly navigate threads, read articles, and browse your bookmarks and likes in a familiar layout with full-text search and light/dark theme support.
 
 **Key Web UI Features:**
 - **History API Integration:** Browser back/forward buttons work flawlessly when diving in and out of threads, completely preserving scroll positions with zero flashing or resets.
@@ -369,6 +315,12 @@ If you installed the `web` extra, you can browse your archive through an interac
 - **Native Render Fidelity:** Accurate styling for quoted tweets, circular avatars, and native rendering of cyan Twitter Polls. Article cards strip redundant `t.co` links, use `summary_large_image` thumbnails, and are fully clickable.
 - **Manual Tag Editing:** Every top-level post has a three-dot menu with tag viewing and editing, including descriptions and untagged posts. Hold the button for one second to open the tag view directly.
 - **Archive Analytics:** The overview reports unavailable imported tweets and their archive percentage. Archive status separates enrichment, thread expansion, missing enrichment, and resurrection, with an availability-reason breakdown. Storage shows an inline size breakdown in simplified or detailed form.
+- **Live Activity Drawer:** A Twitter DM-style drawer mirrors the shared terminal pipeline for sync, import, enrich, media, thread, article, unfurl, tag, and migration jobs. Its collapsed tab spins while work is active; expand it for steps, counters, progress, ETAs, and issues. Run Sync Now launches the production sync in an isolated worker, and Stop Task requests a graceful interrupt.
+- **Guided Setup:** Settings → Setup keeps explicit X session credentials and their live readiness
+  test in one focused pane. Upload an official archive.zip there, then launch its full import and
+  enrichment pipeline without entering a server-local path or touching the CLI.
+- **Scheduled Syncs:** The always-on Web service can run sync every N hours, every day, every week, or every month. The next scheduled run appears in the activity drawer. The Schedule settings tab is currently a status placeholder; configure `[schedule]` in `config.toml` or through the authenticated schedule API while its controls are developed.
+- **Activity Logs:** Every shared-pipeline run—including commands launched manually from the CLI—retains structured steps, issues, origin, timestamps, outcome, and a readable transcript. Browse previous runs in Settings → Logs.
 - **Daemon Management:** Run the server safely in the background using native CLI daemon commands.
 
 The web server runs as a background daemon so you don't need to keep a terminal open:
@@ -402,6 +354,35 @@ host = "127.0.0.1"
 port = 8000
 fetch_avatars = true
 ```
+
+Until the placeholder Schedule tab gains editing controls, configure built-in sync timing in the
+same file. Choose one cadence: `hours`, `daily`, `weekly`, or `monthly`. Weekly weekdays use Monday
+as `0`; monthly runs clamp days such as 31 to the last day of shorter months.
+
+```toml
+[schedule]
+enabled = true
+cadence = "hours"
+every_hours = 6
+time = "03:00"       # used by daily, weekly, and monthly cadences
+weekday = 0          # used by weekly cadence
+day_of_month = 1     # used by monthly cadence
+timezone = "local"  # or an IANA name such as "America/Detroit"
+
+[activity]
+max_runs = 100
+retention_days = 90
+```
+
+The built-in scheduler runs inside the Web service, so `tweetxvault web start` must remain running.
+All scheduled, Web-triggered, and manual CLI pipeline runs are retained under the application data
+directory and are available in Settings → Logs.
+
+Sync, archive import, enrichment, and other shared-pipeline maintenance commands also hold one
+command-lifecycle lock for their complete run. A multi-day archive import therefore prevents a
+manual, Web, or scheduled sync from overlapping it; a due scheduled run is skipped and advanced to
+its next occurrence instead of modifying the archive concurrently. Short database write windows
+retain a separate storage lock as a second line of defense.
 
 ### Searching
 
@@ -712,7 +693,7 @@ Override with `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME`.
 
 tweetxvault calls Twitter's internal GraphQL API — the same endpoints the web app uses. It:
 
-1. Resolves session cookies (env/config/browser extraction)
+1. Resolves explicit session values (environment variables or config/Setup)
 2. Discovers current GraphQL query IDs by parsing Twitter's JS bundles (with a 24h TTL cache and static fallbacks)
 3. Fetches timeline pages with the proper headers, feature flags, and cursor pagination
 4. Stores raw API responses + collection tweet rows + normalized secondary objects in a local SQLite table
@@ -721,7 +702,7 @@ tweetxvault calls Twitter's internal GraphQL API — the same endpoints the web 
 ## Development
 
 ```bash
-uv sync --extra web
+uv sync
 
 # Run tests
 uv run pytest

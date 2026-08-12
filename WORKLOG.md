@@ -1,3 +1,200 @@
+- 2026-08-12 (Explicit-only authentication)
+  - Removed Firefox/Chromium browser-profile discovery, automatic cookie extraction, and the
+    related config fields, environment mappings, CLI flags, Setup controls, and debug paths.
+  - Authentication now resolves only explicitly supplied Setup/config values or
+    `TWEETXVAULT_AUTH_TOKEN`, `TWEETXVAULT_CT0`, and `TWEETXVAULT_USER_ID`.
+  - Removed `browser-cookie3` and seven now-unused transitive packages from `uv.lock`; replaced the
+    browser extraction suite with explicit credential resolution coverage and updated active docs.
+  - Validation: Ruff lint, all 850 Python tests, 37 browser-asset tests, offline lock validation,
+    diff hygiene, and formatting for all task files pass. The repository-wide format check retains
+    the three known unrelated drifts in tagging/resurrection files.
+  - Follow-up: Setup now probes candidate credentials through an isolated temporary config before
+    writing any submitted values. Failed probes leave the prior config and configured UI state
+    intact; successful probes commit the candidate values and refresh the masked response.
+
+- 2026-08-12 (Serialized command lifecycles and focused Web setup)
+  - Added a separate command-lifecycle lock held across complete shared-pipeline runs, including
+    archive import/enrichment network phases where the shorter database write lock is released.
+    Web and scheduled supervisors now consult both live snapshots and this lock before launching.
+  - Added Setup as the first Settings pane, moved all auth fields out of generic Config, and wired
+    focused auth persistence plus the real `auth check` preflight without exposing secret values.
+  - Added authenticated streaming upload to an app-owned validated archive.zip, guarded clear and
+    replacement, persisted import/enrichment readiness warnings, and one-click real import followed
+    by default full enrichment in the existing activity drawer.
+  - Added lifecycle, supervisor, storage-status, route, markup, and deterministic browser tests.
+  - Rendered QA verified the focused Setup hierarchy, disabled pre-upload import, warning states,
+    and removal of auth from Config. Ruff lint, the full Python suite, 37 browser-asset tests,
+    offline lock validation, diff hygiene, and all task-file formatting checks pass; only the four
+    previously documented unrelated repository-wide format drifts remain.
+
+- 2026-08-12 (Production Web jobs, scheduled syncs, and durable activity logs)
+  - Replaced the temporary Web simulations with a production subprocess supervisor that launches
+    the existing sync, archive-enrich, and validated local archive-import CLI paths, preserves the
+    process/archive writer guards, captures worker output, and supports graceful process-group stop.
+  - Extended every shared `PipelineReporter` run with a credential-redacted run ID, metadata,
+    structured events, atomic live/final snapshots, and a readable retained transcript, so manual
+    CLI, Web, and scheduled commands all appear in the same authenticated history APIs.
+  - Added a Web-owned persistent scheduler supporting every N hours, daily, weekly, and monthly
+    cadence, missed-run launch, conflict skipping, next-run display, and config/API persistence.
+  - Added separate Schedule and Logs settings tabs. Schedule intentionally has placeholder controls;
+    Logs already lists retained runs and opens their transcript. The redesigned drawer itself was
+    not restyled or structurally redesigned.
+  - Added focused history, supervisor, cadence, route, configuration, and browser-asset regressions;
+    rendered QA confirmed disabled and enabled drawer schedules plus retained CLI log browsing. No
+    application errors appeared; the only browser warning was the existing Tailwind CDN warning.
+  - Passed Ruff, 853 Python tests, 36 browser-asset tests, offline lock validation, diff hygiene,
+    and task-file formatting checks. Repository-wide formatting still reports the four existing
+    out-of-scope files documented in the preceding drawer work.
+
+- 2026-08-12 (Redesigned activity drawer wiring)
+  - Preserved the redesigned drawer's markup, layout, transitions, and CSS while replacing its
+    hard-coded prior run with API-backed active and terminal pipeline snapshots.
+  - Wired the existing Run Sync Now and Stop Task controls to realistic, non-mutating sync previews;
+    cancellation now ends the active step as stopped and retains that terminal output in the drawer.
+  - Populated the existing schedule fields with a truthful unconfigured state, added pipeline
+    completion timestamps, and suppressed orphaned running snapshots from prior dead processes.
+  - Render-checked idle, live progress, completed, and stopped states against an isolated local
+    archive. No application errors appeared; the only browser warning was the existing Tailwind CDN
+    development warning.
+  - Passed Ruff lint, 844 Python tests, 36 browser-asset tests, the offline lock check, diff hygiene,
+    and Ruff formatting for all task Python files. The repository-wide format check still reports
+    the existing drift in `tests/test_auth.py`, `tests/test_tagging.py`,
+    `tweetxvault/resurrection.py`, and `tweetxvault/tagging.py`; those unrelated files were untouched.
+
+- 2026-08-12 (Sync drawer corrected pull direction and adaptive fade)
+  - Removed the viewport's artificial mask-overlap padding so the first active card starts at
+    the control boundary instead of after an empty scrollable gap.
+  - Reversed wheel input directly so wheel-up pulls the connected scene down and wheel-down returns
+    it upward, without automatic progression scrolling or competing visual motion.
+  - Matched the stacked active-step offset to the 64px completed-card height so the newest card is
+    physically present beneath the fade, with its lower half visible instead of an empty gap.
+  - Tightened completed cards from 76px to 64px to balance their bottom spacing with the top inset.
+  - Shortened the finite scroll canvas by one active offset so the oldest completed card stops at
+    the divider and the connected scene cannot be pulled into an empty gap.
+  - Extended the fade eight pixels farther into the newest completed card while retaining a clear
+    lower section for its title and completion state.
+  - Restyled active and completed steps as edge-to-edge Twitter-like timeline rows with shared
+    insets, quieter separators, neutral primary titles, soft status circles, and a slimmer progress bar.
+  - Removed the pending-step “Show remaining” disclosure and its unused client state/helper.
+  - Moved the fixed “Archive Sync” title beside the drawer icon, placed the last-completed relative
+    time below the schedule copy, and made collapsed hover surfaces opaque against page content.
+  - Clarified the timestamp as “Last sync completed …” and removed the duplicate pre-button margin
+    so the action has equal 16px spacing above and below.
+  - Redesigned the schedule/action block with Twitter-like metadata hierarchy, compact 13–15px type,
+    a 40px pill action, restrained hover/pressed motion, and an accessible keyboard focus ring.
+  - Moved Issues into an always-visible footer with an occurrence counter, empty state, and its own
+    bounded scroll area so issue history no longer moves with the step stack.
+  - Scoped reversed wheel handling to active runs; completed history now uses native scroll direction.
+  - Made the fade opacity and upward travel update immediately with scroll distance, strengthened
+    the background blend, and moved the control divider into an independent layer above the fade.
+  - Updated source regressions and validated without browser testing.
+
+- 2026-08-12 (Web restart port-owner detection)
+  - Restricted `lsof` port discovery to TCP listeners so active browser/client connections are
+    not mistaken for the Web server during `web restart`.
+  - Updated CLI regressions and passed the focused Web CLI test suite plus Ruff.
+
+- 2026-08-12 (Sync drawer scrollbar and first-completion transition)
+  - Hid the activity viewport scrollbar while preserving manual wheel/touch scrolling and removed
+    the reserved scrollbar gutter.
+  - Made the control-layer fade render only when completed steps exist.
+  - Made the active step start directly beneath the controls with no completed steps, then animate
+    its top offset to the normal stacked position when the first task completes.
+  - Updated source regressions and validated without browser testing.
+
+- 2026-08-11 (Sync drawer overscroll boundary)
+  - Disabled overscroll chaining on the fixed activity drawer, drawer body, and activity viewport so
+    wheel/touch input at either scroll endpoint cannot leak into the archive list.
+  - Disabled the browser's native overscroll affordance on those layers, removing the end-of-range
+    bounce while preserving the finite manual activity scroll behavior.
+  - Added a source regression and validated without browser testing.
+
+- 2026-08-11 (Sync drawer scroll architecture audit and replacement)
+  - Audited the repeated direction/disappearing-card regressions and found one structural cause:
+    the transformed track was simultaneously native scroll content and its own moving clip boundary.
+  - Split the implementation into a finite canvas and one absolutely positioned scene. The canvas
+    contributes exactly one completed-stack height of native scroll; the scene contains completed,
+    active, pending, and issue content and is the only element transformed.
+  - Positioned the scene one stack-height into the canvas with an equal negative baseline. New
+    completed cards therefore grow upward without moving the active card, remain inside the fixed
+    canvas clip, and become visible as the scene is pulled down.
+  - Kept the two-to-one scene transform: native scrolling moves the canvas up by one unit while the
+    scene moves down by two, yielding a deterministic net one-unit downward movement. Validation
+    was source/static only, per user request; no browser test was run.
+
+- 2026-08-11 (Connected reverse sync-drawer scrolling)
+  - Moved the manual scroll transform from the completed stack to their shared track, keeping the
+    completed cards, active card, pending section, and issues connected as one visual column.
+  - Retained the positive two-to-one transform so scrolling down reverses the visible direction
+    and pulls the entire connected column downward. No automatic scrolling was added.
+  - Added source-level placement coverage and validated without browser testing.
+
+- 2026-08-11 (Sync drawer pull direction correction)
+  - Restored the positive manual stack shift so scrolling down pulls the entire completed-step
+    stack downward into view; the stack no longer moves away from the viewport.
+  - Kept the fade receding upward with scroll so it clears the active card while the stack is
+    pulled out beneath the control layer. No automatic scrolling was added.
+  - Updated the deterministic scroll regression and validated source/static checks without another
+    browser test.
+
+- 2026-08-11 (Sync drawer mask and stack direction follow-up)
+  - Reworked the completed-step fade into the fixed control layer so it reaches the button area,
+    ends at the active-step boundary, and cannot darken the active card.
+  - Made the fade recede with manual scrolling and kept the stack movement isolated from the
+    active card; no automatic scroll position changes were added.
+  - Updated the deterministic scroll regression and verified the JS asset suite (36), focused Web
+    Python tests (14), Ruff, and `git diff --check` without opening a browser.
+
+- 2026-08-11 (Manual sync-step stack reveal follow-up)
+  - Replaced the completed-step toggle with an anchored active slot and a completed stack that
+    grows upward beneath the control layer; the active slot remains at a fixed offset during
+    normal polling.
+  - Added a background fade/mask over the stack and a native-scroll-driven pull-out effect. The
+    scroll handler changes only a CSS transform, never `scrollTop`, `scrollTo`, or `scrollIntoView`.
+  - Restored the earlier 20px card content inset and removed the added side gutters/outlines, kept
+    issue/tail content in the native scroll flow, and bounded the reveal with one finite spacer
+    plus clipped transformed content.
+  - Added deterministic helper/markup/style regressions. Browser asset tests (36), focused Web
+    Python tests (14), Ruff, diff checks, and local rendered QA pass.
+  - Authenticated browser QA against the actual `127.0.0.1:8000` server verified served assets,
+    active-slot alignment, uncut card widths, native issue-tail movement, a finite scroll endpoint,
+    and no application console errors beyond the existing Tailwind CDN development warning.
+
+- 2026-08-12 (Redesigned activity drawer wiring)
+  - Preserved the redesigned drawer structure and CSS while auditing its new data contract:
+    collapsed square/bar/panel states, scheduled-sync copy, retained terminal runs, step stacking,
+    Run Sync Now, Stop Task, and temporary debug simulations.
+  - Kept Web actions in the explicitly requested temporary non-mutating simulation mode. A real
+    import cannot be safely launched from the current design because it provides no archive path;
+    CLI sync/import/enrich commands remain real and continue publishing their shared lifecycle.
+  - Added completed timestamps to shared pipeline snapshots, replaced the hard-coded sample history
+    with API-retained terminal state, exposed the truthful unconfigured scheduler state, and added
+    cooperative cancellation that marks the active preview step stopped without archive or X I/O.
+  - Focused reporter, route, asset, and 36-case deterministic browser tests pass.
+
+- 2026-08-11 (Required Web UI and live command activity)
+  - Made FastAPI and Uvicorn required dependencies and removed the optional `web` install extra.
+  - Extended the shared lifecycle reporter with atomic, credential-free activity snapshots; sync,
+    import, enrich, article, thread, media, unfurl, tag, and migration commands publish the same
+    steps, counters, determinate progress, ETA, and issue state rendered in the terminal.
+  - Added authenticated activity status plus temporary Sync, Enrich, and Import preview endpoints.
+    Preview jobs run deterministic realistic steps through the real reporter in a daemon thread,
+    never open or modify the archive, never contact X, and reject a launch while another published
+    command is active.
+  - Added a Twitter DM-style lower-left drawer with an always-available collapsed tab, active-job
+    spinner, pull-up pipeline detail, explicit Simulated badge, and three preview actions.
+  - Focused pipeline, route, CLI, Web asset, and 35-case deterministic browser tests pass. Rendered
+    isolated QA verified idle/collapsed, idle/expanded, live import/enrich, and running/collapsed
+    states with correct lower-left placement and no application errors.
+  - The complete Python suite and repository-wide Ruff lint pass; all task files pass Ruff format,
+    the refreshed lock passes offline consistency checking, and `git diff --check` passes. The
+    repository-wide format check retains four pre-existing unrelated files.
+  - Follow-up temporary demo wiring added deterministic Sync, Enrich, and Import reporter runs.
+    Complete Python, Ruff, lock, diff, and 35-case browser validation pass. Rendered QA confirmed
+    the three-button Simulated treatment, live import steps/progress/ETA, disabled concurrent
+    actions, and the collapsed running spinner; the only browser warning is the existing Tailwind
+    CDN development notice.
+
 - 2026-08-11 (High-cardinality tag search benchmark)
   - Reproduced `tag:` latency on a copy-on-write clone of the configured 7.8 GB vault after adding
     700 benchmark-only tag records. The current exact-count and first-page queries each exceeded a

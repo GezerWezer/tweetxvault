@@ -181,7 +181,7 @@ def test_find_pid_by_port_handles_command_failures_and_invalid_output(
     assert calls == 2
 
 
-def test_start_reports_missing_optional_web_dependencies(monkeypatch) -> None:
+def test_start_reports_missing_required_web_dependencies(monkeypatch) -> None:
     monkeypatch.setattr(
         cli_web,
         "import_module",
@@ -197,7 +197,7 @@ def test_start_reports_missing_optional_web_dependencies(monkeypatch) -> None:
 
     assert result.exit_code == 1
     assert "Web dependencies are missing" in result.stdout
-    assert "uv sync --extra web" in result.stdout
+    assert "Reinstall tweetxvault" in result.stdout
 
 
 def test_dependency_check_requires_server_stack_and_uvicorn(monkeypatch) -> None:

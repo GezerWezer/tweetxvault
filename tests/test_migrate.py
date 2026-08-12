@@ -26,7 +26,7 @@ class FakeLegacyTable:
         return self.total_rows
 
 
-def test_migrate_cli_activates_the_shared_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_migrate_cli_activates_the_shared_pipeline(monkeypatch: pytest.MonkeyPatch, paths) -> None:
     observed: list[str] = []
 
     def fake_run_migration(*, console: Console) -> migrate.MigrationResult:
@@ -36,6 +36,7 @@ def test_migrate_cli_activates_the_shared_pipeline(monkeypatch: pytest.MonkeyPat
         return migrate.MigrationResult(status="source_missing")
 
     monkeypatch.setattr(migrate, "run_migration", fake_run_migration)
+    monkeypatch.setattr(cli, "load_config", lambda: (AppConfig(), paths))
 
     result = CliRunner().invoke(cli.app, ["migrate"])
 

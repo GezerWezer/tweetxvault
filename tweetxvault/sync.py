@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import fcntl
-import threading
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any
 
 import httpx
 from rich.console import Console
@@ -30,7 +27,6 @@ from tweetxvault.exceptions import (
     ArchiveOwnerMismatchError,
     AuthResolutionError,
     ConfigError,
-    ProcessLockError,
     TweetXVaultError,
 )
 from tweetxvault.jobs import (
@@ -38,6 +34,7 @@ from tweetxvault.jobs import (
     best_effort_interrupt_optimize,
     is_interrupt_exception,
 )
+from tweetxvault.locking import ProcessLock
 from tweetxvault.pipeline import PipelineReporter, current_pipeline
 from tweetxvault.query_ids import QueryIdStore, refresh_query_ids
 from tweetxvault.storage import ArchiveStore, SyncState, open_archive_store
@@ -122,20 +119,8 @@ def plan_sync_pipeline(
     collections: Sequence[str],
     followups: SyncFollowupPlan | None,
     head_only: bool,
-    browser_override: bool = False,
 ) -> None:
     """Declare the complete flag-relevant sync lifecycle before any work begins."""
-
-    if browser_override:
-        pipeline.add_step(
-            "auth-override",
-            "Authentication",
-            total=1,
-            unit="session",
-            detail="explicit browser profile selected for this command",
-            show_rate=False,
-            show_eta=False,
-        )
     pipeline.add_step(
         "preflight:" + ",".join(collections),
         "Prepare",
@@ -193,58 +178,6 @@ def plan_sync_pipeline(
                 show_rate=False,
                 show_eta=False,
             )
-
-
-class ProcessLock:
-    _registry_guard = threading.Lock()
-    _registry: ClassVar[dict[str, tuple[Any, int]]] = {}
-
-    def __init__(self, path: Path):
-        self.path = path
-        self._handle: Any | None = None
-        self._registry_key: str | None = None
-
-    def acquire(self, *, reentrant: bool = False) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        key = str(self.path.resolve())
-        with self._registry_guard:
-            held = self._registry.get(key)
-            if held is not None:
-                if not reentrant:
-                    raise ProcessLockError("Another tweetxvault archive job is already running.")
-                handle, count = held
-                self._registry[key] = (handle, count + 1)
-                self._handle = handle
-                self._registry_key = key
-                return
-        handle = self.path.open("a+")
-        try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            handle.close()
-            raise ProcessLockError("Another tweetxvault archive job is already running.") from exc
-        self._handle = handle
-        self._registry_key = key
-        with self._registry_guard:
-            self._registry[key] = (handle, 1)
-
-    def release(self) -> None:
-        if self._handle is None or self._registry_key is None:
-            return
-        handle = self._handle
-        key = self._registry_key
-        with self._registry_guard:
-            held_handle, count = self._registry[key]
-            if count > 1:
-                self._registry[key] = (held_handle, count - 1)
-                self._handle = None
-                self._registry_key = None
-                return
-            del self._registry[key]
-        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-        handle.close()
-        self._handle = None
-        self._registry_key = None
 
 
 def _build_url(

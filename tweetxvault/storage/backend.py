@@ -1584,6 +1584,14 @@ class ArchiveStore:
     def get_import_manifest(self, archive_digest: str) -> dict[str, Any] | None:
         return self._get_row(self._row_key_for_import_manifest(archive_digest))
 
+    def has_completed_archive_import(self) -> bool:
+        """Return whether at least one official archive import completed successfully."""
+
+        return (
+            self._count("record_type = 'import_manifest' AND status IN ('completed', 'sampled')")
+            > 0
+        )
+
     def set_import_manifest(
         self,
         archive_digest: str,

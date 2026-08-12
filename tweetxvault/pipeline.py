@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import os
 import random
 import time
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from io import StringIO
-from typing import Literal
+from pathlib import Path
+from typing import Any, Literal
 
 from rich import box
 from rich.cells import cell_len
@@ -260,6 +262,7 @@ class PipelineReporter:
     spinner_name: str | None = None
     interactive: bool | None = None
     log_interval_seconds: float = 30.0
+    state_path: Path | None = None
     steps: list[PipelineStep] = field(default_factory=list, init=False)
     issues: list[PipelineIssue] = field(default_factory=list, init=False)
     _step_by_key: dict[str, PipelineStep] = field(default_factory=dict, init=False)
@@ -271,6 +274,10 @@ class PipelineReporter:
     _final_summary: str = field(default="", init=False)
     _started_at: float | None = field(default=None, init=False)
     _finished_at: float | None = field(default=None, init=False)
+    _started_at_unix: float | None = field(default=None, init=False)
+    _finished_at_unix: float | None = field(default=None, init=False)
+    _run_writer: Any | None = field(default=None, init=False)
+    _command_lock: Any | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         if self.spinner_name is None:
@@ -283,8 +290,28 @@ class PipelineReporter:
 
     def __enter__(self) -> PipelineReporter:
         self._started_at = time.monotonic()
+        self._started_at_unix = time.time()
+        if self.state_path is not None:
+            from tweetxvault.locking import ProcessLock
+
+            self._command_lock = ProcessLock(
+                self.state_path.with_name("command.lock"),
+                conflict_message=(
+                    "Another tweetxvault command is already running. Wait for it to finish "
+                    "before starting sync, import, or enrichment work."
+                ),
+            )
+            self._command_lock.acquire()
+            try:
+                from tweetxvault.activity_history import ActivityRunWriter
+
+                self._run_writer = ActivityRunWriter(self.state_path, self.title)
+                self._run_writer.start(pid=os.getpid(), started_at=self._started_at_unix)
+            except (OSError, ValueError):
+                self._run_writer = None
         self._token = _CURRENT_PIPELINE.set(self)
         if self.interactive:
+            self._record_history("command", "start")
             self._live = Live(
                 self,
                 console=self.console,
@@ -299,7 +326,11 @@ class PipelineReporter:
     def __exit__(self, exc_type, exc, _traceback) -> None:
         if exc is not None:
             active = self.active_step
-            message = _clean_line(str(exc)) or exc.__class__.__name__
+            message = (
+                "Stopped by user"
+                if exc_type is KeyboardInterrupt
+                else (_clean_line(str(exc)) or exc.__class__.__name__)
+            )
             if active is not None and active.state == "active":
                 self.fail_step(active.key, message)
             self.issue(message, level="error", dedupe_key="command:failure")
@@ -312,6 +343,9 @@ class PipelineReporter:
         if self._token is not None:
             _CURRENT_PIPELINE.reset(self._token)
             self._token = None
+        if self._command_lock is not None:
+            self._command_lock.release()
+            self._command_lock = None
 
     @property
     def active_step(self) -> PipelineStep | None:
@@ -389,12 +423,14 @@ class PipelineReporter:
             step.detail = detail
         if step.started_at is None:
             step.started_at = time.monotonic()
-        if not self.interactive:
-            fields = [activity]
-            if step.total > 0:
-                fields.append(f"total={step.total:,} {step.unit}")
-            if step.detail:
-                fields.append(step.detail)
+        fields = [activity]
+        if step.total > 0:
+            fields.append(f"total={step.total:,} {step.unit}")
+        if step.detail:
+            fields.append(step.detail)
+        if self.interactive:
+            self._record_history(step.title, "start", " · ".join(fields))
+        else:
             self._log(step.title, "start", " · ".join(fields))
         self._refresh()
 
@@ -427,27 +463,34 @@ class PipelineReporter:
             step.counters = counters
         if detail is not None:
             step.detail = detail
-        if not self.interactive and self._should_log_progress(step, important=important):
+        if self._should_log_progress(step, important=important):
             progress = f"{step.completed:,}/{step.total:,} {step.unit}"
             fields = [progress]
             if step.counters:
                 fields.append(step.counters)
             elif step.activity:
                 fields.append(step.activity)
-            self._log(step.title, "progress", " · ".join(fields))
+            if self.interactive:
+                self._record_history(step.title, "progress", " · ".join(fields))
+            else:
+                self._log(step.title, "progress", " · ".join(fields))
         self._refresh()
 
     def status(self, key: str, message: str, *, important: bool = False) -> None:
         step = self._step_by_key[key]
         step.activity = message
-        if not self.interactive and important:
-            self._log(step.title, "status", message)
+        if important:
+            if self.interactive:
+                self._record_history(step.title, "status", message)
+            else:
+                self._log(step.title, "status", message)
         self._refresh()
 
     def detail(self, scope: str, message: str) -> None:
         """Emit an explicit diagnostic without placing it in the issues panel."""
 
         if self.interactive and self._live is not None:
+            self._record_history(scope, "detail", message)
             self._live.console.print(
                 " | ".join((self.title, scope, "detail", _clean_line(message))),
                 markup=False,
@@ -474,11 +517,12 @@ class PipelineReporter:
         else:
             issue.count += 1
             issue.latest = message
-        if not self.interactive and (
-            issue.count <= 3 or issue.count == 10 or issue.count % 25 == 0
-        ):
+        if issue.count <= 3 or issue.count == 10 or issue.count % 25 == 0:
             suffix = "" if issue.count == 1 else f" · occurrences={issue.count}"
-            self._log("issue", level, message + suffix)
+            if self.interactive:
+                self._record_history("issue", level, message + suffix)
+            else:
+                self._log("issue", level, message + suffix)
         self._refresh()
 
     def complete_step(
@@ -495,8 +539,10 @@ class PipelineReporter:
         if counters is not None:
             step.counters = counters
         step.finished_at = time.monotonic()
-        if not self.interactive:
-            fields = [summary, f"elapsed {_format_duration(step.elapsed)}"]
+        fields = [summary, f"elapsed {_format_duration(step.elapsed)}"]
+        if self.interactive:
+            self._record_history(step.title, "complete", " · ".join(fields))
+        else:
             self._log(step.title, "complete", " · ".join(fields))
         self._refresh()
 
@@ -512,7 +558,9 @@ class PipelineReporter:
         step.summary = f"skipped due to {clean_reason}"
         if step.started_at is not None:
             step.finished_at = time.monotonic()
-        if not self.interactive:
+        if self.interactive:
+            self._record_history(step.title, "skipped", step.summary)
+        else:
             self._log(step.title, "skipped", step.summary)
         self._refresh()
 
@@ -521,7 +569,9 @@ class PipelineReporter:
         step.state = "failed"
         step.summary = message
         step.finished_at = time.monotonic()
-        if not self.interactive:
+        if self.interactive:
+            self._record_history(step.title, "failed", message)
+        else:
             self._log(step.title, "failed", message)
         self._refresh()
 
@@ -540,6 +590,7 @@ class PipelineReporter:
             return
         self._finished = True
         self._finished_at = time.monotonic()
+        self._finished_at_unix = time.time()
         self._success = success
         if summary:
             self._final_summary = summary
@@ -551,7 +602,13 @@ class PipelineReporter:
         for step in self.steps:
             if step.state == "pending":
                 self.skip_step(step.key, pending_reason)
-        if not self.interactive:
+        if self.interactive:
+            self._record_history(
+                "command",
+                "complete" if success else "failed",
+                self._final_summary,
+            )
+        else:
             self._log(
                 "command",
                 "complete" if success else "failed",
@@ -582,7 +639,7 @@ class PipelineReporter:
             step.last_log_at = now
         return should_log
 
-    def _log(self, scope: str, event: str, message: str = "") -> None:
+    def _format_log_line(self, scope: str, event: str, message: str = "") -> tuple[str, str]:
         clean_message = _clean_line(message)
         if scope == "command":
             if event == "start":
@@ -609,11 +666,91 @@ class PipelineReporter:
                 line = f"{scope}: {event_label}"
             if clean_message and not (event == "skipped" and clean_message.startswith("skipped ")):
                 line += f" · {clean_message}"
+        return clean_message, line
+
+    def _record_history(self, scope: str, event: str, message: str = "") -> str:
+        clean_message, line = self._format_log_line(scope, event, message)
+        if self._run_writer is not None:
+            self._run_writer.append(
+                scope=scope,
+                event=event,
+                message=clean_message,
+                line=line,
+            )
+        return line
+
+    def _log(self, scope: str, event: str, message: str = "") -> None:
+        line = self._record_history(scope, event, message)
         self.console.print(line, markup=False, highlight=False, soft_wrap=True)
 
     def _refresh(self) -> None:
+        snapshot = self._state_snapshot()
+        self._write_state_snapshot(snapshot)
+        if self._run_writer is not None:
+            self._run_writer.snapshot(snapshot)
         if self._live is not None:
             self._live.update(self, refresh=True)
+
+    def _state_snapshot(self) -> dict[str, object]:
+        active = self.active_step
+        return {
+            "version": 1,
+            "run_id": self._run_writer.run_id if self._run_writer is not None else None,
+            "origin": self._run_writer.origin if self._run_writer is not None else "cli",
+            "pid": os.getpid(),
+            "title": self.title,
+            "running": self._started_at is not None and not self._finished,
+            "success": self._success if self._finished else None,
+            "summary": self._final_summary,
+            "started_at": self._started_at_unix,
+            "completed_at": self._finished_at_unix,
+            "updated_at": time.time(),
+            "elapsed_seconds": self.elapsed,
+            "active_step": active.key if active is not None else None,
+            "steps": [
+                {
+                    "key": step.key,
+                    "title": step.title,
+                    "state": step.state,
+                    "completed": step.completed,
+                    "total": step.total,
+                    "unit": step.unit,
+                    "activity": step.activity,
+                    "counters": step.counters,
+                    "detail": step.detail,
+                    "summary": step.summary,
+                    "elapsed_seconds": step.elapsed,
+                    "rate": step.rate,
+                    "rate_unit": step.rate_unit or f"{step.unit}/s",
+                    "eta_seconds": step.eta,
+                }
+                for step in self.steps
+            ],
+            "issues": [
+                {
+                    "level": issue.level,
+                    "message": issue.message,
+                    "count": issue.count,
+                    "latest": issue.latest,
+                }
+                for issue in self.issues
+            ],
+        }
+
+    def _write_state_snapshot(self, snapshot: dict[str, object] | None = None) -> None:
+        if self.state_path is None or self._started_at is None:
+            return
+        temporary = self.state_path.with_name(f".{self.state_path.name}.{os.getpid()}.tmp")
+        try:
+            self.state_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary.write_text(
+                json.dumps(snapshot or self._state_snapshot(), separators=(",", ":")),
+                encoding="utf-8",
+            )
+            temporary.replace(self.state_path)
+        except OSError:
+            # Status publishing must never break the underlying archive command.
+            temporary.unlink(missing_ok=True)
 
     def _progress_renderable(self, step: PipelineStep) -> RenderableType:
         progress = Table.grid(expand=True, padding=(0, 1))

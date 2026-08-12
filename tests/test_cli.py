@@ -12,7 +12,6 @@ from rich.console import Console
 from typer.testing import CliRunner
 
 import tweetxvault.cli as cli
-from tweetxvault.auth import BrowserCandidate
 from tweetxvault.client.timelines import TimelineTweet
 from tweetxvault.config import AppConfig, AuthConfig
 from tweetxvault.storage import open_archive_store
@@ -150,6 +149,8 @@ def test_sync_help_lists_subcommand_descriptions() -> None:
     assert "all" in result.stdout
     assert "media download" in result.stdout
     assert "configured AI tagging" in result.stdout
+    assert "--browser" not in result.stdout
+    assert "--profile" not in result.stdout
 
 
 def test_stats_help_describes_detailed_view() -> None:
@@ -182,6 +183,16 @@ def test_sync_likes_help_describes_flags() -> None:
     assert "Continue older history past duplicates" in result.stdout
     assert "Clear any saved backfill cursor" in result.stdout
     assert "Maximum number of pages to fetch" in result.stdout
+
+
+def test_auth_check_help_has_only_explicit_auth_flow() -> None:
+    result = runner.invoke(cli.app, ["auth", "check", "--help"])
+
+    assert result.exit_code == 0
+    assert "Validate local auth" in result.stdout
+    assert "--browser" not in result.stdout
+    assert "--profile" not in result.stdout
+    assert "--interactive" not in result.stdout
 
 
 def test_export_help_only_lists_json() -> None:
@@ -473,23 +484,15 @@ def test_export_json_accepts_tweets_collection_name(paths, monkeypatch, tmp_path
     assert "exported tweets archive" in buffer.getvalue()
 
 
-def test_auth_check_interactive_uses_selected_browser(paths, monkeypatch) -> None:
+def test_auth_check_uses_explicit_credentials(paths, monkeypatch) -> None:
     buffer = StringIO()
     _capture_console(monkeypatch, buffer)
     monkeypatch.setattr(
         cli,
         "load_config",
-        lambda: (AppConfig(auth=AuthConfig(auth_token="config-token", ct0="config-ct0")), paths),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_pick_browser_candidate_interactively",
-        lambda console, browser=None: BrowserCandidate(
-            browser_id="chrome",
-            browser_name="Chrome",
-            profile_name="Default",
-            profile_path=Path("/profiles/chrome/Default"),
-            is_default=True,
+        lambda: (
+            AppConfig(auth=AuthConfig(auth_token="config-token", ct0="config-ct0")),
+            paths,
         ),
     )
     selected = {}
@@ -497,12 +500,12 @@ def test_auth_check_interactive_uses_selected_browser(paths, monkeypatch) -> Non
         cli,
         "resolve_auth_bundle",
         lambda config, env=None, status=None: SimpleNamespace(
-            auth_token="chrome-token",
-            ct0="chrome-ct0",
+            auth_token="config-token",
+            ct0="config-ct0",
             user_id="42",
-            auth_token_source="chrome",
-            ct0_source="chrome",
-            user_id_source="chrome",
+            auth_token_source="config",
+            ct0_source="config",
+            user_id_source="config",
         ),
     )
 
@@ -521,103 +524,13 @@ def test_auth_check_interactive_uses_selected_browser(paths, monkeypatch) -> Non
 
     monkeypatch.setattr(cli, "run_preflight", fake_run_preflight)
 
-    cli.auth_check(interactive=True)
+    cli.auth_check()
 
-    assert selected["auth_bundle"].auth_token == "chrome-token"
+    assert selected["auth_bundle"].auth_token == "config-token"
     output = buffer.getvalue()
-    assert "local auth: auth_token=chrome" in output
+    assert "local auth: auth_token=config" in output
     assert "bookmarks: ready" in output
     assert "tweets: ready" in output
-
-
-def test_auth_check_debug_auth_prints_resolver_status(paths, monkeypatch) -> None:
-    buffer = StringIO()
-    _capture_console(monkeypatch, buffer)
-    monkeypatch.setattr(cli, "load_config", lambda: (AppConfig(), paths))
-    monkeypatch.setattr(
-        cli,
-        "_prepare_auth_override",
-        lambda config, console, **kwargs: (config, None),
-    )
-    monkeypatch.setattr(
-        cli,
-        "resolve_auth_bundle",
-        lambda config, env=None, status=None: (
-            status("trying Firefox browser cookies") if status is not None else None,
-            SimpleNamespace(
-                auth_token="token",
-                ct0="ct0",
-                user_id="42",
-                auth_token_source="firefox",
-                ct0_source="firefox",
-                user_id_source="firefox",
-            ),
-        )[1],
-    )
-
-    async def fake_run_preflight(*, config, paths, collections, auth_bundle=None):
-        return SimpleNamespace(
-            auth=auth_bundle,
-            probes={
-                "bookmarks": SimpleNamespace(ready=True, detail="Remote probe succeeded."),
-                "likes": SimpleNamespace(ready=True, detail="Remote probe succeeded."),
-                "tweets": SimpleNamespace(ready=True, detail="Remote probe succeeded."),
-            },
-            has_local_error=False,
-            has_remote_error=False,
-        )
-
-    monkeypatch.setattr(cli, "run_preflight", fake_run_preflight)
-
-    cli.auth_check(debug_auth=True)
-
-    output = buffer.getvalue()
-    assert "auth: trying Firefox browser cookies" in output
-    assert "bookmarks: ready" in output
-
-
-def test_prepare_auth_override_preserves_explicit_user_id_fallback(
-    paths, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    console = Console(file=StringIO(), force_terminal=False, color_system=None)
-    config = AppConfig(
-        auth=AuthConfig(
-            auth_token="config-token",
-            ct0="config-ct0",
-            user_id="84",
-        )
-    )
-    captured: dict[str, object] = {}
-    monkeypatch.setenv("TWEETXVAULT_USER_ID", "42")
-
-    def fake_resolve_auth_bundle(config, env=None, status=None):
-        captured["config_user_id"] = config.auth.user_id
-        captured["config_auth_token"] = config.auth.auth_token
-        captured["config_ct0"] = config.auth.ct0
-        assert env is not None
-        captured["env_user_id"] = env.get("TWEETXVAULT_USER_ID")
-        captured["env_auth_token"] = env.get("TWEETXVAULT_AUTH_TOKEN")
-        captured["env_ct0"] = env.get("TWEETXVAULT_CT0")
-        return SimpleNamespace(auth_token="browser-token", ct0="browser-ct0", user_id="42")
-
-    monkeypatch.setattr(cli, "resolve_auth_bundle", fake_resolve_auth_bundle)
-
-    cli._prepare_auth_override(
-        config,
-        console,
-        browser="firefox",
-        profile=None,
-        profile_path=None,
-    )
-
-    assert captured == {
-        "config_user_id": "84",
-        "config_auth_token": None,
-        "config_ct0": None,
-        "env_user_id": "42",
-        "env_auth_token": None,
-        "env_ct0": None,
-    }
 
 
 def test_sync_bookmarks_forwards_article_backfill(paths, monkeypatch) -> None:
@@ -626,8 +539,8 @@ def test_sync_bookmarks_forwards_article_backfill(paths, monkeypatch) -> None:
     monkeypatch.setattr(cli, "load_config", lambda: (AppConfig(), paths))
     monkeypatch.setattr(
         cli,
-        "_prepare_auth_override",
-        lambda config, console, **kwargs: (config, SimpleNamespace(auth_token="t")),
+        "resolve_auth_bundle",
+        lambda config: SimpleNamespace(auth_token="t"),
     )
     forwarded = {}
 
@@ -679,8 +592,8 @@ def test_sync_likes_forwards_article_backfill(paths, monkeypatch) -> None:
     monkeypatch.setattr(cli, "load_config", lambda: (AppConfig(), paths))
     monkeypatch.setattr(
         cli,
-        "_prepare_auth_override",
-        lambda config, console, **kwargs: (config, SimpleNamespace(auth_token="t")),
+        "resolve_auth_bundle",
+        lambda config: SimpleNamespace(auth_token="t"),
     )
     forwarded = {}
 
@@ -732,8 +645,8 @@ def test_sync_tweets_forwards_article_backfill(paths, monkeypatch) -> None:
     monkeypatch.setattr(cli, "load_config", lambda: (AppConfig(), paths))
     monkeypatch.setattr(
         cli,
-        "_prepare_auth_override",
-        lambda config, console, **kwargs: (config, SimpleNamespace(auth_token="t")),
+        "resolve_auth_bundle",
+        lambda config: SimpleNamespace(auth_token="t"),
     )
     forwarded = {}
 
@@ -785,8 +698,8 @@ def test_sync_all_forwards_article_backfill(paths, monkeypatch) -> None:
     monkeypatch.setattr(cli, "load_config", lambda: (AppConfig(), paths))
     monkeypatch.setattr(
         cli,
-        "_prepare_auth_override",
-        lambda config, console, **kwargs: (config, SimpleNamespace(auth_token="t")),
+        "resolve_auth_bundle",
+        lambda config: SimpleNamespace(auth_token="t"),
     )
     forwarded = {}
 
@@ -843,8 +756,8 @@ def test_sync_default_runs_sync_all_with_full_followups(paths, monkeypatch) -> N
     monkeypatch.setattr(cli, "load_config", lambda: (AppConfig(), paths))
     monkeypatch.setattr(
         cli,
-        "_prepare_auth_override",
-        lambda config, console, **kwargs: (config, SimpleNamespace(auth_token="t")),
+        "resolve_auth_bundle",
+        lambda config: SimpleNamespace(auth_token="t"),
     )
     forwarded = {}
 
@@ -903,8 +816,8 @@ def test_sync_default_skip_flags_disable_selected_followups(paths, monkeypatch) 
     monkeypatch.setattr(cli, "load_config", lambda: (AppConfig(), paths))
     monkeypatch.setattr(
         cli,
-        "_prepare_auth_override",
-        lambda config, console, **kwargs: (config, SimpleNamespace(auth_token="t")),
+        "resolve_auth_bundle",
+        lambda config: SimpleNamespace(auth_token="t"),
     )
     forwarded = {}
 
@@ -943,8 +856,8 @@ def test_sync_likes_forwards_head_only(paths, monkeypatch) -> None:
     monkeypatch.setattr(cli, "load_config", lambda: (AppConfig(), paths))
     monkeypatch.setattr(
         cli,
-        "_prepare_auth_override",
-        lambda config, console, **kwargs: (config, SimpleNamespace(auth_token="t")),
+        "resolve_auth_bundle",
+        lambda config: SimpleNamespace(auth_token="t"),
     )
     forwarded = {}
 
@@ -1028,8 +941,8 @@ def test_refresh_archived_articles_reports_runner_result(paths, monkeypatch) -> 
     monkeypatch.setattr(cli, "load_config", lambda: (AppConfig(), paths))
     monkeypatch.setattr(
         cli,
-        "_prepare_auth_override",
-        lambda config, console, **kwargs: (config, SimpleNamespace(auth_token="token", ct0="ct0")),
+        "resolve_auth_bundle",
+        lambda config: SimpleNamespace(auth_token="token", ct0="ct0"),
     )
 
     captured = {}
@@ -1055,8 +968,8 @@ def test_expand_archive_threads_reports_runner_result(paths, monkeypatch) -> Non
     monkeypatch.setattr(cli, "load_config", lambda: (AppConfig(), paths))
     monkeypatch.setattr(
         cli,
-        "_prepare_auth_override",
-        lambda config, console, **kwargs: (config, SimpleNamespace(auth_token="token", ct0="ct0")),
+        "resolve_auth_bundle",
+        lambda config: SimpleNamespace(auth_token="token", ct0="ct0"),
     )
 
     async def fake_expand_threads(**kwargs):
@@ -1082,8 +995,8 @@ def test_expand_archive_threads_forwards_refresh_flag(paths, monkeypatch) -> Non
     monkeypatch.setattr(cli, "load_config", lambda: (AppConfig(), paths))
     monkeypatch.setattr(
         cli,
-        "_prepare_auth_override",
-        lambda config, console, **kwargs: (config, SimpleNamespace(auth_token="token", ct0="ct0")),
+        "resolve_auth_bundle",
+        lambda config: SimpleNamespace(auth_token="token", ct0="ct0"),
     )
 
     async def fake_expand_threads(**kwargs):
@@ -1099,38 +1012,10 @@ def test_expand_archive_threads_forwards_refresh_flag(paths, monkeypatch) -> Non
     assert "threads: 1 processed, 1 expanded, 0 skipped, 0 failed" in buffer.getvalue()
 
 
-def test_expand_archive_threads_debug_auth_passes_status_callback(paths, monkeypatch) -> None:
-    buffer = StringIO()
-    _capture_console(monkeypatch, buffer)
-    monkeypatch.setattr(cli, "load_config", lambda: (AppConfig(), paths))
-    monkeypatch.setattr(
-        cli,
-        "_prepare_auth_override",
-        lambda config, console, **kwargs: (config, None),
-    )
-
-    async def fake_expand_threads(**kwargs):
-        kwargs["auth_status"]("trying Firefox browser cookies")
-        return SimpleNamespace(processed=0, expanded=0, skipped=0, failed=0)
-
-    monkeypatch.setattr(cli, "expand_threads", fake_expand_threads)
-
-    cli.expand_archive_threads(debug_auth=True)
-
-    output = buffer.getvalue()
-    assert "auth: detail · trying Firefox browser cookies" in output
-    assert "threads: 0 processed, 0 expanded, 0 skipped, 0 failed" in output
-
-
 def test_import_x_archive_reports_runner_result(paths, monkeypatch, tmp_path: Path) -> None:
     buffer = StringIO()
     _capture_console(monkeypatch, buffer)
     monkeypatch.setattr(cli, "load_config", lambda: (AppConfig(), paths))
-    monkeypatch.setattr(
-        cli,
-        "_prepare_auth_override",
-        lambda config, console, **kwargs: (config, None),
-    )
     captured = {}
 
     async def fake_import_x_archive(
@@ -1213,11 +1098,6 @@ def test_import_x_archive_interrupt_reports_completed_import_and_continuation(
     buffer = StringIO()
     _capture_console(monkeypatch, buffer)
     monkeypatch.setattr(cli, "load_config", lambda: (AppConfig(), paths))
-    monkeypatch.setattr(
-        cli,
-        "_prepare_auth_override",
-        lambda config, console, **kwargs: (config, None),
-    )
 
     async def fake_import_x_archive(*_args, **_kwargs):
         raise cli.ArchiveEnrichmentInterrupted(12_481)
@@ -1261,11 +1141,6 @@ def test_import_x_archive_enrich_reuses_existing_import(paths, monkeypatch, tmp_
     buffer = StringIO()
     _capture_console(monkeypatch, buffer)
     monkeypatch.setattr(cli, "load_config", lambda: (AppConfig(), paths))
-    monkeypatch.setattr(
-        cli,
-        "_prepare_auth_override",
-        lambda config, console, **kwargs: (config, None),
-    )
     captured = {}
 
     async def fake_import_x_archive(
@@ -1336,8 +1211,8 @@ def test_import_enrich_runs_followup_for_existing_imports(paths, monkeypatch) ->
     monkeypatch.setattr(cli, "load_config", lambda: (AppConfig(), paths))
     monkeypatch.setattr(
         cli,
-        "_prepare_auth_override",
-        lambda config, console, **kwargs: (config, None),
+        "resolve_auth_bundle",
+        lambda config: SimpleNamespace(auth_token="token", ct0="ct0"),
     )
     captured = {}
 
@@ -1370,7 +1245,9 @@ def test_import_enrich_runs_followup_for_existing_imports(paths, monkeypatch) ->
 
     cli.import_archive_enrich(limit=50)
 
-    assert captured == {"limit": 50, "auth_bundle": None, "detail_delay": 0}
+    assert captured["limit"] == 50
+    assert captured["auth_bundle"].auth_token == "token"
+    assert captured["detail_delay"] == 0
     output = " ".join(buffer.getvalue().split())
     assert "archive enrich: existing imported archive data" in output
     assert "live reconciliation: tweets, likes" in output
@@ -1402,8 +1279,8 @@ def test_import_enrich_reports_interruption_or_systemic_abort(
     monkeypatch.setattr(cli, "load_config", lambda: (AppConfig(), paths))
     monkeypatch.setattr(
         cli,
-        "_prepare_auth_override",
-        lambda config, console, **kwargs: (config, None),
+        "resolve_auth_bundle",
+        lambda config: SimpleNamespace(auth_token="token", ct0="ct0"),
     )
 
     async def fail_enrichment(**_kwargs):
@@ -1427,8 +1304,8 @@ def test_expand_archive_threads_refresh_requires_targets(paths, monkeypatch) -> 
     monkeypatch.setattr(cli, "load_config", lambda: (AppConfig(), paths))
     monkeypatch.setattr(
         cli,
-        "_prepare_auth_override",
-        lambda config, console, **kwargs: (config, None),
+        "resolve_auth_bundle",
+        lambda config: SimpleNamespace(auth_token="token", ct0="ct0"),
     )
 
     with pytest.raises(typer.Exit) as excinfo:

@@ -516,7 +516,12 @@ def run_migration(
 
 if __name__ == "__main__":
     migration_console = Console(stderr=True)
+    from tweetxvault.config import resolve_paths
     from tweetxvault.pipeline import PipelineReporter
 
-    with PipelineReporter(migration_console, "tweetxvault migrate"):
+    with PipelineReporter(
+        migration_console,
+        "tweetxvault migrate",
+        state_path=resolve_paths().activity_status_file,
+    ):
         run_migration(console=migration_console)

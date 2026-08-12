@@ -1499,7 +1499,6 @@ def test_first_run_creates_dirs_and_missing_auth_is_actionable(
         "XDG_CONFIG_HOME": str(tmp_path / "config-root"),
         "XDG_DATA_HOME": str(tmp_path / "data-root"),
         "XDG_CACHE_HOME": str(tmp_path / "cache-root"),
-        "TWEETXVAULT_FIREFOX_PROFILES_INI": str(tmp_path / "missing-profiles.ini"),
     }
     monkeypatch.delenv("TWEETXVAULT_AUTH_TOKEN", raising=False)
     monkeypatch.delenv("TWEETXVAULT_CT0", raising=False)
@@ -1515,7 +1514,8 @@ def test_first_run_creates_dirs_and_missing_auth_is_actionable(
 
     with pytest.raises(Exception) as exc_info:
         resolve_auth_bundle(config, env=env)
-    assert "TWEETXVAULT_AUTH_TOKEN" in str(exc_info.value) or "Firefox" in str(exc_info.value)
+    assert "TWEETXVAULT_AUTH_TOKEN" in str(exc_info.value)
+    assert "browser" not in str(exc_info.value).lower()
 
 
 def test_security_audit_no_logger_calls_with_cookie_values() -> None:

@@ -10,15 +10,20 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from rich.console import Console
 
+from tweetxvault.activity_history import cleanup_runs
 from tweetxvault.config import AppConfig, XDGPaths
+from tweetxvault.job_supervisor import JobSupervisor
 from tweetxvault.reminders import (
     print_archive_migration_report,
     print_pending_archive_enrichment_reminder,
 )
+from tweetxvault.scheduler import ScheduleManager
 from tweetxvault.storage import open_archive_store
 from tweetxvault.web.deps import server_state, verify_credentials
+from tweetxvault.web.routes.activity import router as activity_router
 from tweetxvault.web.routes.avatars import router as avatars_router
 from tweetxvault.web.routes.config import router as config_router
+from tweetxvault.web.routes.setup import router as setup_router
 from tweetxvault.web.routes.stats import router as stats_router
 from tweetxvault.web.routes.storage_stats import router as storage_stats_router
 from tweetxvault.web.routes.tags import router as tags_router
@@ -36,6 +41,7 @@ def _build_fts_in_background(store) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    store = None
     if "paths" in server_state:
         store = open_archive_store(
             server_state["paths"],
@@ -55,9 +61,40 @@ async def lifespan(app: FastAPI):
             daemon=True,
         )
         t.start()
+        paths = server_state["paths"]
+        config = server_state.get("config") or AppConfig()
+        cleanup_runs(
+            paths.data_dir,
+            max_runs=config.activity.max_runs,
+            retention_days=config.activity.retention_days,
+        )
+
+        def on_job_start(_run_id: str, _pid: int) -> None:
+            import time
+
+            server_state["activity_worker_started_at"] = time.time()
+
+        def on_job_complete(_run_id: str, _exit_code: int) -> None:
+            server_state.pop("activity_worker_started_at", None)
+            web_stats_cache.clear()
+
+        supervisor = JobSupervisor(
+            paths,
+            config,
+            on_start=on_job_start,
+            on_complete=on_job_complete,
+        )
+        scheduler = ScheduleManager(paths, config, supervisor)
+        server_state["job_supervisor"] = supervisor
+        server_state["schedule_manager"] = scheduler
+        scheduler.start()
     try:
         yield
     finally:
+        if scheduler := server_state.pop("schedule_manager", None):
+            scheduler.stop()
+        if supervisor := server_state.pop("job_supervisor", None):
+            supervisor.shutdown()
         if store := server_state.get("store"):
             web_stats_cache.wait_for_refreshes()
             web_stats_cache.clear()
@@ -73,6 +110,8 @@ app.include_router(config_router)
 app.include_router(stats_router)
 app.include_router(avatars_router)
 app.include_router(storage_stats_router)
+app.include_router(activity_router)
+app.include_router(setup_router)
 
 # Mount static assets directory if available
 static_dir = Path(__file__).parent / "static"

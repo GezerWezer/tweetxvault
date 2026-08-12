@@ -17,7 +17,6 @@ import typer
 from loguru import logger
 from rich import box
 from rich.console import Console
-from rich.prompt import Prompt
 from rich.table import Table
 from rich.text import Text
 
@@ -29,11 +28,8 @@ from tweetxvault.archive_import import (
     import_x_archive,
 )
 from tweetxvault.articles import refresh_articles
-from tweetxvault.auth import (
-    BrowserCandidate,
-    list_available_browser_candidates,
-    resolve_auth_bundle,
-)
+from tweetxvault.auth import resolve_auth_bundle
+from tweetxvault.cli_web import web_app
 from tweetxvault.config import ensure_paths, load_config
 from tweetxvault.exceptions import ConfigError, ProcessLockError, TweetXVaultError
 from tweetxvault.export import export_json_archive
@@ -102,20 +98,19 @@ app.add_typer(
 app.add_typer(thread_app, name="threads", help="Expand archived tweet threads.")
 app.add_typer(view_app, name="view", help="Render archived tweets in the terminal.")
 
-# Web UI management (optional dependency)
-try:
-    from tweetxvault.cli_web import web_app
-
-    app.add_typer(web_app, name="web", help="Manage the background web UI server.")
-except ImportError:
-    pass
+app.add_typer(web_app, name="web", help="Manage the background web UI server.")
 
 
-BROWSER_HELP = (
-    "Browser to use for cookie extraction: firefox, chrome, chromium, brave, edge, "
-    "opera, opera-gx, vivaldi, arc."
-)
-DEBUG_AUTH_HELP = "Print browser/profile auth-resolution diagnostics."
+def _web_pipeline(console: Console, title: str, paths) -> PipelineReporter:
+    """Publish CLI lifecycle state for the always-installed Web activity drawer."""
+
+    return PipelineReporter(
+        console,
+        title,
+        state_path=paths.activity_status_file,
+    )
+
+
 ARTICLE_BACKFILL_HELP = (
     "Rewalk existing timeline pages without resetting sync state so older items can pick up "
     "new article fields."
@@ -132,15 +127,6 @@ SYNC_SKIP_ARTICLES_HELP = "Skip automatic article-body refresh after sync."
 SYNC_SKIP_MEDIA_HELP = "Skip automatic media downloads after sync."
 SYNC_SKIP_UNFURL_HELP = "Skip automatic URL unfurls after sync."
 SYNC_SKIP_THREADS_HELP = "Skip automatic thread expansion after sync."
-SYNC_BROWSER_OPTION = Annotated[str | None, typer.Option("--browser", help=BROWSER_HELP)]
-SYNC_PROFILE_OPTION = Annotated[
-    str | None,
-    typer.Option("--profile", help="Browser profile name or directory name."),
-]
-SYNC_PROFILE_PATH_OPTION = Annotated[
-    Path | None,
-    typer.Option("--profile-path", help="Explicit browser profile directory path."),
-]
 SYNC_ARTICLE_BACKFILL_OPTION = Annotated[
     bool,
     typer.Option("--article-backfill", help=ARTICLE_BACKFILL_HELP),
@@ -175,12 +161,6 @@ SYNC_MAX_LINKED_DEPTH_OPTION = Annotated[
         help="Maximum degrees of separation for linked-status discovery.",
     ),
 ]
-DEBUG_AUTH_OPTION = Annotated[
-    bool,
-    typer.Option("--debug-auth", help=DEBUG_AUTH_HELP),
-]
-
-
 SEARCH_TYPE_HELP = "Comma-delimited search result types: post (default), article."
 SEARCH_COLLECTION_HELP = "Comma-delimited collections: bookmark, like, tweet."
 SEARCH_SORT_HELP = "Search result sort: relevance, newest, oldest."
@@ -295,158 +275,14 @@ def _version_callback(
     raise typer.Exit()
 
 
-def _browser_cookie_only_env() -> dict[str, str]:
-    env = dict(os.environ)
-    for key in ("TWEETXVAULT_AUTH_TOKEN", "TWEETXVAULT_CT0"):
-        env.pop(key, None)
-    return env
-
-
-def _auth_status_callback(console: Console, *, enabled: bool):
-    if not enabled:
-        return None
-    pipeline = current_pipeline()
-    if pipeline is not None:
-        return lambda message: pipeline.detail("auth", message)
-    return lambda message: console.print(f"auth: {message}", highlight=False)
-
-
-def _pick_browser_candidate_interactively(
-    console: Console,
-    *,
-    browser: str | None,
-) -> BrowserCandidate:
-    candidates = list_available_browser_candidates(browser=browser)
-    if not candidates:
-        scope = f" for {browser}" if browser else ""
-        raise ConfigError(f"No browser profiles with X session cookies were found{scope}.")
-
-    table = Table(title="Browser profiles with X cookies", box=box.HORIZONTALS)
-    table.add_column("#", no_wrap=True, style="cyan")
-    table.add_column("Browser", style="green", no_wrap=True)
-    table.add_column("Profile", no_wrap=True)
-    table.add_column("Path", overflow="fold")
-    table.add_column("Tags", no_wrap=True)
-    for index, candidate in enumerate(candidates, start=1):
-        table.add_row(
-            str(index),
-            candidate.browser_name,
-            candidate.profile_name,
-            str(candidate.profile_path),
-            candidate.tags,
-        )
-    console.print(table)
-    choice = Prompt.ask(
-        "Choose browser profile",
-        choices=[str(index) for index in range(1, len(candidates) + 1)],
-        default="1",
-        console=console,
-    )
-    return candidates[int(choice) - 1]
-
-
-def _prepare_auth_override(
-    config,
-    console: Console,
-    *,
-    browser: str | None,
-    profile: str | None,
-    profile_path: Path | None,
-    debug_auth: bool = False,
-    interactive: bool = False,
-):
-    if interactive and (profile or (profile_path is not None)):
-        raise ConfigError("--interactive cannot be combined with --profile or --profile-path.")
-    if interactive:
-        candidate = _pick_browser_candidate_interactively(console, browser=browser)
-        browser = candidate.browser_id
-        profile = None
-        profile_path = candidate.profile_path
-
-    if (profile or (profile_path is not None)) and not browser:
-        raise ConfigError("--profile and --profile-path require --browser.")
-    if not browser:
-        return config, None
-
-    pipeline = current_pipeline()
-    auth_step_key = "auth-override"
-    if pipeline is not None:
-        profile_label = str(profile_path) if profile_path is not None else profile or "auto profile"
-        pipeline.add_step(
-            auth_step_key,
-            "Authentication",
-            total=1,
-            unit="session",
-            detail=f"{browser} · {profile_label}",
-            show_rate=False,
-            show_eta=False,
-        )
-        pipeline.start_step(
-            auth_step_key,
-            activity=f"Reading the X session from {browser}",
-        )
-
-    auth = config.auth.model_copy(
-        update={
-            "auth_token": None,
-            "ct0": None,
-            "browser": browser,
-            "browser_profile": profile,
-            "browser_profile_path": str(profile_path) if profile_path is not None else None,
-            "firefox_profile_path": None,
-        }
-    )
-    forced_config = config.model_copy(update={"auth": auth})
-    auth_bundle = resolve_auth_bundle(
-        forced_config,
-        env=_browser_cookie_only_env(),
-        status=_auth_status_callback(console, enabled=debug_auth),
-    )
-    if pipeline is not None:
-        user_id = getattr(auth_bundle, "user_id", None)
-        owner = f"X user {user_id}" if user_id else "session cookies"
-        pipeline.complete_step(auth_step_key, f"{owner} resolved from {browser}")
-    return forced_config, auth_bundle
-
-
-def _plan_auth_override_step(
-    pipeline: PipelineReporter,
-    *,
-    browser: str | None,
-    profile: str | None,
-    profile_path: Path | None,
-) -> None:
-    if browser is None:
-        return
-    profile_label = str(profile_path) if profile_path is not None else profile or "auto profile"
-    pipeline.add_step(
-        "auth-override",
-        "Authentication",
-        total=1,
-        unit="session",
-        detail=f"{browser} · {profile_label}",
-        show_rate=False,
-        show_eta=False,
-    )
-
-
 def _plan_archive_import_pipeline(
     pipeline: PipelineReporter,
     *,
-    browser: str | None,
-    profile: str | None,
-    profile_path: Path | None,
     regen: bool,
     enrich: bool,
     detail_lookups: int,
     sample_limit: int | None,
 ) -> None:
-    _plan_auth_override_step(
-        pipeline,
-        browser=browser,
-        profile=profile,
-        profile_path=profile_path,
-    )
     pipeline.add_step(
         "archive-inspect",
         "Inspect",
@@ -475,16 +311,15 @@ def _plan_archive_import_pipeline(
         pipeline.add_step(key, title, total=1, unit=unit, detail=detail)
 
     if sample_limit is None:
-        if browser is None:
-            pipeline.add_step(
-                "archive-auth",
-                "Authentication",
-                total=1,
-                unit="session",
-                detail="configured X session for live archive follow-up",
-                show_rate=False,
-                show_eta=False,
-            )
+        pipeline.add_step(
+            "archive-auth",
+            "Authentication",
+            total=1,
+            unit="session",
+            detail="configured X session for live archive follow-up",
+            show_rate=False,
+            show_eta=False,
+        )
         for collection in ("tweets", "likes"):
             pipeline.add_step(
                 f"preflight:{collection}",
@@ -632,9 +467,6 @@ def _archive_import_summary(result: Any) -> str:
 
 def _run_sync_command(
     *,
-    browser: str | None,
-    profile: str | None,
-    profile_path: Path | None,
     runner: Callable[[Any, Any, Console], Awaitable[Any]],
     collections: tuple[str, ...],
     followups: SyncFollowupPlan,
@@ -643,23 +475,16 @@ def _run_sync_command(
 ) -> tuple[Console, Any]:
     console = _configure_logging()
     try:
-        with PipelineReporter(console, "tweetxvault sync") as pipeline:
-            config, _ = load_config()
+        config, paths = load_config()
+        with _web_pipeline(console, "tweetxvault sync", paths) as pipeline:
             plan_sync_pipeline(
                 pipeline,
                 config=config,
                 collections=collections,
                 followups=followups,
                 head_only=head_only,
-                browser_override=browser is not None,
             )
-            config, auth_bundle = _prepare_auth_override(
-                config,
-                console,
-                browser=browser,
-                profile=profile,
-                profile_path=profile_path,
-            )
+            auth_bundle = resolve_auth_bundle(config)
             result = asyncio.run(runner(config, auth_bundle, console))
             errors = getattr(result, "errors", None)
             if errors:
@@ -711,9 +536,6 @@ def _run_sync_all_command(
     article_backfill: bool,
     head_only: bool,
     limit: int | None,
-    browser: str | None,
-    profile: str | None,
-    profile_path: Path | None,
     skip_resurrection: bool,
     skip_articles: bool,
     skip_media: bool,
@@ -729,9 +551,6 @@ def _run_sync_all_command(
         skip_threads=skip_threads,
     )
     console, outcome = _run_sync_command(
-        browser=browser,
-        profile=profile,
-        profile_path=profile_path,
         collections=("bookmarks", "likes"),
         followups=followups,
         head_only=head_only,
@@ -793,9 +612,6 @@ def sync_default(
     article_backfill: SYNC_ARTICLE_BACKFILL_OPTION = False,
     head_only: SYNC_HEAD_ONLY_OPTION = False,
     limit: Annotated[int | None, typer.Option("--limit", help=SYNC_LIMIT_HELP)] = None,
-    browser: SYNC_BROWSER_OPTION = None,
-    profile: SYNC_PROFILE_OPTION = None,
-    profile_path: SYNC_PROFILE_PATH_OPTION = None,
     skip_resurrection: SYNC_SKIP_RESURRECTION_OPTION = False,
     skip_articles: SYNC_SKIP_ARTICLES_OPTION = False,
     skip_media: SYNC_SKIP_MEDIA_OPTION = False,
@@ -811,9 +627,6 @@ def sync_default(
         article_backfill=article_backfill,
         head_only=head_only,
         limit=limit,
-        browser=browser,
-        profile=profile,
-        profile_path=profile_path,
         skip_resurrection=skip_resurrection,
         skip_articles=skip_articles,
         skip_media=skip_media,
@@ -839,9 +652,6 @@ def _register_sync_collection_command(collection: str):
         article_backfill: SYNC_ARTICLE_BACKFILL_OPTION = False,
         head_only: SYNC_HEAD_ONLY_OPTION = False,
         limit: Annotated[int | None, typer.Option("--limit", help=SYNC_LIMIT_HELP)] = None,
-        browser: SYNC_BROWSER_OPTION = None,
-        profile: SYNC_PROFILE_OPTION = None,
-        profile_path: SYNC_PROFILE_PATH_OPTION = None,
         skip_resurrection: SYNC_SKIP_RESURRECTION_OPTION = False,
         skip_articles: SYNC_SKIP_ARTICLES_OPTION = False,
         skip_media: SYNC_SKIP_MEDIA_OPTION = False,
@@ -856,9 +666,6 @@ def _register_sync_collection_command(collection: str):
             skip_threads=skip_threads,
         )
         console, result = _run_sync_command(
-            browser=browser,
-            profile=profile,
-            profile_path=profile_path,
             collections=(collection,),
             followups=followups,
             head_only=head_only,
@@ -1067,9 +874,6 @@ def sync_everything(
     article_backfill: SYNC_ARTICLE_BACKFILL_OPTION = False,
     head_only: SYNC_HEAD_ONLY_OPTION = False,
     limit: Annotated[int | None, typer.Option("--limit", help=SYNC_LIMIT_HELP)] = None,
-    browser: SYNC_BROWSER_OPTION = None,
-    profile: SYNC_PROFILE_OPTION = None,
-    profile_path: SYNC_PROFILE_PATH_OPTION = None,
     skip_resurrection: SYNC_SKIP_RESURRECTION_OPTION = False,
     skip_articles: SYNC_SKIP_ARTICLES_OPTION = False,
     skip_media: SYNC_SKIP_MEDIA_OPTION = False,
@@ -1083,9 +887,6 @@ def sync_everything(
         article_backfill=article_backfill,
         head_only=head_only,
         limit=limit,
-        browser=browser,
-        profile=profile,
-        profile_path=profile_path,
         skip_resurrection=skip_resurrection,
         skip_articles=skip_articles,
         skip_media=skip_media,
@@ -1096,39 +897,11 @@ def sync_everything(
 
 
 @auth_app.command("check", help="Validate local auth and probe remote timeline readiness.")
-def auth_check(
-    browser: Annotated[str | None, typer.Option("--browser", help=BROWSER_HELP)] = None,
-    profile: Annotated[
-        str | None,
-        typer.Option("--profile", help="Browser profile name or directory name."),
-    ] = None,
-    profile_path: Annotated[
-        Path | None,
-        typer.Option("--profile-path", help="Explicit browser profile directory path."),
-    ] = None,
-    interactive: Annotated[
-        bool,
-        typer.Option("--interactive", help="Interactively choose a browser profile."),
-    ] = False,
-    debug_auth: DEBUG_AUTH_OPTION = False,
-) -> None:
+def auth_check() -> None:
     console = _configure_logging()
     config, paths = load_config()
     try:
-        config, auth_bundle = _prepare_auth_override(
-            config,
-            console,
-            browser=browser,
-            profile=profile,
-            profile_path=profile_path,
-            debug_auth=debug_auth,
-            interactive=interactive,
-        )
-        if auth_bundle is None:
-            auth_bundle = resolve_auth_bundle(
-                config,
-                status=_auth_status_callback(console, enabled=debug_auth),
-            )
+        auth_bundle = resolve_auth_bundle(config)
         result = asyncio.run(
             run_preflight(
                 config=config,
@@ -1189,25 +962,11 @@ def refresh_archived_articles(
         ),
     ] = False,
     limit: ARTICLE_LIMIT_OPTION = None,
-    browser: Annotated[str | None, typer.Option("--browser", help=BROWSER_HELP)] = None,
-    profile: Annotated[
-        str | None,
-        typer.Option("--profile", help="Browser profile name or directory name."),
-    ] = None,
-    profile_path: Annotated[
-        Path | None,
-        typer.Option("--profile-path", help="Explicit browser profile directory path."),
-    ] = None,
 ) -> None:
     console = _configure_logging()
     try:
-        with PipelineReporter(console, "tweetxvault articles refresh") as pipeline:
-            _plan_auth_override_step(
-                pipeline,
-                browser=browser,
-                profile=profile,
-                profile_path=profile_path,
-            )
+        config, paths = load_config()
+        with _web_pipeline(console, "tweetxvault articles refresh", paths) as pipeline:
             pipeline.add_step(
                 "articles",
                 "Articles",
@@ -1218,14 +977,7 @@ def refresh_archived_articles(
             )
             if all_articles and targets:
                 raise ConfigError("--all cannot be combined with explicit article targets.")
-            config, paths = load_config()
-            config, auth_bundle = _prepare_auth_override(
-                config,
-                console,
-                browser=browser,
-                profile=profile,
-                profile_path=profile_path,
-            )
+            auth_bundle = resolve_auth_bundle(config)
             result = asyncio.run(
                 refresh_articles(
                     targets=targets,
@@ -1260,15 +1012,6 @@ def expand_archive_threads(
         typer.Argument(help="Tweet IDs or x.com status URLs to expand."),
     ] = None,
     limit: THREAD_LIMIT_OPTION = None,
-    browser: Annotated[str | None, typer.Option("--browser", help=BROWSER_HELP)] = None,
-    profile: Annotated[
-        str | None,
-        typer.Option("--profile", help="Browser profile name or directory name."),
-    ] = None,
-    profile_path: Annotated[
-        Path | None,
-        typer.Option("--profile-path", help="Explicit browser profile directory path."),
-    ] = None,
     refresh: Annotated[
         bool,
         typer.Option(
@@ -1276,18 +1019,12 @@ def expand_archive_threads(
             help="Re-fetch explicit thread targets even if they were already expanded.",
         ),
     ] = False,
-    debug_auth: DEBUG_AUTH_OPTION = False,
     max_linked_depth: SYNC_MAX_LINKED_DEPTH_OPTION = None,
 ) -> None:
     console = _configure_logging()
     try:
-        with PipelineReporter(console, "tweetxvault threads expand") as pipeline:
-            _plan_auth_override_step(
-                pipeline,
-                browser=browser,
-                profile=profile,
-                profile_path=profile_path,
-            )
+        config, paths = load_config()
+        with _web_pipeline(console, "tweetxvault threads expand", paths) as pipeline:
             pipeline.add_step(
                 "threads",
                 "Threads",
@@ -1296,17 +1033,9 @@ def expand_archive_threads(
                 detail="membership and reachable linked-status candidates",
                 rate_unit="candidates/s",
             )
-            config, paths = load_config()
             if max_linked_depth is not None:
                 config.sync.max_linked_depth = max_linked_depth
-            config, auth_bundle = _prepare_auth_override(
-                config,
-                console,
-                browser=browser,
-                profile=profile,
-                profile_path=profile_path,
-                debug_auth=debug_auth,
-            )
+            auth_bundle = resolve_auth_bundle(config)
             result = asyncio.run(
                 expand_threads(
                     targets=targets,
@@ -1315,7 +1044,6 @@ def expand_archive_threads(
                     config=config,
                     paths=paths,
                     auth_bundle=auth_bundle,
-                    auth_status=_auth_status_callback(console, enabled=debug_auth),
                     console=console,
                 )
             )
@@ -1488,34 +1216,17 @@ def import_x_archive_command(
             ),
         ),
     ] = False,
-    browser: SYNC_BROWSER_OPTION = None,
-    profile: SYNC_PROFILE_OPTION = None,
-    profile_path: SYNC_PROFILE_PATH_OPTION = None,
-    debug_auth: DEBUG_AUTH_OPTION = False,
 ) -> None:
     console = _configure_logging()
-    config = None
-    paths = None
     try:
-        with PipelineReporter(console, "tweetxvault import x-archive") as pipeline:
-            config, paths = load_config()
+        config, paths = load_config()
+        with _web_pipeline(console, "tweetxvault import x-archive", paths) as pipeline:
             _plan_archive_import_pipeline(
                 pipeline,
-                browser=browser,
-                profile=profile,
-                profile_path=profile_path,
                 regen=regen,
                 enrich=enrich,
                 detail_lookups=detail_lookups,
                 sample_limit=sample_limit,
-            )
-            config, auth_bundle = _prepare_auth_override(
-                config,
-                console,
-                browser=browser,
-                profile=profile,
-                profile_path=profile_path,
-                debug_auth=debug_auth,
             )
             result = asyncio.run(
                 import_x_archive(
@@ -1527,7 +1238,7 @@ def import_x_archive_command(
                     debug=debug,
                     config=config,
                     paths=paths,
-                    auth_bundle=auth_bundle,
+                    auth_bundle=None,
                     console=console,
                 )
             )
@@ -1578,30 +1289,20 @@ def import_archive_enrich(
             ),
         ),
     ] = None,
-    browser: SYNC_BROWSER_OPTION = None,
-    profile: SYNC_PROFILE_OPTION = None,
-    profile_path: SYNC_PROFILE_PATH_OPTION = None,
-    debug_auth: DEBUG_AUTH_OPTION = False,
 ) -> None:
     console = _configure_logging()
     try:
-        with PipelineReporter(console, "tweetxvault import enrich") as pipeline:
-            _plan_auth_override_step(
-                pipeline,
-                browser=browser,
-                profile=profile,
-                profile_path=profile_path,
+        config, paths = load_config()
+        with _web_pipeline(console, "tweetxvault import enrich", paths) as pipeline:
+            pipeline.add_step(
+                "archive-auth",
+                "Authentication",
+                total=1,
+                unit="session",
+                detail="configured X session for archive enrichment",
+                show_rate=False,
+                show_eta=False,
             )
-            if browser is None:
-                pipeline.add_step(
-                    "archive-auth",
-                    "Authentication",
-                    total=1,
-                    unit="session",
-                    detail="configured X session for archive enrichment",
-                    show_rate=False,
-                    show_eta=False,
-                )
             pipeline.add_step(
                 "archive-enrich",
                 "Enrich",
@@ -1610,15 +1311,7 @@ def import_archive_enrich(
                 detail="stable command-start snapshot of eligible sparse archive tweets",
                 rate_unit="tweets/s",
             )
-            config, paths = load_config()
-            config, auth_bundle = _prepare_auth_override(
-                config,
-                console,
-                browser=browser,
-                profile=profile,
-                profile_path=profile_path,
-                debug_auth=debug_auth,
-            )
+            auth_bundle = resolve_auth_bundle(config)
             result = asyncio.run(
                 enrich_imported_archive(
                     limit=limit,
@@ -1730,7 +1423,8 @@ def media_download(
 ) -> None:
     console = _configure_logging()
     try:
-        with PipelineReporter(console, "tweetxvault media download") as pipeline:
+        config, paths = load_config()
+        with _web_pipeline(console, "tweetxvault media download", paths) as pipeline:
             pipeline.add_step(
                 "media",
                 "Media",
@@ -1739,7 +1433,6 @@ def media_download(
                 detail="pending archived media selected for local download",
                 rate_unit="files/s",
             )
-            config, paths = load_config()
             result = asyncio.run(
                 download_media(
                     limit=limit,
@@ -1774,7 +1467,8 @@ def unfurl_archive(
 ) -> None:
     console = _configure_logging()
     try:
-        with PipelineReporter(console, "tweetxvault unfurl") as pipeline:
+        config, paths = load_config()
+        with _web_pipeline(console, "tweetxvault unfurl", paths) as pipeline:
             pipeline.add_step(
                 "urls",
                 "URLs",
@@ -1783,7 +1477,6 @@ def unfurl_archive(
                 detail="saved URLs selected for redirect and canonical metadata refresh",
                 rate_unit="URLs/s",
             )
-            config, paths = load_config()
             result = asyncio.run(
                 unfurl_urls(
                     limit=limit,
@@ -1901,7 +1594,7 @@ def tag_archive(
                     dry_run=test,
                 )
 
-        with PipelineReporter(console, "tweetxvault tag") as pipeline:
+        with _web_pipeline(console, "tweetxvault tag", paths) as pipeline:
             pipeline.add_step(
                 "tagging",
                 "Tagging",
@@ -2187,8 +1880,16 @@ def migrate() -> None:
     from tweetxvault.storage.migrate import run_migration
 
     console = _configure_logging()
-    with PipelineReporter(console, "tweetxvault migrate"):
-        run_migration(console=console)
+    try:
+        _, paths = load_config()
+        with _web_pipeline(console, "tweetxvault migrate", paths):
+            run_migration(console=console)
+    except ConfigError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+    except TweetXVaultError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2) from exc
 
 
 @app.callback()

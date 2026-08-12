@@ -11,6 +11,154 @@ Hard constraints:
 
 Definition of done: passes `uv run ruff format --check`, `uv run ruff check`, and `uv run pytest`.
 
+## Required Web UI and live activity drawer (2026-08-11)
+
+- [x] Move FastAPI and Uvicorn from the optional `web` extra into required dependencies.
+- [x] Publish atomic shared-pipeline snapshots for sync, import, enrich, and other lifecycle jobs.
+- [x] Add an authenticated activity API and detached normal-sync launcher with active-job guards.
+- [x] Add a Twitter DM-style lower-left drawer with a collapsed running spinner and live details.
+- [x] Add pipeline, route, markup, and deterministic browser-state regressions.
+- [x] Render-check idle, expanded, live import/enrich, and collapsed-spinner states.
+- [x] Pass complete repository validation.
+- [x] Temporarily route Web Sync, Enrich, and Import actions through realistic, non-mutating
+  pipeline simulations for drawer development.
+- [x] Label simulated actions explicitly and add no-operation lifecycle and browser regressions.
+- [ ] Commit the logical unit; staging approval was declined, so the validated changes remain
+  intact and unstaged on `feat/web-live-sync-indicator`.
+
+### Production jobs, schedules, and retained logs (2026-08-12)
+
+- [x] Replace simulated Web actions with isolated production CLI worker processes.
+- [x] Guard Web and scheduled launches against live external pipeline snapshots.
+- [x] Add graceful process-group cancellation and terminal stopped history.
+- [x] Persist structured snapshots, semantic events, readable logs, sanitized commands, and origin
+  for manual CLI, Web, and scheduled pipeline runs.
+- [x] Add bounded retained-run history/detail/log APIs and a functional Logs settings tab.
+- [x] Add persisted every-N-hours, daily, weekly, and monthly scheduled sync calculation/execution.
+- [x] Populate the existing drawer schedule fields from the built-in scheduler.
+- [x] Add the requested placeholder Schedule settings tab without changing the drawer design.
+- [x] Remove the temporary activity simulation/debug surface.
+- [x] Render-check retained manual CLI logs, log browsing, disabled/enabled schedule states, and
+  the Schedule placeholder without running a production X sync.
+- [ ] Pass complete repository validation. Ruff, 853 Python tests, 36 browser-asset tests, offline
+  lock validation, diff hygiene, and task-file formatting pass; the repository-wide format check
+  still reports four pre-existing out-of-scope files.
+
+### Serialized jobs and focused Web setup (2026-08-12)
+
+- [x] Add a command-lifecycle lock spanning complete sync, import, enrich, and maintenance runs.
+- [x] Make Web and scheduled supervisors consult the lifecycle lock as well as live snapshots.
+- [x] Add Setup as the first Settings pane and remove authentication from generic Config controls.
+- [x] Add focused session authentication editing and a real auth preflight button.
+- [x] Stream a validated archive.zip into app-owned staging with guarded replacement and clearing.
+- [x] Launch the staged archive through the real import-plus-enrichment worker and activity drawer.
+- [x] Report persisted archive-import and enrichment readiness warnings in Setup.
+- [x] Render-check the focused Setup pane and pass complete repository validation. Ruff lint, the
+  complete Python suite, 37 browser-asset tests, offline lock validation, diff hygiene, and every
+  task-file format check pass; the repository-wide format check retains four existing files.
+
+### Explicit-only authentication (2026-08-12)
+
+- [x] Remove automatic Firefox and Chromium-family browser/profile credential discovery.
+- [x] Remove browser/profile config fields, environment mappings, CLI flags, and Setup controls.
+- [x] Resolve credentials only from explicit Setup/config values or environment variables.
+- [x] Remove `browser-cookie3` and its now-unused transitive dependencies from the lockfile.
+- [x] Replace browser extraction coverage with explicit credential resolution regressions.
+- [x] Update active architecture, setup, authentication, and CLI documentation.
+- [x] Validate Setup credential candidates in isolation and save only successful replacements.
+- [x] Pass complete repository validation: Ruff lint, 850 Python tests, 37 browser-asset tests,
+  offline lock validation, diff hygiene, and formatting for every task file pass. The repository-wide
+  format check retains three pre-existing out-of-scope files.
+
+### Redesigned drawer wiring follow-up (2026-08-12)
+
+- [x] Preserve the redesigned drawer markup, layout, transitions, and CSS.
+- [x] Replace hard-coded last-run state with completed pipeline snapshots from the activity API.
+- [x] Add cooperative Stop Task cancellation and retain the stopped terminal pipeline.
+- [x] Report the truthful unconfigured scheduler state in the existing schedule fields.
+- [x] Add completion timestamps and start/status/stop/cancellation regressions.
+- [x] Render-check the redesigned start, progress, stop, and retained-result states.
+- [ ] Pass complete repository validation. Ruff, 844 Python tests, 36 browser-asset tests, the
+  offline lock check, diff hygiene, and formatting for every task file pass; the repository-wide
+  format check remains blocked by four pre-existing out-of-scope files.
+
+## Fixed sync-step stack reveal (2026-08-11)
+
+- [x] Keep the active step at a fixed offset below the Run/Stop control during normal progress.
+- [x] Move completed steps into an upward-growing stack beneath the control-layer fade.
+- [x] Let manual native scrolling move the active/tail content in the browser's native direction
+  while the completed stack is manually revealed.
+- [x] Keep the issue/tail section in that same native scroll flow and bound the scroll range finitely.
+- [x] Inset cards without adding unwanted side outlines; add deterministic browser/style coverage.
+- [x] Pass focused Python and browser-asset validation plus rendered local QA.
+
+## Natural sync-drawer scroll and mask follow-up (2026-08-11)
+
+- [x] Restore the earlier card geometry and 20px horizontal content inset.
+- [x] Remove the extra active-card transform so wheel scrolling follows the native direction.
+- [x] Extend the background fade through the control/button layer and preserve the fixed active offset.
+- [x] Verify the real authenticated `127.0.0.1:8000` server in-browser, including bounded manual scroll.
+
+## Sync-drawer mask and stack direction follow-up (2026-08-11)
+
+- [x] Anchor the fade to the control layer and end it at the active-card boundary.
+- [x] Move the fade back with manual scrolling so it does not remain over the active area.
+- [x] Keep the completed-stack shift isolated from the active card.
+- [x] Validate the source-level and focused automated regressions without another browser test.
+
+## Sync-drawer pull direction correction (2026-08-11)
+
+- [x] Pull the entire completed stack downward when the user scrolls down.
+- [x] Keep the fade receding upward so it clears the active-card area during the pull-out.
+- [x] Preserve manual-only scrolling and the finite scroll range.
+
+## Connected reverse sync-drawer scrolling (2026-08-11)
+
+- [x] Apply manual movement to the shared track instead of only the completed stack.
+- [x] Keep completed, active, pending, and issue content connected during scrolling.
+- [x] Reverse the visible scroll direction for the entire connected track.
+
+## Sync-drawer scroll architecture replacement (2026-08-11)
+
+- [x] Separate the finite native-scroll canvas from the transformed visual scene.
+- [x] Put completed, active, pending, and issue rows in one scene so they cannot drift apart.
+- [x] Keep completed-card bounds inside the stationary canvas before applying the reveal transform.
+- [x] Size the canvas to one viewport plus one stack height for a finite scroll endpoint.
+- [x] Use a two-to-one scene shift to overcome native upward movement and produce net downward pull.
+- [x] Validate source structure and static regressions without browser testing.
+
+## Sync-drawer overscroll boundary (2026-08-11)
+
+- [x] Prevent activity scroll input from chaining into the archive list at either endpoint.
+- [x] Disable native overscroll bounce on the drawer and its scroll viewport.
+- [x] Add static coverage without browser testing.
+
+## Sync-drawer scrollbar and first-completion transition (2026-08-12)
+
+- [x] Hide the activity scrollbar without disabling manual scrolling.
+- [x] Start the active step at the top when no completed steps exist.
+- [x] Enable the fade and animate the active step into its stacked offset after the first completion.
+- [x] Validate source/static regressions without browser testing.
+
+## Sync-drawer corrected pull direction and adaptive fade (2026-08-12)
+- [x] Remove the artificial top scroll spacer from the activity viewport.
+- [x] Reverse direct wheel input so wheel-up pulls the connected activity scene downward.
+- [x] Match the completed-stack active offset to one compact 64px card so its lower half remains visible.
+- [x] Balance completed-card vertical spacing by removing the oversized fixed-height bottom area.
+- [x] Limit the finite reveal distance so the oldest completed card stops at the control divider.
+- [x] Extend the completed-card fade slightly while preserving a visible lower section.
+- [x] Align active and completed rows with the Web UI's Twitter-like typography and status styling.
+- [x] Remove the pending-step collapsible menu from the activity drawer.
+- [x] Move the Archive Sync title into the icon header and completion time beneath the schedule.
+- [x] Keep collapsed activity hover backgrounds opaque.
+- [x] Label the completion timestamp as the last sync and balance button spacing vertically.
+- [x] Restyle the schedule and Run/Stop action area to match the Twitter-like Web UI system.
+- [x] Keep Issues visible with an occurrence counter and independent bounded scrolling.
+- [x] Restore native scroll direction after an activity completes.
+- [x] Make fade travel and opacity respond to manual scroll distance.
+- [x] Remove fade interpolation lag and isolate the horizontal divider above the fade layer.
+- [x] Validate source/static regressions without browser testing.
+
 ## High-cardinality tag search performance (2026-08-11)
 
 - [x] Reproduce count and page latency on a production-sized clone with 700 tagged posts.

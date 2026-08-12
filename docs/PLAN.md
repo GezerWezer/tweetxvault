@@ -20,7 +20,7 @@ This is part of the broader [attention-export](~/github/lhl/attention-export) sy
 
 ### MVP (what we will implement first)
 
-- Direct GraphQL API sync for `Bookmarks` and `Likes` using browser cookies
+- Direct GraphQL API sync for `Bookmarks` and `Likes` using explicitly configured session values
 - Query ID (query hash) auto-discovery from Twitter web JS bundles with TTL cache + static fallback IDs
 - Rate-limit handling with exponential backoff + cooldown
 - Local embedded storage:
@@ -58,9 +58,24 @@ These are our architectural choices, made to serve tweetxvault's goals (unattend
 - **Query IDs**: Auto-discover query IDs from Twitter web JS bundles with an on-disk TTL cache + fallback static IDs (avoid manual weekly updates).
 - **Rate limiting/backoff**: Exponential backoff and cooldown on repeated `429` (parameters adjustable).
 - **Auth**: Cookie-based session auth (no username/password automation).
-  - Shipped: env vars + config file + Firefox extraction + Chromium-family extraction (Chrome, Chromium, Brave, Edge, Opera, Opera GX, Vivaldi, Arc).
-  - Auto mode tries browsers in a fixed order and stops after the first valid X session; CLI flags and `auth check --interactive` provide explicit profile selection.
+  - Shipped: explicit environment variables plus config values managed through Settings → Setup.
+  - Browser-profile discovery and cookie extraction are intentionally unsupported because the
+    service is expected to run independently from the user's browser machine.
 - **CLI framework**: Typer + Rich (keep it minimal; no sprawling command surface).
+- **Web UI**: FastAPI and Uvicorn are required runtime dependencies, not an optional extra. Web is
+  the primary interaction surface for routine archive maintenance while the CLI remains available
+  for automation and advanced workflows.
+- **Cross-process activity**: long-running commands publish atomic, credential-free snapshots of
+  the shared lifecycle reporter in the app data directory. The authenticated Web UI polls that
+  state so separately running CLI, cron, and Web-triggered commands share one progress contract.
+  Every reporter run also creates a durable, credential-redacted run record, structured event
+  stream, final snapshot, and readable transcript. The Web control plane launches the existing CLI
+  pipeline in an isolated process, retains the single-writer lock as final authority, and supports
+  graceful interruption without duplicating command orchestration.
+- **Built-in scheduling**: the always-on Web service owns persisted scheduled syncs with hourly,
+  daily, weekly, and monthly cadence. Schedule state records the next and prior launch, advances
+  after conflicts rather than overlapping writers, and uses the same production supervisor and
+  history contract as Web and manual CLI runs.
 - **Long-running CLI UX**: any command that can spend more than a few seconds hashing archives, scanning local state, or waiting on network retries must use the shared command-lifecycle reporter. Interactive TTY runs declare the full flag-relevant pipeline before work begins, omit steps explicitly disabled by flags, and retain empty queues as line-marked steps with a precise skip reason. Determinate progress uses truthful counts/rates/per-step ETAs where totals are known; tagging omits rate and ETA, and timeline pagination never fabricates a whole-run total. The header and completed rows retain command/step elapsed times, and the sidebar remains issues-only. Non-interactive and service runs emit compact, bounded semantic step/progress/retry records without redundant prefixes or terminal control sequences, so cron and `journalctl` remain detailed but do not receive redraw frames or one line per item. The legacy LanceDB migration uses the same reporter.
 - **Data models**: Pydantic v2 for boundary types (config, parsed tweet records, sync state); raw JSON stored as-is in DB.
 - **Logging**: loguru.
@@ -94,9 +109,7 @@ tweetxvault/
 │   ├── config.py              # XDG paths, config file, constants
 │   ├── auth/
 │   │   ├── __init__.py
-│   │   ├── firefox.py         # Firefox cookies.sqlite reader (copy-to-temp)
-│   │   ├── chromium.py        # Chromium-family extraction + profile discovery
-│   │   └── cookies.py         # Resolution chain (env -> config -> browsers)
+│   │   └── cookies.py         # Explicit env/config credential resolution
 │   ├── query_ids/
 │   │   ├── __init__.py
 │   │   ├── constants.py       # fallback query IDs + target ops
@@ -125,8 +138,8 @@ The MVP sync loop calls the GraphQL client directly — no abstraction layer nee
 ### Data Flow
 
 ```
-cookies (env/config/browser extraction)
-  -> auth (auth_token + ct0 + twid)
+explicit credentials (env/config/Setup)
+  -> auth (auth_token + ct0 + user_id)
       -> query_ids (cache -> refresh -> fallback)
           -> client (httpx)
               -> store raw captures (append)
@@ -139,7 +152,13 @@ cookies (env/config/browser extraction)
 
 MVP assumes a single local account archive and **exactly one writer process at a time**.
 
-- `sync` and export commands that mutate local state must acquire a process lock in the XDG data dir before touching the DB or checkpoint state.
+- Every shared-pipeline command acquires a command-lifecycle lock before publishing its first event
+  and holds it through terminal completion. This serializes manual CLI, Web, and scheduled sync,
+  import, enrichment, and maintenance commands even during long network phases where no database
+  write lock is held.
+- Database mutation windows retain their separate archive process lock before touching the DB or
+  checkpoint state. The lifecycle lock is orchestration authority; the archive lock remains the
+  final storage-level defense.
 - If another sync is already running, exit quickly with a clear message instead of attempting concurrent writes.
 - Cache/config writes must use atomic temp-file + rename semantics so `auth check` / `refresh-ids` cannot leave partially written JSON/TOML behind.
 - DB page persistence should use one transaction per fetched page so checkpoints never advance ahead of durable tweet/membership writes.
@@ -149,34 +168,22 @@ MVP assumes a single local account archive and **exactly one writer process at a
 
 ### Auth + Headers (MVP)
 
-We rely on browser session cookies:
+We rely on explicitly supplied X session values:
 - `auth_token` (session)
 - `ct0` (CSRF; also sent as `x-csrf-token`)
-- `twid` (contains numeric user id as `u%3D<id>`; required for Likes endpoint)
+- numeric `user_id` (required for Likes and authored-tweet endpoints)
 
-Cookie resolution chain (in priority order):
+Credential resolution chain (in priority order):
 1. **Env vars**: `TWEETXVAULT_AUTH_TOKEN`, `TWEETXVAULT_CT0`, `TWEETXVAULT_USER_ID` (numeric)
 2. **Config file**: `~/.config/tweetxvault/config.toml` (`[auth]` section)
-3. **Browser extraction**:
-   - Firefox: inspect discovered Firefox profiles, prefer install-default/default profiles, and copy `cookies.sqlite` to temp before reading
-   - Chromium-family browsers: use `browser-cookie3` for cookie decryption/keyring access across Chrome, Chromium, Brave, Edge, Opera, Opera GX, Vivaldi, and Arc
-   - Auto mode tries browsers in this order: Firefox -> Chrome -> Chromium -> Brave -> Edge -> Opera -> Opera GX -> Vivaldi -> Arc
-   - Explicit selection is available via config/env (`auth.browser`, `auth.browser_profile`, `auth.browser_profile_path`) and CLI flags (`--browser`, `--profile`, `--profile-path`)
-   - When `--browser`/browser overrides are used, they force cookie sourcing (`auth_token` / `ct0`) from that browser/profile, but explicit env/config `user_id` remains a valid fallback for Likes/UserTweets
 
-User ID resolution (needed for Likes only):
-- Parsed from `twid` cookie (`u%3D<numeric_id>` → `<numeric_id>`)
-- Or set explicitly via `TWEETXVAULT_USER_ID` env var or `user_id` in config
+The Web UI's Settings → Setup pane writes the config values and can test them. The server never
+reads local browser data, which supports deployments where tweetxvault and the user's browser run
+on different machines.
+
+User ID resolution:
+- Set explicitly via `TWEETXVAULT_USER_ID` env var or `user_id` in config
 - If user_id can't be resolved, `sync likes` fails with actionable error; `sync bookmarks` works fine
-
-Firefox cookie extraction rules (Linux):
-- Always copy `cookies.sqlite` to a temp file before reading (Firefox often holds WAL locks on the live DB)
-- Open the copied DB in read-only mode (`mode=ro`) via sqlite URI
-- Never log raw cookie values; treat them as secrets
-
-Chromium-family extraction rules:
-- Delegate cookie decryption and OS keyring handling to `browser-cookie3` instead of carrying our own per-OS crypto implementation
-- Keep browser ordering and profile-selection UX inside tweetxvault so `auth check --interactive` and sync flags stay consistent across browsers
 
 Required request headers:
 - `Authorization: Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA` (public web bearer token — same static constant for all users, hardcode it)
@@ -226,9 +233,9 @@ Keep per-operation builders, not a single shared dict. Implementation plan:
 ### Preflight + Validation
 
 Before any sync writes data:
-- Resolve local auth inputs (env → config → browser extraction).
+- Resolve local auth inputs (environment → config/Setup).
 - Resolve query IDs (cache → refresh → fallback).
-- Resolve the current archive owner identity (numeric user id from `twid` / config / env when available).
+- Resolve the current archive owner identity (numeric user id from config or environment).
 - Run a lightweight authenticated probe for each requested collection (`count=1`, no checkpoint updates, no `raw_captures` write) so we distinguish missing credentials from expired sessions, stale query IDs, or feature-flag drift.
 - Validate the resolved owner identity against local DB metadata if the archive already exists; refuse to mix two X accounts into one archive.
 
@@ -636,14 +643,16 @@ dedicated aggregate and must not collect the complete report.
 
 On first invocation, tweetxvault:
 1. Auto-creates XDG directories (`~/.config/tweetxvault/`, `~/.local/share/tweetxvault/`, `~/.cache/tweetxvault/`)
-2. Attempts cookie resolution (env vars → config file → browser extraction)
-3. If no cookies found: prints clear error with setup instructions (which env vars to set, or ensure a supported browser is logged into x.com)
+2. Resolves explicit credentials (environment variables → config file)
+3. If credentials are missing: prints clear instructions for Settings → Setup or environment variables
 4. If cookies found: resolves query IDs (first run has no cache, so fetches from JS bundles and falls back to static IDs if refresh fails)
 5. Runs a lightweight API probe for the requested collection(s); on failure, exits with actionable error before any checkpoint or DB writes
 6. Acquires the local process lock so overlapping cron/manual runs cannot race
 7. Auto-creates DB on first write, records archive owner metadata, and begins sync
 
-No `init` command needed — everything auto-creates on demand. Config file is optional; the tool works with browser cookies or env vars. `tweetxvault auth check` uses the same preflight path as `sync`, and `tweetxvault auth check --interactive` gives a manual browser/profile picker before any data is written.
+No `init` command is needed—everything auto-creates on demand. Credentials can be entered in
+Settings → Setup, placed in the config file, or supplied through environment variables.
+`tweetxvault auth check` uses the same preflight path as sync before any data is written.
 
 Reserved for future (not implemented in MVP):
 - `tweetxvault sync ... --playwright` (adapter fallback)
@@ -652,7 +661,7 @@ Reserved for future (not implemented in MVP):
 
 ### Phase 1: Core Sync (MVP)
 
-- [x] Auth extraction (env vars, config file, Firefox + Chromium-family browsers)
+- [x] Explicit auth resolution (environment variables and config/Setup values)
 - [x] Query ID auto-discovery + fallback + TTL cache
 - [x] GraphQL client (httpx async) + per-operation feature flags
 - [x] Bookmarks sync
@@ -709,8 +718,9 @@ Reserved for future (not implemented in MVP):
   - Next cleanup item landed: moved state/type/preview filters out of Python loops and into `ArchiveStore` `.where(...)` clauses while preserving the existing sorted return order.
 - [x] Reduce repetition in thread-expansion target handling.
   - Next cleanup item landed: extracted the shared `_expand_target(...)` try/except/result-counting path so the explicit-target, membership, and linked-status loops no longer carry three copies of the same expansion logic.
-- [x] Make Firefox cookie extraction WAL-safe.
-  - Update: the first SQLite-backup snapshot attempt could hang on busy live profiles, so the bounded shipped path copies `cookies.sqlite` plus any present `-wal` / `-shm` / `-journal` sidecars into a temp snapshot before querying.
+- [x] Remove the historical Firefox cookie extraction path.
+  - The former WAL-safe profile snapshot implementation was deleted with browser authentication;
+    only explicit Setup/config/environment credentials remain supported.
 - [x] Expand failure-path coverage for post-sync runners and extractor edge cases.
   - Next cleanup item landed: added targeted tests for retries, limits, invalid responses, and malformed payload handling across media, unfurl, articles, threads, and extractor.
 - [x] Add direct unit coverage for `ExtractedTweetGraph` coalescing rules.
@@ -721,12 +731,14 @@ Reserved for future (not implemented in MVP):
   - Next cleanup item landed: `tweetxvault threads expand` now prints phase/progress output plus visible 429 retry/cooldown diagnostics so large thread-expansion jobs no longer look dead while the HTTP layer is backing off.
 - [x] Reduce startup silence and unnecessary preload scans in `tweetxvault threads expand`.
   - Next cleanup item landed: the runner now prints preload progress before the archive scans begin, and it defers the expensive known-tweet-id scan until the linked-status pass actually needs it.
-- [x] Add an auth-resolution debug flag for commands that can stall before the archive job starts.
-  - Next cleanup item landed: `threads expand --debug-auth` and `auth check --debug-auth` now surface browser/profile probing steps when cookie extraction or keyring access is the slow step.
+- [x] Remove the obsolete auth-resolution browser debug path.
+  - The earlier browser/profile probing flags were removed with automatic browser authentication;
+    explicit credential resolution has no local profile/keyring discovery phase.
 - [x] Decouple post-sync auto-embedding from sync success.
   - Next cleanup item landed: archive capture success now wins. If auto-embedding fails, sync warns and leaves the new tweets for a later `tweetxvault embed` run or the next sync instead of failing the completed sync.
 - [x] Clarify browser-override auth semantics for `user_id`.
-  - Next cleanup item landed: `--browser` now only forces cookie sourcing (`auth_token` / `ct0`) from the selected browser/profile; explicit env/config `user_id` remains a fallback for likes and authored-tweet sync.
+  - Historical browser overrides were removed in August 2026 when authentication moved to
+    explicit Setup/config/environment values for separate-machine deployments.
 - [x] Tighten thread-expansion rerun and dedupe semantics.
   - Next cleanup item landed: explicit `threads expand <id/url>...` is now idempotent by default, `--refresh` is the explicit re-fetch escape hatch, and linked status-URL targets are attempted at most once per run even when repeated across many URL refs.
 - [x] Decide whether the current CLI is Unix-only or needs first-class Windows support.
@@ -746,7 +758,6 @@ Reserved for future (not implemented in MVP):
 
 ### Runtime
 ```
-browser-cookie3    # Chromium-family cookie extraction + keyring integration
 httpx              # async HTTP client
 lancedb            # embedded archive + search engine
 pyarrow            # LanceDB schemas / table payloads

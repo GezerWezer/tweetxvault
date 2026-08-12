@@ -66,6 +66,220 @@ function tweetApp() {
         
         showKeyboardShortcuts: false,
         profileCard: null,
+        activity: null,
+        lastActivity: null,
+        activitySchedule: { configured: false, relative: 'Not configured', date: 'Use cron or a service timer' },
+        activityStartPending: false,
+        activityStartingKind: null,
+        activityError: null,
+        activityDrawerOpen: false,
+        showLogModal: false,
+
+        get displayActivity() {
+            return this.activity || this.lastActivity;
+        },
+
+        async fetchActivityStatus() {
+            try {
+                const response = await fetch('/api/activity/status');
+                if (!response.ok) throw new Error('Could not load activity status');
+                const data = await response.json();
+                this.activitySchedule = data.schedule || this.activitySchedule;
+                if (data.active) {
+                    this.activity = data.snapshot;
+                    this.activityStartPending = false;
+                    this.activityStartingKind = null;
+                    this.activityError = null;
+                } else {
+                    this.lastActivity = data.last_snapshot || this.activity || this.lastActivity;
+                    this.activity = null;
+                }
+            } catch (error) {
+                this.activityError = error.message;
+            }
+        },
+
+        async fetchScheduleSettings() {
+            try {
+                const response = await fetch('/api/activity/schedule');
+                if (!response.ok) throw new Error('Could not load schedule');
+                this.scheduleSettings = await response.json();
+            } catch (error) {
+                this.scheduleSettings = { configured: false, relative: error.message, date: '' };
+            }
+        },
+
+        async fetchActivityRuns() {
+            this.activityRunsLoading = true;
+            try {
+                const response = await fetch('/api/activity/runs?limit=100');
+                if (!response.ok) throw new Error('Could not load activity logs');
+                this.activityRuns = (await response.json()).runs || [];
+            } catch (error) {
+                this.activityError = error.message;
+            } finally {
+                this.activityRunsLoading = false;
+            }
+        },
+
+        async openActivityRun(run) {
+            this.selectedActivityRun = run;
+            this.selectedActivityLog = 'Loading log…';
+            this.showLogModal = true;
+            try {
+                const [detailsResponse, logResponse] = await Promise.all([
+                    fetch(`/api/activity/runs/${encodeURIComponent(run.run_id)}`),
+                    fetch(`/api/activity/runs/${encodeURIComponent(run.run_id)}/log`),
+                ]);
+                if (!detailsResponse.ok || !logResponse.ok) throw new Error('Could not load run log');
+                this.selectedActivityRun = await detailsResponse.json();
+                this.selectedActivityLog = await logResponse.text();
+            } catch (error) {
+                this.selectedActivityLog = error.message;
+            }
+        },
+
+        formatActivityTimestamp(value) {
+            if (!value) return '—';
+            return new Date(Number(value) * 1000).toLocaleString();
+        },
+
+        formatLogText(text) {
+            if (!text) return 'No log output.';
+            return text.replace(/[<>]/g, c => c === '<' ? '&lt;' : '&gt;').split('\n').map(line => {
+                if (line.includes('ERROR:')) return `<span style="color: var(--danger-color)">${line}</span>`;
+                if (line.includes('WARNING:')) return `<span style="color: var(--accent-color)">${line}</span>`;
+                if (line.includes('failed')) return `<span style="color: var(--danger-color)">${line}</span>`;
+                if (line.includes('completed')) return `<span style="color: var(--accent-color)">${line}</span>`;
+                const parts = line.split(/Z (.*)/);
+                if (parts.length === 3) {
+                    return `<span style="color: var(--text-secondary)">${parts[0]}Z</span> ${parts[1]}`;
+                }
+                return line;
+            }).join('\n');
+        },
+
+        async startActivity(kind) {
+            if (this.activity || this.activityStartPending) return;
+            this.activityStartPending = true;
+            this.activityStartingKind = kind;
+            this.activityError = null;
+            try {
+                const response = await fetch(`/api/activity/${kind}`, { method: 'POST' });
+                if (!response.ok) {
+                    const data = await response.json().catch(() => ({}));
+                    throw new Error(data.detail || 'Could not start sync');
+                }
+                await new Promise(resolve => setTimeout(resolve, 250));
+                await this.fetchActivityStatus();
+            } catch (error) {
+                this.activityError = error.message;
+                this.activityStartPending = false;
+                this.activityStartingKind = null;
+            }
+        },
+
+        async stopActivity() {
+            if (!this.activity && !this.activityStartPending) return;
+            this.activityError = null;
+            try {
+                const response = await fetch('/api/activity/stop', { method: 'POST' });
+                if (!response.ok) {
+                    const data = await response.json().catch(() => ({}));
+                    throw new Error(data.detail || 'Could not stop task');
+                }
+                await new Promise(resolve => setTimeout(resolve, 100));
+                await this.fetchActivityStatus();
+            } catch (error) {
+                this.activityError = error.message;
+            }
+        },
+
+        formatActivityDuration(seconds) {
+            const whole = Math.max(Math.round(Number(seconds) || 0), 0);
+            const hours = Math.floor(whole / 3600);
+            const minutes = Math.floor((whole % 3600) / 60);
+            const remainder = whole % 60;
+            return hours
+                ? `${hours}:${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`
+                : `${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`;
+        },
+
+        activityPercent(step) {
+            if (!step || !step.total) return 0;
+            return Math.max(0, Math.min(100, step.completed / step.total * 100));
+        },
+
+        activitySteps() {
+            return this.displayActivity?.steps || [];
+        },
+
+        activityCompletedSteps() {
+            return this.activitySteps().filter(step =>
+                step.state === 'complete' || step.state === 'skipped' || step.state === 'failed'
+            );
+        },
+
+        activityActiveStep() {
+            return this.activitySteps().find(step => step.state === 'active') || null;
+        },
+
+        activityHasActiveStep() {
+            return this.activityActiveStep() !== null;
+        },
+
+        activityIssues() {
+            return Array.isArray(this.displayActivity?.issues) ? this.displayActivity.issues : [];
+        },
+
+        activityIssueCount() {
+            return this.activityIssues().reduce(
+                (total, issue) => total + Math.max(Number(issue.count) || 1, 1),
+                0,
+            );
+        },
+
+        activityCompletedStackHeight() {
+            // Completed cards are intentionally fixed-height so the stack can grow
+            // upward without changing the active slot's layout position.
+            return `${this.activityCompletedSteps().length * 64}px`;
+        },
+
+        reverseActivityScroll(event) {
+            const viewport = event?.currentTarget;
+            if (!viewport) return;
+            // Completed history uses the browser's normal scroll direction.
+            if (!this.activityHasActiveStep()) return;
+            event.preventDefault?.();
+            // This is direct manual input, not automatic progression scrolling.
+            // Wheel-up pulls the scene down; wheel-down returns it upward.
+            const deltaScale = event.deltaMode === 1
+                ? 16
+                : (event.deltaMode === 2 ? viewport.clientHeight : 1);
+            const delta = (Number(event.deltaY) || 0) * deltaScale;
+            const maxScroll = Math.max(viewport.scrollHeight - viewport.clientHeight, 0);
+            viewport.scrollTop = Math.max(0, Math.min(viewport.scrollTop - delta, maxScroll));
+            this.setActivityScrollPosition({ currentTarget: viewport });
+        },
+
+        setActivityScrollPosition(event) {
+            const viewport = event?.currentTarget;
+            if (!viewport?.style) return;
+            // Native scrolling moves the canvas upward by one unit. Moving the
+            // connected scene downward by two produces a net one-unit downward
+            // pull, revealing completed cards from beneath the controls.
+            const scrollTop = Math.max(Number(viewport.scrollTop) || 0, 0);
+            const sceneShift = scrollTop * 2;
+            const fadeTravel = 64;
+            const fadeProgress = Math.min(scrollTop / fadeTravel, 1);
+            const fadeOpacity = 1 - fadeProgress;
+            const fadeShift = -Math.min(scrollTop, fadeTravel);
+            viewport.style.setProperty('--activity-scroll-shift', `${sceneShift}px`);
+            const controls = viewport.closest?.('.activity-drawer-body')
+                ?.querySelector('.activity-drawer-controls');
+            controls?.style?.setProperty('--activity-fade-opacity', `${fadeOpacity}`);
+            controls?.style?.setProperty('--activity-fade-shift', `${fadeShift}px`);
+        },
 
         openUsernameProfileCard(event, username) {
             if (!username) return;
@@ -100,7 +314,7 @@ function tweetApp() {
             const rect = anchor.getBoundingClientRect();
             let x = rect.left;
             let y = rect.bottom + 8;
-            
+
             let name, username, id;
             let raw;
             if (isQt) {
@@ -175,7 +389,7 @@ function tweetApp() {
         },
         
         showSettingsModal: false,
-        settingsTab: 'tags',
+        settingsTab: 'setup',
         globalTags: [],
         globalTagsLoading: false,
         tagSearchTerm: '',
@@ -187,6 +401,19 @@ function tweetApp() {
         configExplicit: [],
         configSaving: false,
         showAdvancedConfig: false,
+        scheduleSettings: null,
+        activityRuns: [],
+        activityRunsLoading: false,
+        selectedActivityRun: null,
+        selectedActivityLog: '',
+        setupData: null,
+        setupAuth: null,
+        setupAuthSaved: false,
+        setupSavingAuth: false,
+        setupTestingAuth: false,
+        setupAuthResult: null,
+        setupUploading: false,
+        setupStartingImport: false,
         
         mergePrimaryTag: '',
         mergeTagsList: [],
@@ -220,6 +447,8 @@ function tweetApp() {
         statsRefreshPollTimer: null,
         statsRefreshPollAttempts: 0,
         statsAgeNow: Date.now(),
+
+        activityPollTimer: null,
 
         storageData: null,
         storageLoading: false,
@@ -293,14 +522,21 @@ function tweetApp() {
             this.fetchArchiveEnrichmentStatus();
             setInterval(() => this.fetchArchiveEnrichmentStatus(), 60000);
             setInterval(() => { this.statsAgeNow = Date.now(); }, 30000);
+            this.fetchActivityStatus();
+            this.activityPollTimer = setInterval(() => this.fetchActivityStatus(), 1000);
             this.fetchGlobalTags();
-            
+
+
+
             this.$watch('showSettingsModal', val => {
                 if (val) {
+                    this.fetchSetup();
                     this.fetchConfig();
+                    this.fetchScheduleSettings();
+                    this.fetchActivityRuns();
                 }
             });
-            
+
             window.addEventListener('open-lightbox', (e) => {
                 this.lightboxMedia = e.detail.media;
                 this.lightboxIndex = e.detail.index;
@@ -386,18 +622,18 @@ function tweetApp() {
             try {
                 this.error = null;
                 const res = await fetch(url);
-                
+
                 let data;
                 try {
                     data = await res.json();
                 } catch (parseError) {
                     throw new Error(`Invalid server response (${res.status}): Please check server logs.`);
                 }
-                
+
                 if (!res.ok) {
                     throw new Error(data.detail || `Server error: ${res.status}`);
                 }
-                
+
                 if (append) {
                     this.tweets = [...this.tweets, ...data.tweets];
                 } else {
@@ -1351,6 +1587,127 @@ function tweetApp() {
             } catch (e) {
                 console.error("Error fetching config", e);
             }
+        },
+
+        async fetchSetup() {
+            try {
+                const response = await fetch('/api/setup');
+                if (!response.ok) throw new Error('Could not load setup');
+                this.setupData = await response.json();
+                this.setupAuth = JSON.parse(JSON.stringify(this.setupData.auth.values));
+            } catch (error) {
+                this.setupAuthResult = { success: false, message: error.message, output: '' };
+            }
+        },
+
+        async saveSetupAuth() {
+            if (!this.setupAuth || this.setupSavingAuth) return false;
+            this.setupSavingAuth = true;
+            this.setupAuthResult = null;
+
+            try {
+                // The server validates these candidate values before committing them.
+                const saveResponse = await fetch('/api/setup/auth', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(this.setupAuth),
+                });
+
+                if (!saveResponse.ok) {
+                    const data = await saveResponse.json().catch(() => ({}));
+                    throw new Error(data.detail || 'Could not save authentication');
+                }
+
+                const auth = await saveResponse.json();
+                this.setupData.auth = auth;
+                this.setupData.auth.configured = true;
+                this.setupAuth = JSON.parse(JSON.stringify(auth.values));
+                this.setupAuthResult = { success: true };
+                this.setupAuthSaved = true;
+                return true;
+
+            } catch (error) {
+                this.setupAuthResult = { success: false, message: 'Authentication failed, verify cookies', output: '' };
+                return false;
+            } finally {
+                this.setupSavingAuth = false;
+            }
+        },
+
+        async uploadSetupArchive(event) {
+            const file = event.target.files?.[0];
+            event.target.value = '';
+            if (!file) return;
+            if (!file.name.toLowerCase().endsWith('.zip')) {
+                alert('Choose an archive.zip file.');
+                return;
+            }
+            this.setupUploading = true;
+            try {
+                const response = await fetch('/api/setup/archive', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/zip' },
+                    body: file,
+                });
+                if (!response.ok) {
+                    const data = await response.json().catch(() => ({}));
+                    throw new Error(data.detail || 'Could not upload archive');
+                }
+                this.setupData.archive = await response.json();
+            } catch (error) {
+                alert(error.message);
+            } finally {
+                this.setupUploading = false;
+            }
+        },
+
+        async clearSetupArchive() {
+            if (!confirm('Clear the uploaded archive.zip? Imported tweets will not be deleted.')) return;
+            try {
+                const response = await fetch('/api/setup/archive', { method: 'DELETE' });
+                if (!response.ok) {
+                    const data = await response.json().catch(() => ({}));
+                    throw new Error(data.detail || 'Could not clear archive');
+                }
+                this.setupData.archive = await response.json();
+            } catch (error) {
+                alert(error.message);
+            }
+        },
+
+        async importSetupArchive() {
+            if (!this.setupData?.archive?.uploaded || this.setupStartingImport) return;
+            this.setupStartingImport = true;
+            this.activityError = null;
+            try {
+                const response = await fetch('/api/setup/archive/import', { method: 'POST' });
+                if (!response.ok) {
+                    const data = await response.json().catch(() => ({}));
+                    throw new Error(data.detail || 'Could not start archive import');
+                }
+                this.showSettingsModal = false;
+                this.activityDrawerOpen = true;
+                await new Promise(resolve => setTimeout(resolve, 250));
+                await this.fetchActivityStatus();
+            } catch (error) {
+                this.activityError = error.message;
+                alert(error.message);
+            } finally {
+                this.setupStartingImport = false;
+            }
+        },
+
+        formatSetupBytes(value) {
+            const bytes = Number(value) || 0;
+            if (bytes < 1024) return `${bytes} B`;
+            const units = ['KiB', 'MiB', 'GiB', 'TiB'];
+            let amount = bytes / 1024;
+            let index = 0;
+            while (amount >= 1024 && index < units.length - 1) {
+                amount /= 1024;
+                index += 1;
+            }
+            return `${amount.toFixed(amount >= 10 ? 1 : 2)} ${units[index]}`;
         },
         
         isFieldVisible(section, key) {

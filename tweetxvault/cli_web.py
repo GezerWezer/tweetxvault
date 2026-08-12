@@ -74,7 +74,7 @@ def _require_web_dependencies(console: Console) -> None:
         import_module("tweetxvault.web.server")
         import_module("uvicorn")
     except ImportError as exc:
-        console.print("[red]Web dependencies are missing. Run `uv sync --extra web` first.[/red]")
+        console.print("[red]Required Web dependencies are missing. Reinstall tweetxvault.[/red]")
         raise typer.Exit(1) from exc
 
 

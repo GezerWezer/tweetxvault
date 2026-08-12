@@ -1201,6 +1201,72 @@ test('config and stats requests update their matching UI state', async () => {
     assert.equal(app.lastSyncFormatted, '2026-07-30T00:00:00Z');
 });
 
+test('setup validates before saving auth then uploads, imports, and confirms archive clearing', async () => {
+    const context = browserContext();
+    const requests = [];
+    let archive = {
+        uploaded: false,
+        filename: null,
+        size: null,
+        imported: false,
+        enriched: false,
+        pending_enrichment: 0,
+        warnings: ['An X archive has not been imported yet.'],
+    };
+    context.fetch = async (url, options = {}) => {
+        requests.push([url, options.method || 'GET']);
+        if (url === '/api/setup' && !options.method) {
+            return { ok: true, async json() { return {
+                auth: { configured: true, values: { auth_token: '********', ct0: '********', user_id: '42' } },
+                archive,
+            }; } };
+        }
+        if (url === '/api/setup/auth') {
+            return { ok: true, async json() { return {
+                configured: true,
+                values: { auth_token: '********', ct0: '********', user_id: '42' },
+            }; } };
+        }
+        if (url === '/api/setup/archive' && options.method === 'PUT') {
+            archive = { ...archive, uploaded: true, filename: 'archive.zip', size: 2048 };
+            return { ok: true, async json() { return archive; } };
+        }
+        if (url === '/api/setup/archive' && options.method === 'DELETE') {
+            archive = { ...archive, uploaded: false, filename: null, size: null };
+            return { ok: true, async json() { return archive; } };
+        }
+        if (url === '/api/setup/archive/import') {
+            return { ok: true, async json() { return { started: true }; } };
+        }
+        if (url === '/api/activity/status') {
+            return { ok: true, async json() { return { active: false, schedule: {} }; } };
+        }
+        throw new Error(`unexpected request: ${url}`);
+    };
+    const { tweetApp } = loadScripts(context, ['themes.js', 'app.js'], '({tweetApp})');
+    const app = immediateComponent(tweetApp());
+
+    await app.fetchSetup();
+    assert.equal(app.setupAuth.auth_token, '********');
+    await app.saveSetupAuth();
+    assert.equal(app.setupAuthResult.success, true);
+    assert.equal(requests.filter(([url]) => url === '/api/setup/auth').length, 1);
+
+    await app.uploadSetupArchive({
+        target: { files: [{ name: 'archive.zip', size: 2048 }], value: 'archive.zip' },
+    });
+    assert.equal(app.setupData.archive.uploaded, true);
+    assert.equal(app.formatSetupBytes(2048), '2.00 KiB');
+
+    await app.importSetupArchive();
+    assert.equal(app.activityDrawerOpen, true);
+    assert.equal(app.showSettingsModal, false);
+
+    await app.clearSetupArchive();
+    assert.equal(app.setupData.archive.uploaded, false);
+    assert.ok(requests.some(([url, method]) => url === '/api/setup/archive' && method === 'DELETE'));
+});
+
 test('config saves only diffs and resets only eligible explicit fields', async () => {
     const context = browserContext();
     const requests = [];
@@ -1451,6 +1517,155 @@ test('media renderer preserves dimensions and selects photo, video, GIF, and pla
     ]);
     assert.match(grid, /grid-rows-2/);
     assert.match(grid, /row-span-2/);
+});
+
+test('activity drawer loads any pipeline and starts production jobs', async () => {
+    const context = browserContext();
+    const calls = [];
+    let active = true;
+    context.fetch = async (url, options = {}) => {
+        calls.push([url, options.method || 'GET']);
+        if (url === '/api/activity/import') {
+            active = true;
+            return { ok: true, json: async () => ({ started: true, kind: 'import', run_id: 'run' }) };
+        }
+        if (url === '/api/activity/stop') {
+            active = false;
+            return { ok: true, json: async () => ({ stopping: true }) };
+        }
+        return {
+            ok: true,
+            json: async () => active ? {
+                active: true,
+                snapshot: {
+                    title: 'tweetxvault import enrich',
+                    started_at: Date.now() / 1000,
+                    steps: [{ key: 'enrich', completed: 5, total: 10 }],
+                    issues: [],
+                },
+                schedule: { configured: false, relative: 'Not configured', date: 'Use cron or a service timer' },
+            } : {
+                active: false,
+                snapshot: null,
+                last_snapshot: {
+                    title: 'tweetxvault import enrich',
+                    completed_at: Date.now() / 1000,
+                    steps: [{ key: 'enrich', state: 'complete', completed: 10, total: 10 }],
+                    issues: [],
+                },
+                schedule: { configured: false, relative: 'Not configured', date: 'Use cron or a service timer' },
+            },
+        };
+    };
+    const { tweetApp } = loadScripts(context, ['themes.js', 'app.js'], '({tweetApp})');
+    const app = immediateComponent(tweetApp());
+
+    await app.fetchActivityStatus();
+    assert.equal(app.activity.title, 'tweetxvault import enrich');
+    assert.equal(app.activityPercent(app.activity.steps[0]), 50);
+
+    active = false;
+    await app.fetchActivityStatus();
+    assert.equal(app.activity, null);
+    assert.equal(app.lastActivity.title, 'tweetxvault import enrich');
+    assert.equal(app.activitySchedule.relative, 'Not configured');
+    await app.startActivity('import');
+    assert.ok(calls.some(([url, method]) => url === '/api/activity/import' && method === 'POST'));
+    assert.equal(app.activityStartPending, false);
+    assert.equal(app.activityStartingKind, null);
+    assert.equal(app.activity.title, 'tweetxvault import enrich');
+    await app.stopActivity();
+    assert.ok(calls.some(([url, method]) => url === '/api/activity/stop' && method === 'POST'));
+    assert.equal(app.activity, null);
+});
+
+test('activity steps reverse wheel input and update the connected scene and fade immediately', () => {
+    const context = browserContext();
+    const { tweetApp } = loadScripts(context, ['themes.js', 'app.js'], '({tweetApp})');
+    const app = immediateComponent(tweetApp());
+    app.activity = {
+        title: 'tweetxvault sync',
+        steps: [
+            { key: 'one', title: 'First step', state: 'complete', summary: 'done' },
+            { key: 'two', title: 'Second step', state: 'skipped', summary: 'not needed' },
+            { key: 'three', title: 'Current step', state: 'active', completed: 2, total: 4 },
+            { key: 'four', title: 'Later step', state: 'pending' },
+        ],
+        issues: [
+            { level: 'warning', message: 'Retrying one item', count: 2 },
+            { level: 'error', message: 'One item failed', count: 1 },
+        ],
+    };
+
+    assert.equal(app.activityActiveStep().key, 'three');
+    assert.deepEqual(app.activityCompletedSteps().map(step => step.key), ['one', 'two']);
+    assert.equal(app.activityCompletedStackHeight(), '128px');
+    assert.equal(app.activityIssues().length, 2);
+    assert.equal(app.activityIssueCount(), 3);
+
+    const styleValues = new Map();
+    const viewport = {
+        scrollTop: 18,
+        scrollHeight: 352,
+        clientHeight: 200,
+        style: {
+            setProperty(name, value) {
+                styleValues.set(name, value);
+            },
+        },
+    };
+    const controlStyleValues = new Map();
+    viewport.closest = () => ({
+        querySelector() {
+            return {
+                style: {
+                    setProperty(name, value) {
+                        controlStyleValues.set(name, value);
+                    },
+                },
+            };
+        },
+    });
+    let prevented = false;
+    app.reverseActivityScroll({
+        currentTarget: viewport,
+        deltaY: -12,
+        deltaMode: 0,
+        preventDefault() {
+            prevented = true;
+        },
+    });
+    assert.equal(prevented, true);
+    assert.equal(viewport.scrollTop, 30);
+    assert.equal(styleValues.get('--activity-scroll-shift'), '60px');
+    assert.equal(controlStyleValues.get('--activity-fade-opacity'), String(1 - 30 / 64));
+    assert.equal(controlStyleValues.get('--activity-fade-shift'), '-30px');
+
+    viewport.scrollTop = 18;
+    app.setActivityScrollPosition({ currentTarget: viewport });
+    assert.equal(viewport.scrollTop, 18);
+    assert.equal(styleValues.get('--activity-scroll-shift'), '36px');
+    assert.equal(controlStyleValues.get('--activity-fade-opacity'), String(1 - 18 / 64));
+    assert.equal(controlStyleValues.get('--activity-fade-shift'), '-18px');
+
+    app.lastActivity = {
+        ...app.activity,
+        state: 'complete',
+        steps: app.activity.steps.map(step => ({ ...step, state: 'complete' })),
+    };
+    app.activity = null;
+    prevented = false;
+    viewport.scrollTop = 18;
+    app.reverseActivityScroll({
+        currentTarget: viewport,
+        deltaY: -12,
+        deltaMode: 0,
+        preventDefault() {
+            prevented = true;
+        },
+    });
+    assert.equal(prevented, false);
+    assert.equal(viewport.scrollTop, 18);
 });
 
 test('community notes escape headings, text, labels, and external links', () => {

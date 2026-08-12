@@ -6,6 +6,37 @@ were backfilled from git tags and `WORKLOG.md`.
 
 The format is loosely based on Keep a Changelog.
 
+## [Unreleased]
+
+### Added
+
+- Added a Twitter DM-style Web activity drawer that mirrors live pipeline steps, counters,
+  progress, ETAs, and issues for sync, import, enrich, and other long-running commands. The
+  collapsed tab spins while work is active.
+- Added a production Web job supervisor for real sync, archive enrichment, and validated local
+  X-archive imports, including single-job guards and graceful Stop Task interrupts.
+- Added durable structured run history and readable command logs for manual CLI, Web, and scheduled
+  jobs, with authenticated Web history/detail/log APIs and a Logs settings tab.
+- Added built-in sync scheduling for every N hours, every day, every week, and every month. The
+  schedule survives Web restarts, reports its next run in the activity drawer, and skips conflicts.
+- Added a focused Setup settings pane for X authentication, real auth testing, app-owned
+  archive.zip upload/clearing, one-click import plus enrichment, and persisted readiness warnings.
+
+### Changed
+
+- Authentication is now explicit-only through Settings → Setup, config, or environment variables.
+  Browser-profile discovery, automatic cookie extraction, related CLI flags, and the
+  `browser-cookie3` dependency have been removed for separate-machine deployments.
+- Setup now tests candidate X credentials in an isolated temporary config and persists them only
+  after the complete authentication probe succeeds; failed replacements preserve the last saved
+  credentials.
+- FastAPI and Uvicorn are now required dependencies; the Web UI is included in every tweetxvault
+  installation instead of being provided through a `web` extra.
+- The temporary non-mutating activity simulations and debug launcher have been removed; Web actions
+  now launch the existing production CLI pipeline in isolated worker processes.
+- Sync, import, enrichment, and maintenance pipelines now hold a full command-lifecycle lock, so
+  CLI, Web, and scheduled launches cannot overlap during long non-writing phases.
+
 ## [0.2.4] - 2026-04-23
 
 ### Added
