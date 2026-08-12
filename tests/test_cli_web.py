@@ -139,7 +139,7 @@ def test_find_pid_by_port_prefers_lsof(monkeypatch) -> None:
     assert cli_web._find_pid_by_port(8123) == 321
     assert calls == [
         (
-            ["lsof", "-t", "-i:8123"],
+            ["lsof", "-t", "-nP", "-iTCP:8123", "-sTCP:LISTEN"],
             {"text": True, "stderr": subprocess.DEVNULL},
         )
     ]
@@ -158,7 +158,7 @@ def test_find_pid_by_port_falls_back_to_fuser(monkeypatch) -> None:
 
     assert cli_web._find_pid_by_port(8000) == 777
     assert commands == [
-        ["lsof", "-t", "-i:8000"],
+        ["lsof", "-t", "-nP", "-iTCP:8000", "-sTCP:LISTEN"],
         ["fuser", "8000/tcp"],
     ]
 

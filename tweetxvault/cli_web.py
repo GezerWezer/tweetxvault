@@ -49,8 +49,10 @@ def _positive_pids(output: str) -> list[int]:
 
 
 def _find_pid_by_port(port: int) -> int | None:
+    # A plain `lsof -i:<port>` also returns clients with an active connection.
+    # Only a listening TCP socket owns the port for start/stop decisions.
     commands = (
-        ["lsof", "-t", f"-i:{port}"],
+        ["lsof", "-t", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN"],
         ["fuser", f"{port}/tcp"],
     )
     for command in commands:
