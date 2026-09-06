@@ -1,5 +1,5 @@
 >[!IMPORTANT]
-> This has been moved to a standalone repo. See [here](https://github.com/GezerWezer/tweetxvault)
+> This has been moved to a standalone repo. See [here](https://github.com/GezerWezer/tweetnook)
 
 # tweetxvault
 
