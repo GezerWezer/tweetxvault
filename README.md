@@ -1,3 +1,6 @@
+>[!IMPORTANT]
+> This has been moved to a standalone repo. See [here](https://github.com/GezerWezer/tweetxvault)
+
 # tweetxvault
 
 > **Fork Note:** This repository has substantially diverged from the original upstream repository. The original upstream uses LanceDB, PyArrow, and ONNX vector embeddings for its core storage and search. **This fork has completely scrapped LanceDB and vector embeddings** in favor of native SQLite and FTS5 due to extreme instability, OOM crashes, and Rust panics during vector indexing. It also introduces a fully interactive FastAPI/Vue.js Web UI, daemonization commands, advanced search operators, degree-of-separation thread limits, and dead-tweet tracking. If you are updating from the original upstream, see the [Migration](#migrating-from-lancedb) section below.
